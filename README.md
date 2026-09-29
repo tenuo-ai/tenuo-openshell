@@ -32,23 +32,22 @@ The integration is Apache-2.0. It consists of:
 
 ## See the difference
 
-The reference task permits only:
+Two tasks share one sandbox. OpenShell admits both `read_logs` and
+`restart_service`. Each task has its own holder key, created in a separate
+process and not copied into the sandbox.
 
 ```text
-read_logs(service="payments", environment="staging")
+Task A  read_logs(payments, staging)                  → effect executed
+Task A  restart_service(payments, staging, replicas=3) → effect executed
+Task B  read_logs(payments, staging)                  → effect executed
+Task B  restart_service(...)                          → tenuo_tool_denied
+Task B signing Task A's warrant                       → tenuo_invalid_authority
+Task A  read_logs(identity, production)               → tenuo_constraint_denied
+Task A  restart_service(..., replicas=8)              → tenuo_constraint_denied
+restart without a warrant                             → tenuo_missing_warrant
 ```
 
-OpenShell admits the `read_logs` tool. Tenuo then evaluates the signed task
-warrant and arguments:
-
-```text
-ALLOW read_logs(payments, staging)       → effect executed
-DENY  read_logs(identity, production)   → tenuo_constraint_denied
-DENY  read_logs(payments, staging)       → tenuo_missing_warrant
-                                            (when authority is absent)
-```
-
-Run all three calls through a real OpenShell gateway and sandbox:
+Run the calls through a real OpenShell gateway and sandbox:
 
 ```bash
 make demo
@@ -57,7 +56,7 @@ make demo
 The launcher downloads the pinned OpenShell source when needed, builds its
 gateway and supervisor image, creates an authenticated HTTPS middleware
 registration, runs the requests, verifies that the effect server observed only
-the allowed call, and cleans up. See [the demo guide](examples/demo/README.md)
+the three allowed calls, and cleans up. See [the demo guide](examples/demo/README.md)
 for prerequisites and overrides.
 
 ## OpenShell middleware

@@ -336,30 +336,53 @@ send_request() {
       --data-binary "$body"
 }
 
+expect_allow() {
+  local fixture="$1"
+  local marker="$2"
+  local label="$3"
+  local output="$RUN_DIR/$(basename "$fixture").out"
+  send_request "$fixture" >"$output" 2>>"$SETUP_LOG" || fail "$label completes"
+  grep -Fq '200 OK' "$output" || fail "$label returns 200"
+  grep -Fq "$marker" "$output" || fail "$label effect response is returned"
+  printf 'PASS %s\n' "$label"
+}
+
+expect_deny() {
+  local fixture="$1"
+  local reason="$2"
+  local label="$3"
+  local output="$RUN_DIR/$(basename "$fixture").out"
+  send_request "$fixture" >"$output" 2>>"$SETUP_LOG" || fail "$label returns a response"
+  grep -Fq '403 Forbidden' "$output" || fail "$label is denied"
+  grep -Fq "$reason" "$output" || fail "$label reason is $reason"
+  printf 'PASS %s\n' "$label"
+}
+
 run_suite() {
-  local allowed="$RUN_DIR/allowed.out"
-  local constrained="$RUN_DIR/constrained.out"
-  local missing="$RUN_DIR/missing.out"
+  expect_allow "$FIXTURE_DIR/task-a-read.json" "read payments logs in staging" \
+    "task A read reached the effect"
+  expect_allow "$FIXTURE_DIR/task-b-read.json" "read payments logs in staging" \
+    "task B read reached the effect"
+  expect_allow "$FIXTURE_DIR/task-a-restart.json" "restarted payments in staging" \
+    "task A restart reached the effect"
+  expect_deny "$FIXTURE_DIR/task-b-restart.json" "tenuo_tool_denied" \
+    "task B restart was denied"
+  expect_deny "$FIXTURE_DIR/copied-warrant.json" "tenuo_invalid_authority" \
+    "task A's warrant signed by task B was denied"
+  expect_deny "$FIXTURE_DIR/task-a-constraint.json" "tenuo_constraint_denied" \
+    "task A production read was denied"
+  expect_deny "$FIXTURE_DIR/task-a-replicas.json" "tenuo_constraint_denied" \
+    "task A replicas=8 restart was denied"
+  expect_deny "$FIXTURE_DIR/missing-warrant.json" "tenuo_missing_warrant" \
+    "missing authority was denied"
 
-  send_request "$FIXTURE_DIR/allowed.json" >"$allowed" 2>>"$SETUP_LOG" || fail "allowed call completes"
-  grep -Fq '200 OK' "$allowed" || fail "allowed call returns 200"
-  grep -Fq 'read payments logs in staging' "$allowed" || fail "allowed effect response is returned"
-  printf 'PASS allowed task-scoped call reached the effect\n'
-
-  send_request "$FIXTURE_DIR/constraint-denied.json" >"$constrained" 2>>"$SETUP_LOG" || fail "constraint denial returns a response"
-  grep -Fq '403 Forbidden' "$constrained" || fail "argument mismatch is denied"
-  grep -Fq 'tenuo_constraint_denied' "$constrained" || fail "constraint denial is typed"
-  printf 'PASS unauthorized arguments were denied before the effect\n'
-
-  send_request "$FIXTURE_DIR/missing-warrant.json" >"$missing" 2>>"$SETUP_LOG" || fail "missing warrant denial returns a response"
-  grep -Fq '403 Forbidden' "$missing" || fail "missing warrant is denied"
-  grep -Fq 'tenuo_missing_warrant' "$missing" || fail "missing warrant denial is typed"
-  printf 'PASS missing authority was denied before the effect\n'
-
-  [[ "$(wc -l <"$EFFECT_LOG" | tr -d ' ')" == 1 ]] || fail "effect server must observe exactly one call"
-  jq -e 'select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")' "$EFFECT_LOG" >/dev/null || fail "effect log contains only the authorized call"
-  ! grep -Fq 'identity' "$EFFECT_LOG" || fail "denied identity call reached the effect"
-  printf 'ALL PASS OpenShell enforced Tenuo authority before credential injection and effect\n'
+  jq -se '
+    length == 3
+    and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 2)
+    and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
+    and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8)] | length == 0)
+  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the three authorized calls"
+  printf 'ALL PASS both tasks used one sandbox; only the authorized calls reached the effect\n'
 }
 
 for command in cargo curl git jq nc openssl python3 "$COMPUTE_DRIVER"; do

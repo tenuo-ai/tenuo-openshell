@@ -1,16 +1,28 @@
 # Authenticated OpenShell demo
 
-The demo sends three identical `read_logs` tool calls through a real OpenShell
-sandbox and the Tenuo `HTTP_REQUEST/PRE_CREDENTIALS` middleware:
+The demo sends two tasks through one OpenShell sandbox and the Tenuo
+`HTTP_REQUEST/PRE_CREDENTIALS` middleware. The sandbox policy admits both
+`read_logs` and `restart_service`. Task A's warrant grants those tools for
+`payments` in `staging`, and limits `restart_service` to `replicas` of at most
+5. Task B's warrant grants only the staging payments read.
 
-1. `payments` in `staging` is allowed and reaches the MCP effect server.
-2. `identity` in `production` has a valid warrant and proof-of-possession but
-   violates the warrant's argument constraints, so it is denied.
-3. A call without a warrant is denied.
+Each holder key is created by its own process and stored in its own file. The
+sandbox command receives the signed request body only. Neither holder key is
+copied into the sandbox. The issuer secret is not written.
 
-OpenShell's policy admits the `read_logs` tool name. Tenuo makes the narrower,
-task-specific argument decision. The suite verifies that the effect server saw
-exactly the first call.
+1. Task A reads staging payments logs. Allowed.
+2. Task B reads staging payments logs with its own warrant. Allowed.
+3. Task A restarts staging payments with `replicas` 3. Allowed.
+4. Task B requests that restart with its own warrant. Denied
+   `tenuo_tool_denied`.
+5. Task B signs Task A's warrant for that restart. The holder proof does
+   not verify, so it is denied `tenuo_invalid_authority`.
+6. Task A reads identity logs in production. Denied
+   `tenuo_constraint_denied`.
+7. Task A restarts with `replicas` 8. Denied `tenuo_constraint_denied`.
+8. A restart without a warrant is denied `tenuo_missing_warrant`.
+
+The suite checks that the effect server saw exactly the three allowed calls.
 
 From the repository root:
 

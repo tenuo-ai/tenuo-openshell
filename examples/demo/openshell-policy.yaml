@@ -35,5 +35,8 @@ network_policies:
           - allow:
               method: tools/call
               tool: read_logs
+          - allow:
+              method: tools/call
+              tool: restart_service
     binaries:
       - path: /usr/bin/curl

@@ -121,7 +121,7 @@ mod tests {
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tenuo::sdk::transport::mcp_meta::encode_meta;
-    use tenuo::{ConstraintSet, SigningKey, Warrant, SIGNATURE_CONTEXT};
+    use tenuo::{ConstraintSet, Exact, Range, SigningKey, Warrant, SIGNATURE_CONTEXT};
 
     fn policy_for(root: &SigningKey) -> PolicySet {
         let document = json!({
@@ -242,5 +242,68 @@ mod tests {
 
         let outcome = evaluate(&policy, "other", true, &init, MetaMode::Preserve);
         assert_eq!(outcome.reason_code, reason::VERIFIER_FAILED);
+    }
+
+    fn scoped_warrant(issuer: &SigningKey, holder: &SigningKey, restart: bool) -> Warrant {
+        let mut read = ConstraintSet::new();
+        read.insert("service", Exact::new("payments"));
+        read.insert("environment", Exact::new("staging"));
+        let mut builder = Warrant::builder().capability("read_logs", read);
+        if restart {
+            let mut restart_constraints = ConstraintSet::new();
+            restart_constraints.insert("service", Exact::new("payments"));
+            restart_constraints.insert("environment", Exact::new("staging"));
+            restart_constraints.insert("replicas", Range::max(5.0).expect("range"));
+            builder = builder.capability("restart_service", restart_constraints);
+        }
+        builder
+            .holder(holder.public_key())
+            .ttl(std::time::Duration::from_secs(300))
+            .build(issuer)
+            .expect("warrant")
+    }
+
+    #[test]
+    fn two_holders_do_not_authorize_each_other() {
+        let issuer = SigningKey::generate();
+        let task_a = SigningKey::generate();
+        let task_b = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let warrant_a = scoped_warrant(&issuer, &task_a, true);
+        let warrant_b = scoped_warrant(&issuer, &task_b, false);
+        let restart = json!({"service": "payments", "environment": "staging", "replicas": 3});
+
+        let allowed = tools_call(
+            "restart_service",
+            restart.clone(),
+            Some(sign(&warrant_a, &task_a, "restart_service", &restart)),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve);
+        assert!(outcome.allow);
+
+        let other_task = tools_call(
+            "restart_service",
+            restart.clone(),
+            Some(sign(&warrant_b, &task_b, "restart_service", &restart)),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &other_task, MetaMode::Preserve);
+        assert_eq!(outcome.reason_code, reason::TOOL_DENIED);
+
+        let copied = tools_call(
+            "restart_service",
+            restart.clone(),
+            Some(sign(&warrant_a, &task_b, "restart_service", &restart)),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &copied, MetaMode::Preserve);
+        assert_eq!(outcome.reason_code, reason::INVALID_AUTHORITY);
+
+        let too_many = json!({"service": "payments", "environment": "staging", "replicas": 8});
+        let over_limit = tools_call(
+            "restart_service",
+            too_many.clone(),
+            Some(sign(&warrant_a, &task_a, "restart_service", &too_many)),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &over_limit, MetaMode::Preserve);
+        assert_eq!(outcome.reason_code, reason::CONSTRAINT_DENIED);
     }
 }

@@ -14,9 +14,13 @@ fixture_dir="$(mktemp -d)"
 trap 'rm -rf "$fixture_dir"' EXIT
 cargo run --quiet --bin tenuo-demo-fixture -- --output "$fixture_dir" --sandbox-id test-sandbox
 jq -e '.sandboxes["test-sandbox"]' "$fixture_dir/policy.json" >/dev/null
-jq -e '.params._meta.tenuo' "$fixture_dir/allowed.json" >/dev/null
-jq -e '.params._meta.tenuo' "$fixture_dir/constraint-denied.json" >/dev/null
+jq -e '.params._meta.tenuo' "$fixture_dir/task-a-read.json" >/dev/null
+jq -e '.params._meta.tenuo' "$fixture_dir/task-b-restart.json" >/dev/null
+jq -e '.params._meta.tenuo' "$fixture_dir/copied-warrant.json" >/dev/null
 jq -e '.params._meta.tenuo == null' "$fixture_dir/missing-warrant.json" >/dev/null
+test "$(wc -c <"$fixture_dir/signers/task-a/key" | tr -d ' ')" = 32
+test "$(wc -c <"$fixture_dir/signers/task-b/key" | tr -d ' ')" = 32
+! cmp -s "$fixture_dir/signers/task-a/key" "$fixture_dir/signers/task-b/key"
 
 uv run --project python/nemo-agent-toolkit-tenuo --extra test \
   pytest python/nemo-agent-toolkit-tenuo/tests -q

@@ -41,19 +41,17 @@ class Handler(BaseHTTPRequestHandler):
             effect_log = Path(os.environ["TENUO_DEMO_EFFECT_LOG"])
             with effect_log.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(effect, sort_keys=True) + "\n")
+            text = (
+                "restarted payments in staging"
+                if params.get("name") == "restart_service"
+                else "read payments logs in staging"
+            )
             self._json(
                 200,
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "read payments logs in staging",
-                            }
-                        ]
-                    },
+                    "result": {"content": [{"type": "text", "text": text}]},
                 },
             )
             return
@@ -82,6 +80,11 @@ class Handler(BaseHTTPRequestHandler):
                             {
                                 "name": "read_logs",
                                 "description": "Read service logs",
+                                "inputSchema": {"type": "object"},
+                            },
+                            {
+                                "name": "restart_service",
+                                "description": "Restart a service",
                                 "inputSchema": {"type": "object"},
                             }
                         ]
