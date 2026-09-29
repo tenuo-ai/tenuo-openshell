@@ -58,6 +58,23 @@ struct ProductionSecurity {
     verifier: ExtensionJwtVerifier,
 }
 
+#[derive(Clone)]
+struct OpenShellAuthInterceptor {
+    verifier: ExtensionJwtVerifier,
+}
+
+impl tonic::service::Interceptor for OpenShellAuthInterceptor {
+    #[allow(clippy::result_large_err)]
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
+        let caller = self.verifier.verify_metadata(request.metadata())?;
+        request.extensions_mut().insert(caller);
+        Ok(request)
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
@@ -90,15 +107,10 @@ async fn main() -> ExitCode {
         Some(security) => {
             let audience = security.verifier.audience().to_string();
             let service = MiddlewareService::authenticated(policy, audience);
-            let verifier = security.verifier;
-            let service = SupervisorMiddlewareServer::with_interceptor(
-                service,
-                move |mut request: tonic::Request<()>| {
-                    let caller = verifier.verify_metadata(request.metadata())?;
-                    request.extensions_mut().insert(caller);
-                    Ok(request)
-                },
-            );
+            let interceptor = OpenShellAuthInterceptor {
+                verifier: security.verifier,
+            };
+            let service = SupervisorMiddlewareServer::with_interceptor(service, interceptor);
             eprintln!("authenticated TLS middleware listening on {}", args.listen);
             Server::builder()
                 .tls_config(ServerTlsConfig::new().identity(security.identity))
