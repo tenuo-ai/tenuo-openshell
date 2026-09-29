@@ -1,0 +1,14 @@
+/target/
+**/*.rs.bk
+.DS_Store
+
+.env
+.env.*
+*.pem
+*.key
+*.p8
+credentials.json
+results/
+
+# Local implementation spec. Not committed.
+docs/spec.md
