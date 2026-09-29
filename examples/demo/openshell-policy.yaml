@@ -1,0 +1,39 @@
+version: 1
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_middlewares:
+  tenuo-task-authority:
+    name: Tenuo task-scoped authority
+    middleware: tenuo/authorization
+    order: 10
+    config:
+      tenuo_meta: strip
+    on_error: fail_closed
+    endpoints:
+      include:
+        - host.openshell.internal
+
+network_policies:
+  demo-mcp:
+    name: Tenuo demo MCP server
+    endpoints:
+      - host: host.openshell.internal
+        port: __UPSTREAM_PORT__
+        path: /mcp
+        protocol: mcp
+        enforcement: enforce
+        rules:
+          - allow:
+              method: initialize
+          - allow:
+              method: notifications/initialized
+          - allow:
+              method: tools/list
+          - allow:
+              method: tools/call
+              tool: read_logs
+    binaries:
+      - path: /usr/bin/curl

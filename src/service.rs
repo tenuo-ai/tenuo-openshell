@@ -1,5 +1,6 @@
 //! gRPC `SupervisorMiddleware` server for one HTTP binding.
 
+use crate::auth::{AuthenticatedCaller, CallerKind};
 use crate::evaluate::{self, Outcome};
 use crate::policy::{self, PolicySet};
 use crate::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddleware;
@@ -13,15 +14,55 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 const MAX_PAYLOAD_BYTES: u64 = 262_144;
+const CONTRACT_CAPABILITY: &str = "openshell.supervisor-middleware.contract";
 
 pub struct MiddlewareService {
     policy: Arc<PolicySet>,
+    expected_audience: Option<String>,
 }
 
 impl MiddlewareService {
     pub fn new(policy: PolicySet) -> Self {
         Self {
             policy: Arc::new(policy),
+            expected_audience: None,
+        }
+    }
+
+    pub fn authenticated(policy: PolicySet, expected_audience: String) -> Self {
+        Self {
+            policy: Arc::new(policy),
+            expected_audience: Some(expected_audience),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn require_gateway<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        if self.expected_audience.is_none() {
+            return Ok(());
+        }
+        match request.extensions().get::<AuthenticatedCaller>() {
+            Some(caller) if caller.kind == CallerKind::Gateway => Ok(()),
+            _ => Err(Status::permission_denied("gateway caller required")),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn require_supervisor<T>(&self, request: &Request<T>, sandbox_id: &str) -> Result<(), Status> {
+        if self.expected_audience.is_none() {
+            return Ok(());
+        }
+        match request.extensions().get::<AuthenticatedCaller>() {
+            Some(caller)
+                if caller.kind == CallerKind::Supervisor
+                    && caller.sandbox_id.as_deref() == Some(sandbox_id)
+                    && !sandbox_id.is_empty() =>
+            {
+                Ok(())
+            }
+            _ => Err(Status::permission_denied(
+                "supervisor credential does not match request sandbox",
+            )),
         }
     }
 }
@@ -30,8 +71,14 @@ impl MiddlewareService {
 impl SupervisorMiddleware for MiddlewareService {
     async fn describe(
         &self,
-        _request: Request<MiddlewareDescribeRequest>,
+        request: Request<MiddlewareDescribeRequest>,
     ) -> Result<Response<MiddlewareManifest>, Status> {
+        if self.expected_audience.is_some()
+            && request.extensions().get::<AuthenticatedCaller>().is_none()
+        {
+            return Err(Status::unauthenticated("authenticated caller required"));
+        }
+        validate_gateway_metadata(request.get_ref())?;
         Ok(Response::new(MiddlewareManifest {
             name: "tenuo-openshell-middleware".to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -41,7 +88,7 @@ impl SupervisorMiddleware for MiddlewareService {
                 max_payload_bytes: MAX_PAYLOAD_BYTES,
                 request_timeout: None,
             }],
-            expected_audience: String::new(),
+            expected_audience: self.expected_audience.clone().unwrap_or_default(),
             extension: Some(extension_metadata()),
         }))
     }
@@ -50,13 +97,14 @@ impl SupervisorMiddleware for MiddlewareService {
         &self,
         request: Request<ValidateConfigRequest>,
     ) -> Result<Response<ValidateConfigResponse>, Status> {
+        self.require_gateway(&request)?;
         let config = request.into_inner().config.unwrap_or_default();
         let response = match policy::meta_mode(&config) {
             Ok(_) => ValidateConfigResponse {
                 valid: true,
                 reason: String::new(),
             },
-            Err(()) => ValidateConfigResponse {
+            Err(policy::InvalidMiddlewareConfig) => ValidateConfigResponse {
                 valid: false,
                 reason: "config accepts only tenuo_meta=preserve|strip".to_string(),
             },
@@ -68,6 +116,13 @@ impl SupervisorMiddleware for MiddlewareService {
         &self,
         request: Request<HttpRequestEvaluation>,
     ) -> Result<Response<HttpRequestResult>, Status> {
+        let authenticated_sandbox_id = request
+            .get_ref()
+            .context
+            .as_ref()
+            .map(|context| context.sandbox_id.as_str())
+            .unwrap_or("");
+        self.require_supervisor(&request, authenticated_sandbox_id)?;
         let request = request.into_inner();
         if request.body.len() as u64 > MAX_PAYLOAD_BYTES {
             return Ok(Response::new(http_result(evaluate::Outcome {
@@ -79,7 +134,7 @@ impl SupervisorMiddleware for MiddlewareService {
         let config = request.config.unwrap_or_default();
         let meta_mode = match policy::meta_mode(&config) {
             Ok(mode) => mode,
-            Err(()) => {
+            Err(policy::InvalidMiddlewareConfig) => {
                 return Ok(Response::new(http_result(evaluate::Outcome {
                     allow: false,
                     reason_code: reason::INVALID_REQUEST,
@@ -164,7 +219,43 @@ fn extension_metadata() -> crate::proto::openshell::extension::v1::PeerMetadata 
         }),
         implementation_name: "tenuo/openshell-middleware".to_string(),
         implementation_version: env!("CARGO_PKG_VERSION").to_string(),
-        supported_capabilities: Vec::new(),
-        required_capabilities: Vec::new(),
+        supported_capabilities: vec![CONTRACT_CAPABILITY.to_string()],
+        required_capabilities: vec![CONTRACT_CAPABILITY.to_string()],
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_gateway_metadata(request: &MiddlewareDescribeRequest) -> Result<(), Status> {
+    let gateway = request
+        .gateway
+        .as_ref()
+        .ok_or_else(|| Status::failed_precondition("gateway protocol metadata is required"))?;
+    let version = gateway
+        .protocol_version
+        .as_ref()
+        .ok_or_else(|| Status::failed_precondition("gateway protocol version is required"))?;
+    if version.major != 1 {
+        return Err(Status::failed_precondition(
+            "incompatible gateway protocol major version",
+        ));
+    }
+    if !gateway
+        .supported_capabilities
+        .iter()
+        .any(|capability| capability == CONTRACT_CAPABILITY)
+    {
+        return Err(Status::failed_precondition(
+            "gateway does not support the supervisor middleware contract",
+        ));
+    }
+    if gateway
+        .required_capabilities
+        .iter()
+        .any(|capability| capability != CONTRACT_CAPABILITY)
+    {
+        return Err(Status::failed_precondition(
+            "gateway requires an unsupported supervisor middleware capability",
+        ));
+    }
+    Ok(())
 }

@@ -1,0 +1,10 @@
+.git
+.github
+.cache
+.venv
+target
+python
+tests
+docs
+examples
+results

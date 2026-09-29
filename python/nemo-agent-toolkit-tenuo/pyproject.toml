@@ -6,22 +6,28 @@ build-backend = "hatchling.build"
 packages = ["src/nat"]
 
 [project]
-name = "tenuo-nat"
+name = "nemo-agent-toolkit-tenuo"
 version = "0.1.0"
-description = "Tenuo authorization middleware for NeMo Agent Toolkit functions"
+description = "Task-scoped Tenuo authorization for NVIDIA NeMo Agent Toolkit"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "Apache-2.0" }
 dependencies = [
-    "nvidia-nat-core>=1.8,<2",
-    "tenuo>=0.2.4",
+    "nvidia-nat-core>=1.8,<1.9",
+    "tenuo>=0.2.4,<0.4",
 ]
 
 [project.optional-dependencies]
 test = [
+    "nvidia-nat-test>=1.8,<1.9",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+
+[project.urls]
+Documentation = "https://github.com/tenuo-ai/tenuo-openshell/tree/main/python/nemo-agent-toolkit-tenuo"
+Issues = "https://github.com/tenuo-ai/tenuo-openshell/issues"
+Source = "https://github.com/tenuo-ai/tenuo-openshell"
 
 [project.entry-points."nat.plugins"]
 nat_tenuo = "nat.plugins.tenuo.register"

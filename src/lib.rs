@@ -1,7 +1,9 @@
 //! OpenShell `HTTP_REQUEST` / `PRE_CREDENTIALS` evaluation.
 //!
-//! WebSocket sessions and extension bearer authentication are not implemented.
+//! WebSocket sessions are not implemented. Production listeners authenticate
+//! OpenShell extension JWTs and bind supervisor callers to `sandbox_id`.
 
+pub mod auth;
 pub mod evaluate;
 pub mod mcp;
 pub mod policy;

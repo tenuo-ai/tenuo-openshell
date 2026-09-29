@@ -53,11 +53,15 @@ One binding: `HTTP_REQUEST` / `PRE_CREDENTIALS`, via `Describe`, `ValidateConfig
 
 - `EvaluateWebSocketSession`. The proto includes a `binary` payload variant. The supervisor middleware docs say binary frames are not delivered to middleware and pass through.
 - `HTTP_RESPONSE` and the separate `HttpResponsePreReturn` service. Response inspection runs after the upstream request has already executed.
-- Extension bearer authentication and mTLS client authentication. `SupervisorMiddlewareService` comments say v1 supports plaintext and server-authenticated TLS gRPC. This binary starts only with `--insecure-dev`.
+- Extension client-certificate authentication. OpenShell v0.1.2 supports
+  server-authenticated TLS plus an extension bearer JWT, but does not provision
+  client certificates. The production listener implements that exact contract;
+  plaintext and unauthenticated operation require the explicit
+  `--insecure-dev` flag.
 
 ### Uncovered paths
 
-Fail-closed middleware does not inspect `tls: skip`, non-HTTP TCP, or binary WebSocket frames. Network policy has to deny those routes to a protected tool. This was not re-tested against a running gateway.
+Fail-closed middleware does not inspect `tls: skip`, non-HTTP TCP, or binary WebSocket frames. Network policy has to deny those routes to a protected tool. The repository's `make e2e` suite exercises the HTTP path through a real pinned gateway and sandbox.
 
 ## MCP policy surface
 
@@ -80,9 +84,9 @@ Checked against the 1.8 public docs on 2026-09-28:
 - https://docs.nvidia.com/nemo/agent-toolkit/1.8/extend/third-party-plugins.html
 - https://docs.nvidia.com/nemo/agent-toolkit/1.8/build-workflows/advanced/middleware.html
 
-Third-party packages import `nat.plugin_api` and register through the `nat.plugins` entry point. `register_middleware` is on that public surface. `FunctionMiddleware.function_middleware_invoke` receives `call_next` and can return without calling it. `DynamicFunctionMiddleware` is the documented default and its base class drives the chain. Increment 2 must confirm, by reading the installed package, that `DynamicFunctionMiddleware` can skip `call_next` before using it. Until then the plugin subclasses `FunctionMiddleware`.
+Third-party packages import `nat.plugin_api` and register through the `nat.plugins` entry point. `register_middleware` is on that public surface. `FunctionMiddleware.function_middleware_invoke` receives `call_next` and can return without calling it. The plugin intentionally subclasses `FunctionMiddleware` so denial can return before invoking the protected function. Its 1.8.x test matrix and `nat info components` discovery check run in CI.
 
-PyPI package `nvidia-nat` version **1.9.0** was current on 2026-09-28. The 1.9 middleware documentation URL returned 404. This repository does not claim 1.9 compatibility. The first plugin change installs a pinned `nvidia-nat` and records the import result here.
+The supported dependency is `nvidia-nat-core>=1.8,<1.9`; this repository does not claim 1.9 compatibility. The partner-owned distribution is `nemo-agent-toolkit-tenuo`, with the NVIDIA namespace-preserving import `nat.plugins.tenuo` and entry point `nat_tenuo`.
 
 ## Links from the specification
 
@@ -95,6 +99,12 @@ PyPI package `nvidia-nat` version **1.9.0** was current on 2026-09-28. The 1.9 m
 | `github.com/NVIDIA/OpenShell` `docs/extensibility/supervisor-middleware.mdx` | 404. The spec now cites the docs site and the RFC. |
 | OpenShell `architecture/security-policy.md` | Present at the v0.1.2 tree. Not re-read for this pin. |
 
-## What was not executed against a gateway
+## Executable verification
 
-No OpenShell gateway was started. No `nvidia-nat` package was imported. The middleware tests call `Evaluate` logic in process. They do not open a supervisor connection.
+`make e2e` builds the pinned OpenShell gateway, CLI, and supervisor image; creates
+an authenticated HTTPS middleware registration; creates a real sandbox; sends
+one authorized and two unauthorized MCP calls; and proves the protected effect
+ran exactly once. `make check` covers Rust tests, JWT negative cases, signed
+fixture generation, Agent Toolkit 1.8 plugin tests, entry-point discovery, and
+package builds. The full gateway suite requires a supported container runtime
+and is therefore a separate manual/weekly CI job.

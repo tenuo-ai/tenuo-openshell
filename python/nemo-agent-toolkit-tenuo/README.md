@@ -1,6 +1,7 @@
-# tenuo-nat
+# NVIDIA NeMo Agent Toolkit — Tenuo
 
-NeMo Agent Toolkit middleware that authorizes a function call with a Tenuo warrant before the function runs.
+Provider-owned `nemo-agent-toolkit-tenuo` middleware that authorizes a function
+call with a Tenuo warrant before the function runs.
 
 The warrant is bound to the current task with `authority()`. The middleware does not read a warrant from function arguments. On denial it raises `AuthorizationDenied` and does not call the next stage. A call that still needs a signed approval raises `ApprovalRequired`, a subclass of `AuthorizationDenied`.
 
@@ -8,13 +9,31 @@ This package is the Agent Toolkit plugin. It does not implement the OpenShell su
 
 ## Install
 
-Use the same environment as `nvidia-nat-core` 1.8.
+Use the same environment as `nvidia-nat-core` 1.8:
 
 ```bash
-pip install -e ".[test]"
+pip install nemo-agent-toolkit-tenuo
 ```
 
-The `tenuo` package must be installed as well. This package was checked against `nvidia-nat-core` 1.8.0.
+For a source checkout:
+
+```bash
+uv sync --extra test
+uv run pytest -q
+uv run nat info components
+```
+
+The distribution, import namespace, entry point, and `_type` follow NVIDIA's
+third-party plugin convention:
+
+| Surface | Value |
+| --- | --- |
+| Distribution | `nemo-agent-toolkit-tenuo` |
+| Import | `nat.plugins.tenuo` |
+| Entry point | `nat_tenuo` |
+| Middleware `_type` | `tenuo` |
+
+This release is compatibility-tested against `nvidia-nat-core` 1.8.x.
 
 ## Bind a warrant
 

@@ -17,6 +17,9 @@ pub enum MetaMode {
     Strip,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidMiddlewareConfig;
+
 pub struct PolicySet {
     sandboxes: HashMap<String, Guard>,
 }
@@ -109,21 +112,24 @@ fn parse_root(text: &str) -> Result<PublicKey, PolicyError> {
     PublicKey::from_bytes(&bytes).map_err(|_| PolicyError::Invalid)
 }
 
-pub fn meta_mode(config: &prost_types::Struct) -> Result<MetaMode, ()> {
+pub fn meta_mode(config: &prost_types::Struct) -> Result<MetaMode, InvalidMiddlewareConfig> {
     if config.fields.is_empty() {
         return Ok(MetaMode::Preserve);
     }
     if config.fields.len() != 1 {
-        return Err(());
+        return Err(InvalidMiddlewareConfig);
     }
-    let value = config.fields.get("tenuo_meta").ok_or(())?;
+    let value = config
+        .fields
+        .get("tenuo_meta")
+        .ok_or(InvalidMiddlewareConfig)?;
     let text = match &value.kind {
         Some(prost_types::value::Kind::StringValue(text)) => text.as_str(),
-        _ => return Err(()),
+        _ => return Err(InvalidMiddlewareConfig),
     };
     match text {
         "preserve" => Ok(MetaMode::Preserve),
         "strip" => Ok(MetaMode::Strip),
-        _ => Err(()),
+        _ => Err(InvalidMiddlewareConfig),
     }
 }

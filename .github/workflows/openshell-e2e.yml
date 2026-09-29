@@ -1,0 +1,22 @@
+name: OpenShell E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install demo system dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq netcat-openbsd openssl
+      - name: Run real OpenShell gateway and sandbox test
+        run: make e2e
