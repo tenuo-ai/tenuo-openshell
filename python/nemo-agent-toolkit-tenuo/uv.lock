@@ -1095,7 +1095,7 @@ requires-dist = [
     { name = "nvidia-nat-test", marker = "extra == 'test'", specifier = ">=1.8,<1.9" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24" },
-    { name = "tenuo", specifier = ">=0.2.4,<0.4" },
+    { name = "tenuo", specifier = ">=0.3.1,<0.4" },
 ]
 provides-extras = ["test"]
 
