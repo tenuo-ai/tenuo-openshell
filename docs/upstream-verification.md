@@ -1,7 +1,7 @@
 # Upstream verification
 
 Date: 2026-09-28  
-Status: increment 0, sufficient to start the OpenShell middleware  
+Status: contract record for the vendored proto  
 Pin: NVIDIA OpenShell **v0.1.2**, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` (2026-09-28)
 
 `proto/supervisor_middleware.proto` at that commit is byte-identical to `main` at `9cb72baa2e61a1b5f12407e6e82da7fdba0aa722` (2026-09-29). The vendored copies in `proto/openshell/v0.1.2/` are the v0.1.2 files. A newer OpenShell release requires a new pin before the compatibility range moves.
@@ -32,7 +32,7 @@ Confirmed in `proto/supervisor_middleware.proto` at v0.1.2.
 
 `Describe` does not take `google.protobuf.Empty`. The request is `MiddlewareDescribeRequest`, which carries `openshell.extension.v1.PeerMetadata`. That message lives in `proto/extension.proto`, which is vendored beside the middleware proto. `MiddlewareManifest.expected_audience` is the exact JWT audience the service verifies. An empty value skips OpenShell's post-authentication consistency check.
 
-`ValidateConfigRequest.middleware_name` is documented as the built-in middleware name or the operator-owned registration name. The spec's `middleware: tenuo/authorization` attachment matches this proto. RFC 0009 text that says policy selects a binding ID returned by `Describe`, independent of the registration name, is stale relative to v0.1.2.
+`ValidateConfigRequest.middleware_name` is documented as the built-in middleware name or the operator-owned registration name. An attachment such as `middleware: tenuo/authorization` matches this proto. RFC 0009 text that says policy selects a binding ID returned by `Describe`, independent of the registration name, is stale relative to v0.1.2.
 
 Gateway registration fields in `proto/sandbox.proto` `SupervisorMiddlewareService` match the spec's TOML shape: `name`, `grpc_endpoint`, `max_payload_bytes`, `timeout` (`10ms` through `30s`, default `500ms`), `tls_ca_cert_pem`, `audience`, and `allow_insecure_transport`. The `openshell/` registration prefix remains reserved. `tenuo/authorization` does not use it.
 
@@ -45,19 +45,19 @@ Public docs checked on 2026-09-28:
 
 Those docs agree with the pin on `pre_credentials`, `sandbox_id`, `fail_closed` as the default, body re-check after replacement, and `error: middleware_denied` plus `reason_code`. They name the display field `sandbox_name`. The proto field is `sandbox`. Implementation reads `sandbox_id` for policy selection and may log `sandbox` as a display label.
 
-### In scope for increment 1
+### Implemented
 
-Advertise one binding: `HTTP_REQUEST` / `PRE_CREDENTIALS`. Implement `Describe`, `ValidateConfig`, and `EvaluateHttpRequest`.
+One binding: `HTTP_REQUEST` / `PRE_CREDENTIALS`, via `Describe`, `ValidateConfig`, and `EvaluateHttpRequest`.
 
-### Present in the proto and out of the demo slice
+### Present in the proto and not implemented
 
-- `EvaluateWebSocketSession`. The proto includes a `binary` payload variant. The supervisor middleware docs say binary frames are not delivered to middleware and pass through. Do not advertise WebSocket coverage.
-- `HTTP_RESPONSE` and the separate `HttpResponsePreReturn` service. Response inspection runs after the upstream request has already executed. It is not an authorization point for the tool effect.
-- mTLS client authentication. `SupervisorMiddlewareService` comments say v1 supports plaintext and server-authenticated TLS gRPC. Production remains TLS plus the extension bearer. `allow_insecure_transport` is the local demo switch.
+- `EvaluateWebSocketSession`. The proto includes a `binary` payload variant. The supervisor middleware docs say binary frames are not delivered to middleware and pass through.
+- `HTTP_RESPONSE` and the separate `HttpResponsePreReturn` service. Response inspection runs after the upstream request has already executed.
+- Extension bearer authentication and mTLS client authentication. `SupervisorMiddlewareService` comments say v1 supports plaintext and server-authenticated TLS gRPC. This binary starts only with `--insecure-dev`.
 
 ### Uncovered paths
 
-Fail-closed middleware still does not inspect `tls: skip`, non-HTTP TCP, or binary WebSocket frames. The hardening note in the demo slice has to deny those routes with network policy. This was not re-tested at runtime in increment 0. It is taken from the supervisor middleware docs and stays a runtime check in increment 1.
+Fail-closed middleware does not inspect `tls: skip`, non-HTTP TCP, or binary WebSocket frames. Network policy has to deny those routes to a protected tool. This was not re-tested against a running gateway.
 
 ## MCP policy surface
 
@@ -72,7 +72,7 @@ The scenario consequences are in `docs/openshell-gap-analysis.md`.
 
 ## NeMo Agent Toolkit
 
-The in-process plugin is increment 2. It is not required to demonstrate H1.
+The in-process plugin is a separate package. This service does not import it.
 
 Checked against the 1.8 public docs on 2026-09-28:
 
@@ -94,8 +94,7 @@ PyPI package `nvidia-nat` version **1.9.0** was current on 2026-09-28. The 1.9 m
 | OpenShell supervisor middleware RFC | Resolves |
 | `github.com/NVIDIA/OpenShell` `docs/extensibility/supervisor-middleware.mdx` | 404. The spec now cites the docs site and the RFC. |
 | OpenShell `architecture/security-policy.md` | Present at the v0.1.2 tree. Not re-read for this pin. |
-| NIM API reference | Not required for this repository. |
 
-## What increment 0 did not run
+## What was not executed against a gateway
 
-No OpenShell gateway was started. No gRPC call was made. No `nvidia-nat` package was imported. Those are increment 1 and increment 2 runtime checks. The proto, the MCP policy source, and the 1.8 plugin docs are enough to start the middleware without inventing the RPC shape.
+No OpenShell gateway was started. No `nvidia-nat` package was imported. The middleware tests call `Evaluate` logic in process. They do not open a supervisor connection.

@@ -1,0 +1,26 @@
+[package]
+name = "tenuo-openshell-middleware"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "OpenShell supervisor middleware that checks Tenuo warrants on MCP tools/call"
+publish = false
+
+[[bin]]
+name = "tenuo-openshell-middleware"
+path = "src/main.rs"
+
+[dependencies]
+hex = "0.4"
+prost = "0.13"
+prost-types = "0.13"
+serde = "1"
+serde_json = "1"
+tenuo = { path = "../tenuo/tenuo-core", default-features = false, features = ["sdk", "mcp-transport"] }
+tokio-stream = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tonic = "0.12"
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-build = "0.12"

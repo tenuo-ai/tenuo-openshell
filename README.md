@@ -1,25 +1,28 @@
 # tenuo-openshell
 
-Task-scoped Tenuo authorization for NVIDIA OpenShell and NeMo Agent Toolkit.
+Tenuo authorization for OpenShell supervisor middleware.
 
-OpenShell admits what a sandbox can reach. This repository adds a supervisor middleware that checks a Tenuo warrant, proof-of-possession, and the concrete MCP arguments before OpenShell injects provider credentials. An in-process NeMo Agent Toolkit plugin is the early check on the same warrant. The model that proposes a tool call is not part of the authorization decision. `make demo` will use a deterministic tool-call driver. NIM is not required.
+The service implements `openshell.middleware.v1.SupervisorMiddleware` for `HTTP_REQUEST` / `PRE_CREDENTIALS`. On each covered MCP `tools/call` it checks the warrant, proof-of-possession, and arguments in `params._meta.tenuo` before OpenShell injects provider credentials. Other MCP lifecycle methods in the built-in allowlist are returned without a warrant check. WebSocket sessions and extension bearer authentication are not implemented.
 
-## Status
+Build against a local checkout of [tenuo-ai/tenuo](https://github.com/tenuo-ai/tenuo) at `b0dcfe571c0bd9dbb41cde102053d648301c67a8`, placed next to this repository as `../tenuo`. The `tenuo` package lives in `tenuo-core/` and that repository has no root package manifest, so the dependency is a path.
 
-Increment 0 is recorded against OpenShell **v0.1.2** (`6648bd0c290efbc41ba131ee9831ee45cd431f94`):
+```bash
+cargo test
+cargo run -- --policy examples/policy.json --listen 127.0.0.1:50051 --insecure-dev
+```
 
-- [`docs/upstream-verification.md`](docs/upstream-verification.md)
-- [`docs/openshell-gap-analysis.md`](docs/openshell-gap-analysis.md)
+`--insecure-dev` accepts unauthenticated callers. The process refuses to start without it. Do not use that flag on a reachable network.
 
-The next build is increment 1: an HTTP `PRE_CREDENTIALS` middleware that denies a covered `tools/call` with no `_meta.tenuo`, and denies `restart_service` when the call carries only the log-summarization warrant.
+The OpenShell registration for that local process sets `allow_insecure_transport = true`. The registration name must not use the reserved `openshell/` prefix.
 
 ## Pin
 
 | Upstream | Pin |
 |---|---|
-| OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` |
-| Middleware proto | `proto/openshell/v0.1.2/` |
-| NeMo Agent Toolkit | Public plugin API as documented for 1.8. PyPI `nvidia-nat` is 1.9.0; do not claim 1.9 compatibility until a local import confirms `FunctionMiddleware`. |
+| OpenShell proto | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94`, vendored under `proto/openshell/v0.1.2/` |
+| Tenuo crate | `b0dcfe571c0bd9dbb41cde102053d648301c67a8`, features `sdk` and `mcp-transport` |
+
+Contract notes: [`docs/upstream-verification.md`](docs/upstream-verification.md). MCP policy limit: [`docs/openshell-gap-analysis.md`](docs/openshell-gap-analysis.md).
 
 ## License
 

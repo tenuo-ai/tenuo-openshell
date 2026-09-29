@@ -1,0 +1,8 @@
+{
+  "max_warrant_lifetime_secs": 3600,
+  "sandboxes": {
+    "sandbox-id": {
+      "trusted_roots": ["0000000000000000000000000000000000000000000000000000000000000000"]
+    }
+  }
+}
