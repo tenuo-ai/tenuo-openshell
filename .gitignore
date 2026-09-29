@@ -12,3 +12,8 @@ results/
 
 # Local implementation spec. Not committed.
 docs/spec.md
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/

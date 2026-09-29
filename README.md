@@ -24,6 +24,8 @@ The OpenShell registration for that local process sets `allow_insecure_transport
 
 Contract notes: [`docs/upstream-verification.md`](docs/upstream-verification.md). MCP policy limit: [`docs/openshell-gap-analysis.md`](docs/openshell-gap-analysis.md).
 
+The Agent Toolkit function middleware is a separate Python package in [`python/tenuo-nat`](python/tenuo-nat). This service does not import it.
+
 ## License
 
 Apache-2.0. Vendored OpenShell protos keep NVIDIA's copyright and SPDX headers.
