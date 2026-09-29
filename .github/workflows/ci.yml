@@ -57,6 +57,11 @@ jobs:
       - run: test "$(wc -c </tmp/tenuo-fixtures/signers/task-a/key | tr -d ' ')" = 32
       - run: test "$(wc -c </tmp/tenuo-fixtures/signers/task-b/key | tr -d ' ')" = 32
       - run: "! cmp -s /tmp/tenuo-fixtures/signers/task-a/key /tmp/tenuo-fixtures/signers/task-b/key"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install 'tenuo==0.3.1'
+      - run: python3 examples/demo/test_destination.py --fixture /tmp/tenuo-fixtures
 
   container:
     runs-on: ubuntu-latest

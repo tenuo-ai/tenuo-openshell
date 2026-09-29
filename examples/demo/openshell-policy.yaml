@@ -10,7 +10,7 @@ network_middlewares:
     middleware: tenuo/authorization
     order: 10
     config:
-      tenuo_meta: strip
+      tenuo_meta: preserve
     on_error: fail_closed
     endpoints:
       include:

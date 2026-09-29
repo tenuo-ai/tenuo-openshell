@@ -22,7 +22,16 @@ copied into the sandbox. The issuer secret is not written.
 7. Task A restarts with `replicas` 8. Denied `tenuo_constraint_denied`.
 8. A restart without a warrant is denied `tenuo_missing_warrant`.
 
-The suite checks that the effect server saw exactly the three allowed calls.
+The effect server verifies the preserved warrant with `MCPVerifier` before it
+runs a tool. After the sandbox calls, the suite sends two requests directly to
+that server, bypassing OpenShell: Task B's restart and a restart with no
+warrant. Both are JSON-RPC `-32001` and neither is executed. One direct read
+with Task A's warrant is executed, which shows the destination check does not
+depend on OpenShell being in front.
+
+The launcher installs Python package `tenuo` 0.3.1 into a temporary environment
+for that server. Set `TENUO_DEMO_PYTHON` to an existing interpreter when that
+package is already installed.
 
 From the repository root:
 

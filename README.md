@@ -56,7 +56,8 @@ make demo
 The launcher downloads the pinned OpenShell source when needed, builds its
 gateway and supervisor image, creates an authenticated HTTPS middleware
 registration, runs the requests, verifies that the effect server observed only
-the three allowed calls, and cleans up. See [the demo guide](examples/demo/README.md)
+the three allowed sandbox calls, then checks that the effect server still
+denies a direct call that did not pass through OpenShell, and cleans up. See [the demo guide](examples/demo/README.md)
 for prerequisites and overrides.
 
 ## OpenShell middleware
@@ -71,8 +72,10 @@ covered `tools/call`, it:
 4. rejects duplicate-key, batched, malformed, or unsupported JSON-RPC bodies;
 5. verifies the warrant chain, proof-of-possession, lifetime, revocation mode,
    approvals, tool capability, and argument constraints; and
-6. allows, denies with a stable reason code, or strips `_meta.tenuo` before
-   forwarding to a destination that does not perform Tenuo verification.
+6. allows, denies with a stable reason code, or forwards the request.
+   `tenuo_meta` is `preserve` or `strip`. The demo preserves `_meta.tenuo`
+   because the effect server verifies that same warrant. `strip` is for a
+   destination that does not verify Tenuo warrants.
 
 MCP lifecycle methods in the explicit allowlist pass without a warrant.
 Unknown methods fail closed.

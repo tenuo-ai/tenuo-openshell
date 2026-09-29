@@ -292,9 +292,21 @@ wait_for_port() {
   fail "$label is not reachable"
 }
 
+prepare_destination_python() {
+  if [[ -n "${TENUO_DEMO_PYTHON:-}" ]]; then
+    DEMO_PYTHON="$TENUO_DEMO_PYTHON"
+    return
+  fi
+  python3 -m venv "$RUN_DIR/py"
+  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo==0.3.1'
+  DEMO_PYTHON="$RUN_DIR/py/bin/python"
+}
+
 start_upstream() {
   env TENUO_DEMO_EFFECT_LOG="$EFFECT_LOG" \
-    python3 "$EXAMPLE_DIR/mcp_server.py" --port "$UPSTREAM_PORT" >"$UPSTREAM_LOG" 2>&1 &
+    "$DEMO_PYTHON" "$EXAMPLE_DIR/mcp_server.py" \
+    --port "$UPSTREAM_PORT" \
+    --policy "$FIXTURE_DIR/policy.json" >"$UPSTREAM_LOG" 2>&1 &
   UPSTREAM_PID=$!
 }
 
@@ -382,7 +394,29 @@ run_suite() {
     and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
     and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8)] | length == 0)
   ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the three authorized calls"
-  printf 'ALL PASS both tasks used one sandbox; only the authorized calls reached the effect\n'
+
+  expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart"
+  expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant"
+  jq -se 'length == 3' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
+  direct_allow="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
+    --header 'content-type: application/json' \
+    --data-binary @"$FIXTURE_DIR/task-a-read.json")"
+  jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
+    || fail "direct task A read is authorized by the destination"
+  jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  printf 'ALL PASS the destination verified the warrant with and without OpenShell\n'
+}
+
+expect_destination_deny() {
+  local fixture="$1"
+  local label="$2"
+  local body
+  body="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
+    --header 'content-type: application/json' \
+    --data-binary @"$fixture")"
+  jq -e '.error.code == -32001 and .error.message == "Authorization denied" and (.error | keys | length == 2)' <<<"$body" >/dev/null \
+    || fail "$label is denied by the destination"
+  printf 'PASS %s\n' "$label"
 }
 
 for command in cargo curl git jq nc openssl python3 "$COMPUTE_DRIVER"; do
@@ -413,6 +447,7 @@ generate_security_material
   --openshell-jwt-dir "$JWT_DIR" \
   --openshell-jwt-key-id "$RUN_ID"
 write_gateway_config
+prepare_destination_python
 start_upstream
 wait_for_port "$UPSTREAM_PID" "$SERVICE_HOST" "$UPSTREAM_PORT" "MCP effect server"
 start_middleware
