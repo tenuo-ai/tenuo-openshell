@@ -447,6 +447,128 @@ mod tests {
         }
     }
 
+    fn approved_restart(issuer: &SigningKey) -> (SigningKey, SigningKey, Warrant, Value) {
+        let holder = SigningKey::generate();
+        let approver = SigningKey::generate();
+        let mut read = ConstraintSet::new();
+        read.insert("service", Exact::new("payments"));
+        read.insert("environment", Exact::new("staging"));
+        let mut restart = read.clone();
+        restart.insert("replicas", Range::max(5.0).expect("range"));
+        let mut gates = tenuo::ApprovalGateMap::new();
+        gates.insert(
+            "restart_service".to_string(),
+            tenuo::ToolApprovalGate::whole_tool(),
+        );
+        let warrant = Warrant::builder()
+            .capability("read_logs", read)
+            .capability("restart_service", restart)
+            .holder(holder.public_key())
+            .required_approvers(vec![approver.public_key()])
+            .min_approvals(1)
+            .extension(
+                tenuo::APPROVAL_GATE_EXTENSION_KEY,
+                tenuo::encode_approval_gate_map(&gates).expect("gates"),
+            )
+            .ttl(std::time::Duration::from_secs(300))
+            .build(issuer)
+            .expect("warrant");
+        let arguments = json!({"service": "payments", "environment": "staging", "replicas": 3});
+        (holder, approver, warrant, arguments)
+    }
+
+    fn approval_for(
+        approver: &SigningKey,
+        warrant: &Warrant,
+        tool: &str,
+        arguments: &Value,
+    ) -> tenuo::approval::SignedApproval {
+        let call = Call::try_from_json(tool, arguments).expect("call");
+        let request_hash = tenuo::approval::compute_request_hash(
+            &warrant.id().to_string(),
+            tool,
+            call.pop_args(),
+            Some(warrant.authorized_holder()),
+        );
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        tenuo::approval::SignedApproval::create(
+            tenuo::approval::ApprovalPayload {
+                version: 1,
+                request_hash,
+                nonce: [9u8; 16],
+                external_id: "local-fixture-approver".to_string(),
+                approved_at: now,
+                expires_at: now + 300,
+                extensions: None,
+            },
+            approver,
+        )
+    }
+
+    fn body_with_approval(
+        warrant: &Warrant,
+        holder: &SigningKey,
+        tool: &str,
+        arguments: &Value,
+        approval: Option<&tenuo::approval::SignedApproval>,
+    ) -> Vec<u8> {
+        let call = Call::try_from_json(tool, arguments).expect("call");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs() as i64;
+        let preimage = warrant
+            .pop_preimage(call.capability(), call.pop_args(), now, 30)
+            .expect("preimage");
+        let mut message = SIGNATURE_CONTEXT.to_vec();
+        message.extend(preimage);
+        let signature = holder.sign_raw(&message);
+        let approvals = approval.into_iter().cloned().collect::<Vec<_>>();
+        let meta =
+            encode_meta(std::slice::from_ref(warrant), &signature, &approvals).expect("meta");
+        tools_call(tool, arguments.clone(), Some(meta))
+    }
+
+    #[test]
+    fn an_approval_covers_one_argument_set_and_a_repeat_stays_allowed() {
+        let issuer = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let (holder, approver, warrant, arguments) = approved_restart(&issuer);
+        let approval = approval_for(&approver, &warrant, "restart_service", &arguments);
+        let allowed = body_with_approval(
+            &warrant,
+            &holder,
+            "restart_service",
+            &arguments,
+            Some(&approval),
+        );
+        assert!(evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve, None).allow);
+        assert!(evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve, None).allow);
+
+        let missing = body_with_approval(&warrant, &holder, "restart_service", &arguments, None);
+        let outcome = evaluate(&policy, "sbx", true, &missing, MetaMode::Preserve, None);
+        assert_eq!(outcome.reason_code, reason::APPROVAL_REQUIRED);
+
+        let other = json!({"service": "payments", "environment": "staging", "replicas": 5});
+        let mismatch = body_with_approval(
+            &warrant,
+            &holder,
+            "restart_service",
+            &other,
+            Some(&approval),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &mismatch, MetaMode::Preserve, None);
+        assert_eq!(outcome.reason_code, reason::INVALID_AUTHORITY);
+
+        let over = json!({"service": "payments", "environment": "staging", "replicas": 8});
+        let constrained = body_with_approval(&warrant, &holder, "restart_service", &over, None);
+        let outcome = evaluate(&policy, "sbx", true, &constrained, MetaMode::Preserve, None);
+        assert_eq!(outcome.reason_code, reason::CONSTRAINT_DENIED);
+    }
+
     #[test]
     fn receipts_follow_the_decision_and_a_failed_write_does_not_change_it() {
         let issuer = SigningKey::generate();

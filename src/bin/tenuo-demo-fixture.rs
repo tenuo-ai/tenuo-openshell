@@ -54,6 +54,21 @@ enum CommandKind {
         task_a_pub: PathBuf,
         #[arg(long)]
         task_b_pub: PathBuf,
+        #[arg(long)]
+        approver_pub: PathBuf,
+    },
+    /// Sign one restart approval with the fixture approver key.
+    Approve {
+        #[arg(long)]
+        approver_key: PathBuf,
+        #[arg(long)]
+        warrant: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        tool: String,
+        #[arg(long)]
+        arguments: String,
     },
     /// Attenuate Task A's warrant to a read-only child for another holder.
     Delegate {
@@ -92,6 +107,9 @@ enum CommandKind {
         /// `warrant` is a CBOR stack. The proof is over the leaf.
         #[arg(long)]
         chain: bool,
+        /// CBOR `SignedApproval` to attach. The proof of possession stays the holder's.
+        #[arg(long)]
+        approval: Option<PathBuf>,
     },
 }
 
@@ -104,7 +122,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sandbox_id,
             task_a_pub,
             task_b_pub,
-        }) => issue(&output, &sandbox_id, &task_a_pub, &task_b_pub),
+            approver_pub,
+        }) => issue(
+            &output,
+            &sandbox_id,
+            &task_a_pub,
+            &task_b_pub,
+            &approver_pub,
+        ),
+        Some(CommandKind::Approve {
+            approver_key,
+            warrant,
+            output,
+            tool,
+            arguments,
+        }) => approve(&approver_key, &warrant, &output, &tool, &arguments),
         Some(CommandKind::Delegate {
             parent_key,
             parent_warrant,
@@ -124,7 +156,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tool,
             arguments,
             chain,
-        }) => sign_request(&holder_key, &warrant, &output, id, &tool, &arguments, chain),
+            approval,
+        }) => sign_request(
+            &holder_key,
+            &warrant,
+            &output,
+            id,
+            &tool,
+            &arguments,
+            chain,
+            approval.as_deref(),
+        ),
         None => {
             let Some(output) = args.output.as_deref() else {
                 return Err("--output is required".into());
@@ -152,6 +194,7 @@ fn prepare(
 
     let task_a = output.join("signers/task-a");
     let task_b = output.join("signers/task-b");
+    let approver = output.join("signers/approver");
     let exe = std::env::current_exe()?;
     spawn(
         &exe,
@@ -160,6 +203,14 @@ fn prepare(
     spawn(
         &exe,
         &["keygen".to_string(), "--dir".to_string(), path_arg(&task_b)],
+    )?;
+    spawn(
+        &exe,
+        &[
+            "keygen".to_string(),
+            "--dir".to_string(),
+            path_arg(&approver),
+        ],
     )?;
     spawn(
         &exe,
@@ -173,6 +224,8 @@ fn prepare(
             path_arg(&task_a.join("public")),
             "--task-b-pub".to_string(),
             path_arg(&task_b.join("public")),
+            "--approver-pub".to_string(),
+            path_arg(&approver.join("public")),
         ],
     )?;
 
@@ -182,6 +235,24 @@ fn prepare(
     let key_b = task_b.join("key");
     let payments = r#"{"service":"payments","environment":"staging"}"#;
     let restart = r#"{"service":"payments","environment":"staging","replicas":3}"#;
+    let replicas_five = r#"{"service":"payments","environment":"staging","replicas":5}"#;
+    let approval = output.join("approvals/replicas-3.cbor");
+    spawn(
+        &exe,
+        &[
+            "approve".to_string(),
+            "--approver-key".to_string(),
+            path_arg(&approver.join("key")),
+            "--warrant".to_string(),
+            path_arg(&warrant_a),
+            "--output".to_string(),
+            path_arg(&approval),
+            "--tool".to_string(),
+            "restart_service".to_string(),
+            "--arguments".to_string(),
+            restart.to_string(),
+        ],
+    )?;
     sign_with(
         &exe,
         &key_a,
@@ -191,6 +262,7 @@ fn prepare(
         "read_logs",
         payments,
         false,
+        None,
     )?;
     sign_with(
         &exe,
@@ -201,6 +273,40 @@ fn prepare(
         "restart_service",
         restart,
         false,
+        Some(&approval),
+    )?;
+    sign_with(
+        &exe,
+        &key_a,
+        &warrant_a,
+        &output.join("task-a-unapproved.json"),
+        11,
+        "restart_service",
+        restart,
+        false,
+        None,
+    )?;
+    sign_with(
+        &exe,
+        &key_a,
+        &warrant_a,
+        &output.join("task-a-approval-mismatch.json"),
+        12,
+        "restart_service",
+        replicas_five,
+        false,
+        Some(&approval),
+    )?;
+    sign_with(
+        &exe,
+        &key_a,
+        &warrant_a,
+        &output.join("task-a-restart-repeat.json"),
+        13,
+        "restart_service",
+        restart,
+        false,
+        Some(&approval),
     )?;
     sign_with(
         &exe,
@@ -211,6 +317,7 @@ fn prepare(
         "read_logs",
         r#"{"service":"identity","environment":"production"}"#,
         false,
+        None,
     )?;
     sign_with(
         &exe,
@@ -221,6 +328,7 @@ fn prepare(
         "restart_service",
         r#"{"service":"payments","environment":"staging","replicas":8}"#,
         false,
+        None,
     )?;
     sign_with(
         &exe,
@@ -231,6 +339,7 @@ fn prepare(
         "read_logs",
         payments,
         false,
+        None,
     )?;
     sign_with(
         &exe,
@@ -241,6 +350,7 @@ fn prepare(
         "restart_service",
         restart,
         false,
+        None,
     )?;
     sign_with(
         &exe,
@@ -251,6 +361,7 @@ fn prepare(
         "restart_service",
         restart,
         false,
+        None,
     )?;
     write_json(
         &output.join("missing-warrant.json"),
@@ -290,6 +401,7 @@ fn prepare(
         "read_logs",
         payments,
         true,
+        None,
     )?;
     sign_with(
         &exe,
@@ -300,6 +412,7 @@ fn prepare(
         "restart_service",
         restart,
         true,
+        None,
     )?;
     spawn(
         &exe,
@@ -326,6 +439,7 @@ fn sign_with(
     tool: &str,
     arguments: &str,
     chain: bool,
+    approval: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = vec![
         "sign".to_string(),
@@ -344,6 +458,10 @@ fn sign_with(
     ];
     if chain {
         args.push("--chain".to_string());
+    }
+    if let Some(approval) = approval {
+        args.push("--approval".to_string());
+        args.push(path_arg(approval));
     }
     spawn(exe, &args)
 }
@@ -391,14 +509,27 @@ fn issue(
     sandbox_id: &str,
     task_a_pub: &Path,
     task_b_pub: &Path,
+    approver_pub: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let issuer = SigningKey::generate();
     let holder_a = read_public(task_a_pub)?;
     let holder_b = read_public(task_b_pub)?;
+    let approver = read_public(approver_pub)?;
+    let mut gates = tenuo::ApprovalGateMap::new();
+    gates.insert(
+        "restart_service".to_string(),
+        tenuo::ToolApprovalGate::whole_tool(),
+    );
     let warrant_a = Warrant::builder()
         .capability("read_logs", read_constraints()?)
         .capability("restart_service", restart_constraints()?)
         .holder(holder_a)
+        .required_approvers(vec![approver])
+        .min_approvals(1)
+        .extension(
+            tenuo::APPROVAL_GATE_EXTENSION_KEY,
+            tenuo::encode_approval_gate_map(&gates)?,
+        )
         .ttl(Duration::from_secs(300))
         .build(&issuer)?;
     let warrant_b = Warrant::builder()
@@ -512,6 +643,46 @@ fn refuse_widen(
     }
 }
 
+fn approve(
+    approver_key: &Path,
+    warrant_path: &Path,
+    output: &Path,
+    tool: &str,
+    arguments: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let approver = SigningKey::from_bytes(&read_secret(approver_key)?);
+    let warrant = tenuo::wire::decode(&fs::read(warrant_path)?)?;
+    let arguments: Value = serde_json::from_str(arguments)?;
+    let call = Call::try_from_json(tool, &arguments)?;
+    let request_hash = tenuo::approval::compute_request_hash(
+        &warrant.id().to_string(),
+        tool,
+        call.pop_args(),
+        Some(warrant.authorized_holder()),
+    );
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let mut nonce = [0u8; 16];
+    nonce.copy_from_slice(&SigningKey::generate().public_key().to_bytes()[..16]);
+    let payload = tenuo::approval::ApprovalPayload {
+        version: 1,
+        request_hash,
+        nonce,
+        external_id: "local-fixture-approver".to_string(),
+        approved_at: now,
+        expires_at: now + 300,
+        extensions: None,
+    };
+    let signed = tenuo::approval::SignedApproval::create(payload, &approver);
+    let mut bytes = Vec::new();
+    ciborium::into_writer(&signed, &mut bytes)?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output, bytes)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn sign_request(
     holder_key: &Path,
     warrant_path: &Path,
@@ -520,6 +691,7 @@ fn sign_request(
     tool: &str,
     arguments: &str,
     chain: bool,
+    approval: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let holder = SigningKey::from_bytes(&read_secret(holder_key)?);
     let arguments: Value = serde_json::from_str(arguments)?;
@@ -528,7 +700,15 @@ fn sign_request(
     } else {
         vec![tenuo::wire::decode(&fs::read(warrant_path)?)?]
     };
-    let meta = sign_chain(&warrants, &holder, tool, &arguments)?;
+    let approvals = match approval {
+        Some(path) => {
+            let signed: tenuo::approval::SignedApproval =
+                ciborium::from_reader(fs::read(path)?.as_slice())?;
+            vec![signed]
+        }
+        None => Vec::new(),
+    };
+    let meta = sign_chain(&warrants, &holder, tool, &arguments, &approvals)?;
     write_json(output, &tools_call(id, tool, arguments, Some(meta)))?;
     Ok(())
 }
@@ -552,6 +732,7 @@ fn sign_chain(
     holder: &SigningKey,
     name: &str,
     arguments: &Value,
+    approvals: &[tenuo::approval::SignedApproval],
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let warrant = warrants.last().ok_or("warrant chain is empty")?;
     let call = Call::try_from_json(name, arguments)?;
@@ -560,7 +741,7 @@ fn sign_chain(
     let mut message = SIGNATURE_CONTEXT.to_vec();
     message.extend(preimage);
     let signature = holder.sign_raw(&message);
-    Ok(encode_meta(warrants, &signature, &[])?)
+    Ok(encode_meta(warrants, &signature, approvals)?)
 }
 
 fn tools_call(id: u64, name: &str, arguments: Value, tenuo: Option<Value>) -> Value {

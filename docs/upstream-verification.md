@@ -61,7 +61,7 @@ One binding: `HTTP_REQUEST` / `PRE_CREDENTIALS`, via `Describe`, `ValidateConfig
 
 ### Uncovered paths
 
-Fail-closed middleware does not inspect `tls: skip`, non-HTTP TCP, or binary WebSocket frames. Network policy has to deny those routes to a protected tool. The repository's `make e2e` suite exercises the HTTP path through a real pinned gateway and sandbox.
+Fail-closed middleware does not inspect `tls: skip` endpoints, non-HTTP TCP, or binary WebSocket frames. A protected tool is still reachable on those routes unless network policy denies them. `WEBSOCKET_MESSAGE / PRE_CREDENTIALS` covers complete client text messages only, and this service does not implement that RPC. `HTTP_RESPONSE` runs after the upstream call and is not an authorization point. The repository's `make e2e` suite exercises the HTTP path through a real pinned gateway and sandbox.
 
 ## MCP policy surface
 

@@ -40,6 +40,9 @@ read-only child for a third holder in a second sandbox.
 ```text
 Task A  read_logs(payments, staging)                  → effect executed
 Task A  restart_service(payments, staging, replicas=3) → effect executed
+        same call again                                    → effect executed
+        restart without the signed approval                → tenuo_approval_required
+        same approval presented for replicas=5             → tenuo_invalid_authority
 Task B  read_logs(payments, staging)                  → effect executed
 Task B  restart_service(...)                          → tenuo_tool_denied
 Task B signing Task A's warrant                       → tenuo_invalid_authority
@@ -49,7 +52,13 @@ restart without a warrant                             → tenuo_missing_warrant
 child   read_logs(payments, staging)                  → effect executed
 child   restart_service(...)                          → tenuo_tool_denied
 child adding restart_service back                     → attenuation refused
+Agent Toolkit restart with Task B's warrant           → denied before the function
 ```
+
+The `replicas=3` restart carries an approval signed by a local fixture key.
+That approval does not cover `replicas=5`. There is no replay store, so the
+same approved call is allowed again. The Agent Toolkit denial is recorded in
+the same offline receipt report as the OpenShell and destination decisions.
 
 Run the calls through a real OpenShell gateway and sandbox:
 
@@ -60,7 +69,7 @@ make demo
 The launcher downloads the pinned OpenShell source when needed, builds its
 gateway and supervisor image, creates an authenticated HTTPS middleware
 registration, runs the requests, verifies that the effect server observed only
-the four allowed sandbox calls, then checks that the effect server still
+the five allowed sandbox calls, then checks that the effect server still
 denies a direct call that did not pass through OpenShell. It then verifies
 the signed authorization receipts offline with the issuer and receipt-signer
 public keys. A receipt records the decision; it does not show that a tool
@@ -86,6 +95,12 @@ covered `tools/call`, it:
 
 MCP lifecycle methods in the explicit allowlist pass without a warrant.
 Unknown methods fail closed.
+
+Fail-closed middleware does not see `tls: skip` endpoints, non-HTTP TCP, or
+binary WebSocket frames. Those routes have to be denied by network policy
+before they can reach a protected tool. This service does not implement
+`WEBSOCKET_MESSAGE`. Text frames on that binding, and `HTTP_RESPONSE`, are not
+authorization points here. The HTTP demo does not exercise them.
 
 ### Production listener
 

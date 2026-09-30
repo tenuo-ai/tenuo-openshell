@@ -5,7 +5,9 @@ warrant through a second sandbox. Both use the Tenuo
 `HTTP_REQUEST/PRE_CREDENTIALS` middleware. Each sandbox policy admits both
 `read_logs` and `restart_service`. Task A's warrant grants those tools for
 `payments` in `staging`, and limits `restart_service` to `replicas` of at most
-5. Task B's warrant grants only the staging payments read. Task A then
+5. Task B's warrant grants only the staging payments read. `restart_service`
+on Task A's warrant requires one approval. The approver is a local fixture
+key, created in its own process and not copied into a sandbox. Task A then
 attenuates that warrant to a read-only child, with a 120 second lifetime, for
 a third holder.
 
@@ -16,21 +18,32 @@ reads Task A's key and the child public key. It does not read the child secret.
 
 1. Task A reads staging payments logs. Allowed.
 2. Task B reads staging payments logs with its own warrant. Allowed.
-3. Task A restarts staging payments with `replicas` 3. Allowed.
-4. Task B requests that restart with its own warrant. Denied
+3. Task A restarts staging payments with `replicas` 3. The request carries
+   an approval signed by the local fixture approver for those arguments.
+   Allowed. The same request is sent again and allowed again. This demo has
+   no replay store.
+4. Task A requests that restart without the approval. Denied
+   `tenuo_approval_required`.
+5. Task A presents the `replicas` 3 approval with `replicas` 5. Denied
+   `tenuo_invalid_authority`.
+6. Task B requests that restart with its own warrant. Denied
    `tenuo_tool_denied`.
-5. Task B signs Task A's warrant for that restart. The holder proof does
+7. Task B signs Task A's warrant for that restart. The holder proof does
    not verify, so it is denied `tenuo_invalid_authority`.
-6. Task A reads identity logs in production. Denied
+8. Task A reads identity logs in production. Denied
    `tenuo_constraint_denied`.
-7. Task A restarts with `replicas` 8. Denied `tenuo_constraint_denied`.
-8. A restart without a warrant is denied `tenuo_missing_warrant`.
-9. The third holder, in the second sandbox, reads staging payments logs with
-   the narrowed warrant. Allowed.
-10. That holder requests a restart with the same warrant. Denied
+9. Task A restarts with `replicas` 8. Denied `tenuo_constraint_denied`.
+10. A restart without a warrant is denied `tenuo_missing_warrant`.
+11. The third holder, in the second sandbox, reads staging payments logs with
+    the narrowed warrant. Allowed.
+12. That holder requests a restart with the same warrant. Denied
     `tenuo_tool_denied`.
-11. That holder tries to mint a further warrant that adds `restart_service`
+13. That holder tries to mint a further warrant that adds `restart_service`
     back. Attenuation refuses the wider warrant.
+14. The Agent Toolkit middleware, on the host, checks Task B's warrant for
+    the same restart. It denies the call before the function runs. That
+    denial is in the receipt report and has no OpenShell or destination
+    receipt.
 
 The effect server verifies the preserved warrant with `MCPVerifier` before it
 runs a tool. After the sandbox calls, the suite sends three requests directly to
@@ -45,7 +58,8 @@ in `request_id`. `examples/demo/audit_receipts.py` checks those receipts
 with the issuer public keys and the two receipt-signer public keys. It does
 not use the network. A missing warrant has no chain to commit to, so that
 denial has no receipt. The narrowed calls record both the parent warrant and
-the child. A receipt does not show that the tool ran.
+the child. The Agent Toolkit denial is a third signer in that report. A
+receipt does not show that the tool ran.
 
 The launcher installs Python package `tenuo` 0.3.1 into a temporary environment
 for that server. Set `TENUO_DEMO_PYTHON` to an existing interpreter when that

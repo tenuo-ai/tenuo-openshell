@@ -326,7 +326,8 @@ prepare_destination_python() {
     return
   fi
   python3 -m venv "$RUN_DIR/py"
-  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo==0.3.1'
+  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo==0.3.1' 'nvidia-nat-core>=1.8,<1.9'
+  "$RUN_DIR/py/bin/python" -m pip install -q --no-deps "$ROOT/python/nemo-agent-toolkit-tenuo"
   DEMO_PYTHON="$RUN_DIR/py/bin/python"
 }
 
@@ -408,7 +409,13 @@ run_suite() {
   expect_allow "$FIXTURE_DIR/task-b-read.json" "read payments logs in staging" \
     "task B read reached the effect"
   expect_allow "$FIXTURE_DIR/task-a-restart.json" "restarted payments in staging" \
-    "task A restart reached the effect"
+    "task A approved restart reached the effect"
+  expect_allow "$FIXTURE_DIR/task-a-restart-repeat.json" "restarted payments in staging" \
+    "repeated approved restart stayed allowed"
+  expect_deny "$FIXTURE_DIR/task-a-unapproved.json" "tenuo_approval_required" \
+    "restart without its approval was denied"
+  expect_deny "$FIXTURE_DIR/task-a-approval-mismatch.json" "tenuo_invalid_authority" \
+    "approval for replicas=3 did not cover replicas=5"
   expect_deny "$FIXTURE_DIR/task-b-restart.json" "tenuo_tool_denied" \
     "task B restart was denied"
   expect_deny "$FIXTURE_DIR/copied-warrant.json" "tenuo_invalid_authority" \
@@ -427,22 +434,28 @@ run_suite() {
     || fail "the narrowed warrant could be widened"
 
   jq -se '
-    length == 4
+    length == 5
     and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 3)
-    and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
-    and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8)] | length == 0)
-  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the four authorized calls"
+    and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 2)
+    and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8 or .arguments.replicas == 5)] | length == 0)
+  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the five authorized calls"
 
   expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart"
   expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant"
   expect_destination_deny "$FIXTURE_DIR/delegated-restart.json" "direct narrowed restart"
-  jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
+  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
   direct_allow="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
     --data-binary @"$FIXTURE_DIR/task-a-read.json")"
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
-  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  jq -se 'length == 6' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  "$DEMO_PYTHON" "$EXAMPLE_DIR/local_denial.py" \
+    --policy "$FIXTURE_DIR/policy.json" \
+    --warrant "$FIXTURE_DIR/warrants/task-b.cbor" \
+    --holder-key "$FIXTURE_DIR/signers/task-b/key" \
+    --receipt-dir "$RECEIPT_DIR" \
+    --request-id 14 || fail "in-process denial"
   "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
     --dir "$RECEIPT_DIR" \
     --policy "$FIXTURE_DIR/policy.json" \
@@ -485,13 +498,13 @@ if [[ -z "${TENUO_DEMO_WORKLOAD_IMAGE:-}" ]]; then
     "$ROOT"
 fi
 generate_security_material
+prepare_destination_python
 "$TENUO_TARGET/debug/tenuo-demo-fixture" \
   --output "$FIXTURE_DIR" \
   --sandbox-id bootstrap \
   --openshell-jwt-dir "$JWT_DIR" \
   --openshell-jwt-key-id "$RUN_ID"
 write_gateway_config
-prepare_destination_python
 start_upstream
 wait_for_port "$UPSTREAM_PID" "$SERVICE_HOST" "$UPSTREAM_PORT" "MCP effect server"
 start_middleware

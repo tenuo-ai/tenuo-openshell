@@ -47,7 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y jq
       - run: bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh ci/check.sh
-      - run: python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py
+      - run: python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py
       - run: cargo run --locked --bin tenuo-demo-fixture -- --output /tmp/tenuo-fixtures --sandbox-id ci-sandbox
       - run: jq -e '.sandboxes["ci-sandbox"]' /tmp/tenuo-fixtures/policy.json
       - run: jq -e '.params._meta.tenuo' /tmp/tenuo-fixtures/task-a-read.json
