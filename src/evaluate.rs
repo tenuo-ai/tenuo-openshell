@@ -211,10 +211,24 @@ async fn authorize_tool(
     if !record(&receipts, allowed) && receipt_is_required(&receipts) {
         if let Some(reservation) = reservation {
             if reservation.release().await.is_err() {
-                eprintln!("approval reservation release failed");
+                eprintln!(
+                    "tenuo_replay_cleanup request_id={} outcome=failed",
+                    receipts.request_id
+                );
             }
         }
         return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+    }
+    if let Some(reservation) = reservation {
+        if reservation.commit().await.is_err() {
+            if reservation.release().await.is_err() {
+                eprintln!(
+                    "tenuo_replay_cleanup request_id={} outcome=failed",
+                    receipts.request_id
+                );
+            }
+            return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+        }
     }
     identified(
         Outcome {
@@ -269,7 +283,12 @@ fn identified(mut outcome: Outcome, request_id: &str) -> Outcome {
 mod tests {
     use super::*;
     use crate::receipt::ReceiptLog;
+    use crate::replay::{
+        InMemoryReplayStore, ReplayError, ReplayReservation, ReplayStore, ReserveResult,
+    };
+    use async_trait::async_trait;
     use serde_json::json;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tenuo::sdk::transport::mcp_meta::encode_meta;
     use tenuo::{ConstraintSet, Exact, Range, SigningKey, Warrant, SIGNATURE_CONTEXT};
@@ -302,6 +321,33 @@ mod tests {
             }
         });
         PolicySet::from_json(document.to_string().as_bytes()).expect("policy")
+    }
+
+    #[derive(Default)]
+    struct ReleaseFailingStore {
+        inner: InMemoryReplayStore,
+    }
+
+    #[async_trait]
+    impl ReplayStore for ReleaseFailingStore {
+        async fn reserve(
+            &self,
+            claims: &[crate::replay::ReplayClaim],
+        ) -> Result<ReserveResult, ReplayError> {
+            self.inner.reserve(claims).await
+        }
+
+        async fn commit(&self, reservation: &ReplayReservation) -> Result<(), ReplayError> {
+            self.inner.commit(reservation).await
+        }
+
+        async fn release(&self, _reservation: &ReplayReservation) -> Result<(), ReplayError> {
+            Err(ReplayError)
+        }
+
+        async fn healthy(&self) -> bool {
+            true
+        }
     }
 
     fn sign(warrant: &Warrant, holder: &SigningKey, name: &str, arguments: &Value) -> Value {
@@ -788,6 +834,50 @@ mod tests {
             Some(&required),
         );
         assert_eq!(replay.reason_code, reason::APPROVAL_REPLAYED);
+    }
+
+    #[test]
+    fn failed_reservation_cleanup_is_not_reported_as_replay() {
+        let issuer = SigningKey::generate();
+        let policy =
+            policy_for(&issuer).with_replay_store(Arc::new(ReleaseFailingStore::default()));
+        let (holder, approver, warrant, arguments) = approved_restart(&issuer);
+        let approval = approval_for(&approver, &warrant, "restart_service", &arguments);
+        let body = body_with_approval(
+            &warrant,
+            &holder,
+            "restart_service",
+            &arguments,
+            Some(&approval),
+        );
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("required.jsonl");
+        let required = ReceiptLog::open(&directory.path().join("receipt.key"), &path)
+            .expect("required receipt log")
+            .require_delivery();
+        std::fs::create_dir(&path).expect("directory blocks required log");
+
+        let first = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &body,
+            MetaMode::Preserve,
+            Some(&required),
+        );
+        assert_eq!(first.reason_code, reason::VERIFIER_FAILED);
+
+        std::fs::remove_dir(&path).expect("restore receipt path");
+        let retry = evaluate(
+            &policy,
+            "sbx-other",
+            true,
+            &body,
+            MetaMode::Preserve,
+            Some(&required),
+        );
+        assert_eq!(retry.reason_code, reason::VERIFIER_FAILED);
+        assert_ne!(retry.reason_code, reason::APPROVAL_REPLAYED);
     }
 
     #[test]

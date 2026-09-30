@@ -26,7 +26,8 @@ All notable changes will be documented here. The format follows
 - Unified approval replay semantics across in-memory, standalone Redis, and
   Redis Cluster backends; approval nonces are single-use per deployment.
 - Release approval reservations when required receipt persistence prevents an
-  effect from being allowed.
+  effect from being allowed. Unconfirmed cleanup remains a bounded pending
+  lease instead of being reported as a consumed approval replay.
 - Label enforcement-decision timing accurately when it includes replay and
   receipt I/O.
 - Restricted admin and DNS NetworkPolicy rules, made DNS selectors configurable,

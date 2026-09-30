@@ -134,12 +134,15 @@ A2A child restart with read-only warrant              → denied before the skil
 ```
 
 The `replicas=3` restart carries an approval signed by a local fixture key.
-That approval does not cover `replicas=5`. The middleware atomically reserves
-the signed approval nonce before allowing the first effect, so the same
-approval cannot be used twice. If required receipt persistence fails, the
-token-owned reservation is released and a safe retry can present the approval
-again. The Agent Toolkit denial is recorded in the same offline receipt report
-as the OpenShell and destination decisions.
+That approval does not cover `replicas=5`. The middleware atomically places the
+signed approval nonce in a short-lived pending state, persists the required
+receipt, and then commits the nonce before allowing the first effect. A
+committed approval cannot be used twice. If receipt persistence fails, the
+token-owned reservation is released; if Redis cannot confirm that release,
+retries fail as verifier-unavailable instead of being misclassified as replays,
+and the pending lease expires after 30 seconds. The Agent Toolkit denial is
+recorded in the same offline receipt report as the OpenShell and destination
+decisions.
 
 The demo also performs a real Tenuo A2A JSON-RPC handoff over localhost HTTP.
 It sends the full parent/child warrant stack plus a child-holder

@@ -11,9 +11,10 @@ Build the image from a pinned source revision and override both
 `vMAJOR.MINOR.PATCH` tag; the Helm chart version omits the `v` as required by
 Helm's semantic-version format.
 
-Give each environment a distinct `replay.keyPrefix`. Sharing a prefix across
-clusters is safe but can cause one deployment to consume another deployment's
-approval nonce.
+Give every environment and independent deployment its own `replay.keyPrefix`.
+The prefix defines the replay namespace: deployments that share it can consume
+one another's approval nonces. Only replicas of the same logical deployment
+should share a prefix and Redis keyspace.
 
 Before installation, create:
 

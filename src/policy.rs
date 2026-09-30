@@ -59,11 +59,22 @@ pub struct ApprovalReservation {
 }
 
 impl ApprovalReservation {
+    pub async fn commit(&self) -> Result<(), &'static str> {
+        for _ in 0..3 {
+            if self.store.commit(&self.reservation).await.is_ok() {
+                return Ok(());
+            }
+        }
+        Err(reason::VERIFIER_FAILED)
+    }
+
     pub async fn release(self) -> Result<(), &'static str> {
-        self.store
-            .release(&self.reservation)
-            .await
-            .map_err(|_| reason::VERIFIER_FAILED)
+        for _ in 0..3 {
+            if self.store.release(&self.reservation).await.is_ok() {
+                return Ok(());
+            }
+        }
+        Err(reason::VERIFIER_FAILED)
     }
 }
 
@@ -348,6 +359,7 @@ impl PolicySet {
                 reservation,
             })),
             Ok(ReserveResult::Replayed) => Err(reason::APPROVAL_REPLAYED),
+            Ok(ReserveResult::Pending) => Err(reason::VERIFIER_FAILED),
             Err(_) => Err(reason::VERIFIER_FAILED),
         }
     }

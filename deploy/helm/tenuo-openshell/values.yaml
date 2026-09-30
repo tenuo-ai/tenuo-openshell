@@ -31,6 +31,8 @@ replay:
   redisSecret: tenuo-openshell-redis
   redisUrlKey: url
   cluster: false
+  # Override per environment. Only replicas in one logical deployment should
+  # share a prefix; independent deployments must not share a replay namespace.
   keyPrefix: tenuo:openshell:production:approval
 
 receipts:
