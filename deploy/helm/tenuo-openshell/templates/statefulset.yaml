@@ -65,7 +65,16 @@ spec:
             - --receipt-log
             - /var/lib/tenuo/receipts.jsonl
             - --require-receipts
+            {{- if .Values.results.evaluate }}
+            - --evaluate-results
+            {{- end }}
           env:
+            {{- if .Values.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.otel.serviceName | quote }}
+            {{- end }}
             {{- if .Values.replay.cluster }}
             - name: TENUO_REPLAY_REDIS_CLUSTER_URLS
             {{- else }}

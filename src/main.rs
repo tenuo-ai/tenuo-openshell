@@ -1,27 +1,82 @@
-//! OpenShell supervisor middleware listener.
+//! OpenShell supervisor middleware listener and offline receipt tools.
 
-use clap::Parser;
+use clap::{Parser, Subcommand, ValueEnum};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use tenuo_openshell_middleware::auth::ExtensionJwtVerifier;
 use tenuo_openshell_middleware::policy::{PolicyManager, PolicySet};
+use tenuo_openshell_middleware::proto::openshell::middleware::v1::http_response_pre_return_server::HttpResponsePreReturnServer;
 use tenuo_openshell_middleware::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddlewareServer;
 use tenuo_openshell_middleware::receipt::ReceiptLog;
 use tenuo_openshell_middleware::replay::RedisReplayStore;
+use tenuo_openshell_middleware::result::PendingResults;
 use tenuo_openshell_middleware::service::MiddlewareService;
 use tenuo_openshell_middleware::telemetry::Telemetry;
 use tokio::net::TcpListener;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 
 const DEFAULT_AUDIENCE: &str = "urn:openshell:extension:middleware:tenuo/authorization";
 
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(
+    version,
+    about,
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    #[command(flatten)]
+    serve: Args,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Work with signed receipt logs offline.
+    Receipts {
+        #[command(subcommand)]
+        command: ReceiptsCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReceiptsCommand {
+    /// Verify a receipt log and print one JSON object per receipt.
+    ///
+    /// Nothing is printed unless every signature and chain link verifies.
+    /// Exits 1 when verification fails.
+    Export {
+        /// Authorization log, or its `.results.jsonl` result log.
+        #[arg(long)]
+        log: PathBuf,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ExportFormat::Json)]
+        format: ExportFormat,
+
+        /// Receipt public key, as 64 hex characters or a `.pub` file. Every
+        /// receipt must be signed by it.
+        #[arg(long)]
+        verify_with: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ExportFormat {
+    /// One JSON object per line.
+    Json,
+}
+
+#[derive(Debug, clap::Args)]
 struct Args {
     /// Tenuo sandbox trust policy.
-    #[arg(long)]
-    policy: PathBuf,
+    #[arg(long, required = true)]
+    policy: Option<PathBuf>,
 
     /// Listener address.
     #[arg(long, default_value = "127.0.0.1:50051")]
@@ -64,8 +119,14 @@ struct Args {
     receipt_log: Option<PathBuf>,
 
     /// Deny allowed operations when their signed receipt cannot be persisted.
+    /// Result receipts stay best-effort.
     #[arg(long)]
     require_receipts: bool,
+
+    /// Advertise HTTP_RESPONSE / PRE_RETURN: receipt the results of allowed
+    /// tool calls and enforce sandbox max_result_bytes.
+    #[arg(long, env = "TENUO_EVALUATE_RESULTS")]
+    evaluate_results: bool,
 
     /// Redis URL for durable, cross-replica approval replay protection.
     #[arg(long, env = "TENUO_REPLAY_REDIS_URL")]
@@ -120,8 +181,44 @@ impl tonic::service::Interceptor for OpenShellAuthInterceptor {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args = Args::parse();
-    let policy_document = match std::fs::read(&args.policy) {
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Command::Receipts {
+            command:
+                ReceiptsCommand::Export {
+                    log,
+                    format: ExportFormat::Json,
+                    verify_with,
+                },
+        }) => export_receipts(&log, verify_with.as_deref()),
+        None => serve(cli.serve).await,
+    }
+}
+
+fn export_receipts(log: &std::path::Path, verify_with: Option<&str>) -> ExitCode {
+    let key = match verify_with
+        .map(tenuo_openshell_middleware::export::load_public_key)
+        .transpose()
+    {
+        Ok(key) => key,
+        Err(error) => return usage_error(error),
+    };
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    match tenuo_openshell_middleware::export::export(log, key.as_ref(), &mut out) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("receipt log does not verify: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn serve(args: Args) -> ExitCode {
+    let Some(policy_path) = args.policy.clone() else {
+        return usage_error("--policy is required".to_string());
+    };
+    let policy_document = match std::fs::read(&policy_path) {
         Ok(document) => document,
         Err(error) => return usage_error(format!("policy load failed: {error}")),
     };
@@ -129,6 +226,12 @@ async fn main() -> ExitCode {
         Ok(policy) => policy,
         Err(error) => return usage_error(format!("policy load failed: {error}")),
     };
+    if policy.limits_results() && !args.evaluate_results {
+        return usage_error(
+            "the policy sets max_result_bytes, which is enforced only with --evaluate-results"
+                .to_string(),
+        );
+    }
     let security = match production_security(&args) {
         Ok(security) => security,
         Err(error) => return usage_error(error),
@@ -147,7 +250,7 @@ async fn main() -> ExitCode {
                 Ok(store) => store,
                 Err(_) => return usage_error("Redis replay store is unavailable".to_string()),
             };
-            policy = policy.with_replay_store(std::sync::Arc::new(store));
+            policy = policy.with_replay_store(Arc::new(store));
         }
         (None, []) if security.is_some() && !args.allow_in_memory_replay => {
             return usage_error(
@@ -163,16 +266,18 @@ async fn main() -> ExitCode {
                     return usage_error("Redis Cluster replay store is unavailable".to_string());
                 }
             };
-            policy = policy.with_replay_store(std::sync::Arc::new(store));
+            policy = policy.with_replay_store(Arc::new(store));
         }
         (Some(_), _) => unreachable!("conflicting replay options were rejected"),
     }
-    let policy = std::sync::Arc::new(PolicyManager::new(
-        args.policy.clone(),
-        policy,
-        policy_document,
-    ));
-    let telemetry = std::sync::Arc::new(Telemetry::default());
+    let policy = Arc::new(PolicyManager::new(policy_path, policy, policy_document));
+    // Export is off, and nothing is sent, unless an OTLP endpoint is set.
+    let (telemetry, otel_guard) = match tenuo_openshell_middleware::otel::from_env() {
+        Ok(Some((tracer, guard))) => (Telemetry::default().with_tracer(tracer), Some(guard)),
+        Ok(None) => (Telemetry::default(), None),
+        Err(error) => return usage_error(error),
+    };
+    let telemetry = Arc::new(telemetry);
     let admin_listener = match TcpListener::bind(args.admin_listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -213,35 +318,48 @@ async fn main() -> ExitCode {
                 "development-only: accepting unauthenticated middleware calls on {}",
                 args.listen
             );
-            let service = SupervisorMiddlewareServer::new(install_receipts(
+            let service = Arc::new(configure(
                 MiddlewareService::with_manager(policy).with_telemetry(telemetry),
                 receipts,
+                args.evaluate_results,
             ));
             Server::builder()
-                .add_service(service)
+                .add_service(SupervisorMiddlewareServer::from_arc(service.clone()))
+                .add_service(HttpResponsePreReturnServer::from_arc(service))
                 .serve_with_incoming_shutdown(incoming, shutdown_signal())
                 .await
         }
         Some(security) => {
             let audience = security.verifier.audience().to_string();
-            let service = install_receipts(
+            let service = Arc::new(configure(
                 MiddlewareService::authenticated_with_manager(policy, audience)
                     .with_telemetry(telemetry),
                 receipts,
-            );
+                args.evaluate_results,
+            ));
             let interceptor = OpenShellAuthInterceptor {
                 verifier: security.verifier,
             };
-            let service = SupervisorMiddlewareServer::with_interceptor(service, interceptor);
             eprintln!("authenticated TLS middleware listening on {}", args.listen);
             Server::builder()
                 .tls_config(ServerTlsConfig::new().identity(security.identity))
                 .expect("validated TLS identity")
-                .add_service(service)
+                .add_service(InterceptedService::new(
+                    SupervisorMiddlewareServer::from_arc(service.clone()),
+                    interceptor.clone(),
+                ))
+                .add_service(InterceptedService::new(
+                    HttpResponsePreReturnServer::from_arc(service),
+                    interceptor,
+                ))
                 .serve_with_incoming_shutdown(incoming, shutdown_signal())
                 .await
         }
     };
+    // Shutdown flushes pending spans and waits on the export task.
+    if let Some(guard) = otel_guard {
+        let _ = tokio::task::spawn_blocking(move || drop(guard)).await;
+    }
 
     if let Err(error) = result {
         eprintln!("server stopped: {error}");
@@ -277,10 +395,19 @@ async fn shutdown_signal() {
     }
 }
 
-fn install_receipts(service: MiddlewareService, receipts: Option<ReceiptLog>) -> MiddlewareService {
-    match receipts {
+fn configure(
+    service: MiddlewareService,
+    receipts: Option<ReceiptLog>,
+    evaluate_results: bool,
+) -> MiddlewareService {
+    let service = match receipts {
         Some(receipts) => service.with_receipts(receipts),
         None => service,
+    };
+    if evaluate_results {
+        service.with_results(PendingResults::default())
+    } else {
+        service
     }
 }
 

@@ -40,6 +40,7 @@ struct Sandbox {
     mcp: McpOptions,
     single_use_tools: HashSet<String>,
     pop_replay_ttl_secs: u64,
+    max_result_bytes: Option<u64>,
 }
 
 /// One MCP server this sandbox may reach through the binding, and the tool
@@ -268,6 +269,15 @@ impl PolicySet {
             let destinations = parse_destinations(entry)?;
             let mcp = parse_mcp_options(entry)?;
             let single_use_tools = parse_single_use_tools(entry)?;
+            let max_result_bytes = match entry.get("max_result_bytes") {
+                Some(value) => Some(
+                    value
+                        .as_u64()
+                        .filter(|bytes| *bytes > 0)
+                        .ok_or(PolicyError::Invalid)?,
+                ),
+                None => None,
+            };
             let (guard, revocation) = match entry.get("revocation") {
                 None => {
                     let guard = Guard::builder()
@@ -355,6 +365,7 @@ impl PolicySet {
                     mcp,
                     single_use_tools,
                     pop_replay_ttl_secs,
+                    max_result_bytes,
                 },
             );
         }
@@ -394,6 +405,20 @@ impl PolicySet {
 
     pub fn mcp_options(&self, sandbox_id: &str) -> Result<&McpOptions, &'static str> {
         Ok(&self.sandbox(sandbox_id)?.mcp)
+    }
+
+    /// Largest tool result, in bytes, this sandbox may receive. `None` when
+    /// the sandbox does not limit results.
+    pub fn max_result_bytes(&self, sandbox_id: &str) -> Result<Option<u64>, &'static str> {
+        Ok(self.sandbox(sandbox_id)?.max_result_bytes)
+    }
+
+    /// True when any sandbox limits result size. Such a limit is enforced
+    /// only when the `HTTP_RESPONSE` binding is enabled.
+    pub fn limits_results(&self) -> bool {
+        self.sandboxes
+            .values()
+            .any(|sandbox| sandbox.max_result_bytes.is_some())
     }
 
     /// Deny a request whose destination is not configured for this sandbox,
@@ -910,6 +935,34 @@ mod tests {
             .unwrap()
             .replay_store()
             .is_some());
+    }
+
+    #[test]
+    fn result_limits_are_optional_positive_and_per_sandbox() {
+        let root = SigningKey::generate();
+        let destinations = json!([{"host": "mcp.test", "port": 443, "tools": ["*"]}]);
+        let unlimited = PolicySet::from_json(&sandbox_document(
+            &root,
+            json!({"destinations": destinations}),
+        ))
+        .unwrap();
+        assert_eq!(unlimited.max_result_bytes("sandbox"), Ok(None));
+        assert!(!unlimited.limits_results());
+        let limited = PolicySet::from_json(&sandbox_document(
+            &root,
+            json!({"destinations": destinations, "max_result_bytes": 4096}),
+        ))
+        .unwrap();
+        assert_eq!(limited.max_result_bytes("sandbox"), Ok(Some(4096)));
+        assert!(limited.limits_results());
+        assert!(limited.max_result_bytes("other").is_err());
+        for bad in [json!(0), json!(-1), json!("4096"), json!(1.5)] {
+            let document = sandbox_document(
+                &root,
+                json!({"destinations": destinations, "max_result_bytes": bad}),
+            );
+            assert!(PolicySet::from_json(&document).is_err(), "{bad}");
+        }
     }
 
     #[test]

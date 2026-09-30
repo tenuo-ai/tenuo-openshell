@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 use tenuo::sdk::prelude::*;
 use tenuo::sdk::transport::mcp_meta::decode_meta;
 
+#[derive(Default)]
 pub struct Outcome {
     pub allow: bool,
     pub reason_code: &'static str,
@@ -22,6 +23,12 @@ pub struct Outcome {
     /// End-to-end time inside this enforcement decision. This includes local
     /// parsing and verification plus configured replay and receipt I/O.
     pub decision_us: u64,
+    /// `tools/call` name, when the request was a tool call.
+    pub tool: Option<String>,
+    /// Leaf warrant id, when the request carried a decodable warrant.
+    pub warrant_id: Option<String>,
+    /// SHA-256 of the stored allow receipt.
+    pub receipt_hash: Option<[u8; 32]>,
 }
 
 /// Check one admitted MCP request.
@@ -74,7 +81,7 @@ pub async fn evaluate(
 /// The id is chosen by the sandbox. An id outside a small token alphabet is
 /// written as `hex:` and its UTF-8 bytes, so it cannot add a line or a field
 /// such as `outcome=allow`.
-fn log_safe_id(request_id: &str) -> Cow<'_, str> {
+pub(crate) fn log_safe_id(request_id: &str) -> Cow<'_, str> {
     let plain = request_id.len() <= 128
         && request_id
             .bytes()
@@ -86,7 +93,7 @@ fn log_safe_id(request_id: &str) -> Cow<'_, str> {
     }
 }
 
-fn decision_log_enabled() -> bool {
+pub(crate) fn decision_log_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("TENUO_DECISION_LOG").is_some())
 }
@@ -150,9 +157,11 @@ async fn decide(
             document,
         } => {
             if let Err(code) = policy.admit_destination(sandbox_id, target, Some(&name)) {
-                return identified(deny(code), &request_id);
+                let mut outcome = identified(deny(code), &request_id);
+                outcome.tool = Some(name);
+                return outcome;
             }
-            authorize_tool(
+            let mut outcome = authorize_tool(
                 AuthorizationContext {
                     policy,
                     sandbox_id,
@@ -170,7 +179,9 @@ async fn decide(
                     revocation,
                 },
             )
-            .await
+            .await;
+            outcome.tool = Some(name);
+            outcome
         }
     }
 }
@@ -208,13 +219,27 @@ async fn authorize_tool(
         Ok(received) => received,
         Err(_) => return identified(deny(reason::MISSING_WARRANT), receipts.request_id),
     };
-    let call = match Call::try_from_json(name, arguments) {
-        Ok(call) => call,
-        Err(_) => return identified(deny(reason::INVALID_REQUEST), receipts.request_id),
+    let mut outcome = match Call::try_from_json(name, arguments) {
+        Ok(call) => {
+            authorize_received(authorization, name, &received, &call, document, &receipts).await
+        }
+        Err(_) => identified(deny(reason::INVALID_REQUEST), receipts.request_id),
     };
-    if let Err(denial) = authorization.guard.check_received(&received, &call) {
+    outcome.warrant_id = received.chain().last().map(|leaf| leaf.id().to_string());
+    outcome
+}
+
+async fn authorize_received(
+    authorization: AuthorizationContext<'_>,
+    name: &str,
+    received: &ReceivedAuthorization<'_>,
+    call: &Call<'_>,
+    document: &Value,
+    receipts: &ReceiptContext<'_>,
+) -> Outcome {
+    if let Err(denial) = authorization.guard.check_received(received, call) {
         let _ = record(
-            &receipts,
+            receipts,
             DecisionReceipt {
                 request_id: receipts.request_id,
                 tool: name,
@@ -263,36 +288,54 @@ async fn authorize_tool(
         srl_hash: receipts.revocation.map(|value| value.1),
         denial: None,
     };
-    if receipt_is_required(&receipts) && !receipt_log_ready(&receipts) {
+    if receipt_is_required(receipts) && !receipt_log_ready(receipts) {
         release_reservation(reservation, receipts.request_id).await;
         return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
     }
-    if let Some(reservation) = reservation {
-        if reservation.commit().await.is_err() {
-            release_reservation(Some(reservation), receipts.request_id).await;
+    let reservation = match reservation {
+        Some(reservation) => match reservation.commit().await {
+            Ok(()) => Some(reservation),
+            Err(_) => {
+                release_reservation(Some(reservation), receipts.request_id).await;
+                return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+            }
+        },
+        None => None,
+    };
+    let receipt_hash = match record_allow(receipts, allowed) {
+        Ok(hash) => hash,
+        Err(NotStored) if receipt_is_required(receipts) => {
+            release_reservation(reservation, receipts.request_id).await;
             return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
         }
-        if !record(&receipts, allowed) && receipt_is_required(&receipts) {
-            release_reservation(Some(reservation), receipts.request_id).await;
-            return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
-        }
-    } else if !record(&receipts, allowed) && receipt_is_required(&receipts) {
-        return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
-    }
+        Err(NotStored) => None,
+    };
     identified(
         Outcome {
             allow: true,
-            reason_code: "",
             replacement,
-            request_id: String::new(),
-            decision_us: 0,
+            receipt_hash,
+            ..Outcome::default()
         },
         receipts.request_id,
     )
 }
 
+struct NotStored;
+
 fn record(receipts: &ReceiptContext<'_>, decision: DecisionReceipt<'_>) -> bool {
     receipts.log.is_none_or(|log| log.record(decision))
+}
+
+/// `Ok(None)` when receipts are not configured.
+fn record_allow(
+    receipts: &ReceiptContext<'_>,
+    decision: DecisionReceipt<'_>,
+) -> Result<Option<[u8; 32]>, NotStored> {
+    match receipts.log {
+        None => Ok(None),
+        Some(log) => log.record_digest(decision).map(Some).ok_or(NotStored),
+    }
 }
 
 fn receipt_is_required(receipts: &ReceiptContext<'_>) -> bool {
@@ -320,20 +363,15 @@ async fn release_reservation(
 fn allow_unchanged() -> Outcome {
     Outcome {
         allow: true,
-        reason_code: "",
-        replacement: None,
-        request_id: String::new(),
-        decision_us: 0,
+        ..Outcome::default()
     }
 }
 
-fn deny(reason_code: &'static str) -> Outcome {
+pub(crate) fn deny(reason_code: &'static str) -> Outcome {
     Outcome {
         allow: false,
         reason_code,
-        replacement: None,
-        request_id: String::new(),
-        decision_us: 0,
+        ..Outcome::default()
     }
 }
 
@@ -635,6 +673,52 @@ mod tests {
             assert!(!logged.contains([' ', '\n', '=']), "{forged:?}");
         }
         assert!(log_safe_id(&"a".repeat(129)).starts_with("hex:"));
+    }
+
+    #[test]
+    fn outcomes_name_the_tool_warrant_and_allow_receipt() {
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let issued = warrant(&issuer, &holder, "read_logs");
+        let directory = tempfile::tempdir().expect("tempdir");
+        let log_path = directory.path().join("receipts.jsonl");
+        let log = ReceiptLog::open(&directory.path().join("key"), &log_path).expect("log");
+
+        let arguments = json!({"service": "payments"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let body = tools_call("read_logs", arguments, Some(meta));
+        let allowed = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, Some(&log));
+        assert!(allowed.allow);
+        assert_eq!(allowed.tool.as_deref(), Some("read_logs"));
+        assert_eq!(allowed.warrant_id, Some(issued.id().to_string()));
+        let line = std::fs::read_to_string(&log_path).expect("log");
+        let bytes = hex::decode(line.trim()).expect("hex");
+        assert_eq!(
+            allowed.receipt_hash,
+            Some(crate::result_receipt::line_digest(&bytes))
+        );
+
+        let arguments = json!({"service": "payments"});
+        let meta = sign(&issued, &holder, "restart_service", &arguments);
+        let body = tools_call("restart_service", arguments, Some(meta));
+        let denied = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, Some(&log));
+        assert!(!denied.allow);
+        assert_eq!(denied.tool.as_deref(), Some("restart_service"));
+        assert_eq!(denied.warrant_id, Some(issued.id().to_string()));
+        assert_eq!(denied.receipt_hash, None);
+
+        let body = tools_call("read_logs", json!({}), None);
+        let missing = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None);
+        assert_eq!(missing.tool.as_deref(), Some("read_logs"));
+        assert_eq!(missing.warrant_id, None);
+
+        // Without a receipt log, an allow has no receipt to link.
+        let arguments = json!({"service": "payments"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let body = tools_call("read_logs", arguments, Some(meta));
+        let unrecorded = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None);
+        assert!(unrecorded.allow && unrecorded.receipt_hash.is_none());
     }
 
     #[test]

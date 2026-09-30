@@ -39,6 +39,17 @@ receipts:
   signingKeySecret: tenuo-openshell-receipts
   signingKeyKey: key
 
+results:
+  # Advertise HTTP_RESPONSE / PRE_RETURN: result receipts and per-sandbox
+  # max_result_bytes. Restart the OpenShell gateway after changing this.
+  evaluate: false
+
+otel:
+  # OTLP gRPC endpoint for decision spans, such as
+  # http://otel-collector.observability:4317. Empty sends nothing.
+  endpoint: ""
+  serviceName: tenuo-openshell-middleware
+
 persistence:
   size: 1Gi
   storageClass: ""
@@ -70,6 +81,12 @@ networkPolicy:
   redisPodSelector:
     app.kubernetes.io/name: redis
   redisPort: 6379
+  # Used only when otel.endpoint is set.
+  otelNamespaceSelector:
+    kubernetes.io/metadata.name: observability
+  otelPodSelector:
+    app.kubernetes.io/name: opentelemetry-collector
+  otelPort: 4317
 
 podAnnotations: {}
 nodeSelector: {}

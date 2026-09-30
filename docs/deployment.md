@@ -121,6 +121,7 @@ Each sandbox entry:
 | `single_use_tools` | No | Tools whose signed calls are accepted once. Use for non-idempotent tools; an identical call inside the same 30-second proof bucket is also denied. |
 | `mcp.passthrough_methods` | No | Extra JSON-RPC methods forwarded without a warrant, such as `resources/read`. `tools/call` is rejected. |
 | `mcp.allow_client_responses` | No | Forward the client's responses to server-initiated sampling, elicitation, and roots requests. Default `false`. |
+| `max_result_bytes` | No | Largest tool result, in bytes, delivered to this sandbox. Requires `--evaluate-results`; see [Result evidence](#result-evidence). |
 | `revocation` | No | Signed revocation list; see below. |
 
 A missing sandbox, missing root, unlisted destination, unreadable policy, or
@@ -169,6 +170,49 @@ A sandbox policy can require a signed Tenuo revocation list:
 The middleware verifies issuer signature and freshness and persists a
 monotonic rollback floor. Missing, stale, untrusted, rolled-back, or
 equivocated state fails closed. Receipts include the SRL version and hash.
+
+## Result evidence
+
+`--evaluate-results` (or `TENUO_EVALUATE_RESULTS=true`) adds an
+`HTTP_RESPONSE / PRE_RETURN` binding to `Describe`. OpenShell reads the
+manifest when the gateway starts, so restart the gateway after changing the
+flag. No sandbox policy change is needed: every attachment of
+`tenuo/authorization` joins the response chain, with the same `on_error`.
+
+For each `tools/call` this service allowed, the middleware hashes the result
+and appends a signed result receipt to `<receipt log>.results.jsonl`. A
+sandbox's optional `max_result_bytes` withholds larger results with
+`tenuo_result_too_large`. Startup fails when the policy sets
+`max_result_bytes` and the flag is off. A later reload that adds the field is
+accepted but not enforced until the flag is on, so enable the flag first.
+
+The response binding advertises the same 256 KiB `max_payload_bytes` as the
+request binding, so the registration's `max_payload_bytes` applies to both.
+Results up to that size are read whole and a block returns a 403; larger or
+unknown-length results are read as a stream, and a block ends delivery
+mid-stream. Result receipts are best-effort even with `--require-receipts`.
+See [Architecture](architecture.md#tool-results) for what is skipped and why.
+
+## Traces
+
+Set the standard OpenTelemetry variables to export one span per decision
+over OTLP gRPC:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.observability:4317
+OTEL_SERVICE_NAME=tenuo-openshell-middleware   # default
+```
+
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`,
+`OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_TRACES_SAMPLER`, and `OTEL_BSP_*` are
+honored. Only the `grpc` protocol is supported; any other
+`OTEL_EXPORTER_OTLP_PROTOCOL` fails startup. With no endpoint set, or with
+`OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER=none`, no exporter is
+created and nothing is sent. Export runs in the background and never delays a
+decision; a slow or unavailable collector drops spans.
+
+Spans are named `tenuo.authorize` and `tenuo.result`. See
+[Operations](operations.md#traces) for the attributes.
 
 ## Kubernetes
 

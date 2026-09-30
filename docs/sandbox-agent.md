@@ -177,6 +177,12 @@ failure:
 whose `code` is the middleware reason code, such as `tenuo_constraint_denied`.
 Approval-gated calls use `-32002`.
 
+With result evaluation on, OpenShell can also withhold a result above the
+sandbox's `max_result_bytes`. The code is `tenuo_result_too_large` or
+`tenuo_result_unmeasurable`, and the message says the call already ran. Do not
+retry a non-idempotent tool on those codes. See
+[Tool results](architecture.md#tool-results).
+
 ## Current limits
 
 - The proxy does not attach approvals. A tool gated on approval is denied with

@@ -17,6 +17,11 @@ pub const POP_REPLAYED: &str = "tenuo_pop_replayed";
 pub const DESTINATION_DENIED: &str = "tenuo_destination_denied";
 pub const INVALID_REQUEST: &str = "tenuo_invalid_request";
 pub const VERIFIER_FAILED: &str = "tenuo_verifier_failed";
+/// A tool result exceeded the sandbox's `max_result_bytes`.
+pub const RESULT_TOO_LARGE: &str = "tenuo_result_too_large";
+/// A sandbox limits result size, but OpenShell offered no way to measure this
+/// result: its length is unknown and its body cannot be inspected.
+pub const RESULT_UNMEASURABLE: &str = "tenuo_result_unmeasurable";
 
 pub fn from_denial_code(code: &str) -> &'static str {
     match code {
@@ -92,6 +97,8 @@ mod tests {
             DESTINATION_DENIED,
             INVALID_REQUEST,
             VERIFIER_FAILED,
+            RESULT_TOO_LARGE,
+            RESULT_UNMEASURABLE,
         ] {
             assert!(valid_reason_code(code), "{code}");
         }

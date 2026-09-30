@@ -44,6 +44,8 @@ env \
   -u TENUO_CONNECT_TOKEN \
   -u TENUO_CONTROL_PLANE_URL \
   -u TENUO_API_KEY \
+  -u OTEL_EXPORTER_OTLP_ENDPOINT \
+  -u OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
   target/release/tenuo-openshell-middleware \
     --policy "$fixture/policy.json" \
     --listen "127.0.0.1:$grpc_port" \
@@ -74,5 +76,14 @@ curl --silent --fail "http://127.0.0.1:$admin_port/metrics" \
   | grep -F "tenuo_openshell_policy_version 1" >/dev/null
 test -s "$work_dir/receipt.key"
 test -s "$work_dir/receipts.pub"
+
+# Without an OTLP endpoint or control plane, the only sockets are loopback.
+if command -v lsof >/dev/null 2>&1; then
+  if lsof -nP -a -p "$middleware_pid" -iTCP -sTCP:ESTABLISHED 2>/dev/null \
+    | awk 'NR > 1 { print $9 }' | grep -v -- '->127\.0\.0\.1:' | grep -q .; then
+    echo "middleware opened a non-loopback connection" >&2
+    exit 1
+  fi
+fi
 
 echo "standalone onboarding smoke test passed"

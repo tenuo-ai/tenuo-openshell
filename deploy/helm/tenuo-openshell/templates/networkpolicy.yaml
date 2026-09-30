@@ -55,4 +55,16 @@ spec:
       ports:
         - port: {{ .Values.networkPolicy.redisPort }}
           protocol: TCP
+    {{- if .Values.otel.endpoint }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.otelNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.otelPodSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.networkPolicy.otelPort }}
+          protocol: TCP
+    {{- end }}
 {{- end }}

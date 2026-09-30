@@ -40,11 +40,12 @@ approved restart                          -> allowed once
 replayed approval                         -> denied
 delegated child attempting wider action   -> denied
 A2A child using narrowed authority        -> allowed
+result over the sandbox's size limit      -> withheld after the call ran
 ```
 
 The demo compares OpenShell with and without Tenuo, confirms that denied calls
 do not reach the effect, exercises a real A2A handoff, and verifies signed
-receipts offline. See the [demo guide](examples/demo/README.md) for the complete
+authorization and result receipts offline. See the [demo guide](examples/demo/README.md) for the complete
 scenario matrix, evidence model, prerequisites, and overrides.
 
 ## What is in this repository
@@ -175,6 +176,11 @@ can do, and proof of possession makes a copied warrant useless. See
 
 The service runs before credential injection and does not receive provider
 credentials, and it strips `_meta.tenuo` from forwarded requests by default.
+With `--evaluate-results` it also sees the response to each call it allowed:
+it signs a receipt over the result and can withhold results above a
+per-sandbox size limit. The call has already run by then, so this is evidence
+and a limit on what reaches the agent, not authorization. See
+[tool results](docs/architecture.md#tool-results).
 See [upstream verification](docs/upstream-verification.md) for the exact
 pinned contract and [architecture](docs/architecture.md#protocol-coverage) for
 MCP protocol coverage.
@@ -205,6 +211,7 @@ Internet-Draft, authored by Tenuo for interoperable agent delegation.
 | Deploy the middleware | [Deployment](docs/deployment.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
 | Review attackers, controls, and residual risk | [Threat model](docs/threat-model.md) |
+| Verify and export receipts | [Receipts](docs/receipts.md) |
 | Configure Kubernetes | [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Connect an optional control plane | [Provider contract](docs/providers.md) |
 | Inspect the pinned NVIDIA contract | [Upstream verification](docs/upstream-verification.md) |

@@ -39,10 +39,28 @@ All notable changes will be documented here. The format follows
   decision, with committed seeds and a daily and pull-request Fuzz workflow.
 - `cargo deny` policy for advisories, licenses, and sources, a Supply chain
   workflow, and Dependabot for Cargo, uv, GitHub Actions, and Docker.
+- Optional `HTTP_RESPONSE / PRE_RETURN` binding (`--evaluate-results`): signed
+  result receipts with the SHA-256, size, and status of each allowed call's
+  result, linked to its authorization receipt, in `<log>.results.jsonl`.
+- Per-sandbox `max_result_bytes` withholds larger results with
+  `tenuo_result_too_large`, or `tenuo_result_unmeasurable` when a limited
+  result cannot be measured.
+- Optional OpenTelemetry traces over OTLP gRPC, one span per decision,
+  configured by the standard `OTEL_*` variables and off by default.
+- `receipts export` verifies a receipt log's signatures and hash chain and
+  writes one JSON object per receipt for log pipelines.
+- Result metrics: `tenuo_openshell_results_total`,
+  `tenuo_openshell_result_receipt_failures_total`, and
+  `tenuo_openshell_result_correlation_evictions_total`.
+- Helm values for result evaluation and OTLP export.
+- The sandbox proxy reports a withheld result as a call that already ran, so
+  agents do not retry it as if it were denied.
 
 ### Changed
 
 - GitHub Actions in every workflow are pinned by commit SHA.
+- Requests rejected before evaluation (oversized body, invalid binding config,
+  missing target) now count in the decision metrics.
 - Sandbox policies must list `destinations`: the MCP host, port, optional
   path, and tools each serves. Other destinations, and tools a destination
   does not serve, deny `tenuo_destination_denied`.

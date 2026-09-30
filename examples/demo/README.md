@@ -65,6 +65,19 @@ private key never leaves the sandbox. See
     sandbox with `tool-not-authorized`. The sandbox policy lets only curl and
     the proxy reach the MCP server.
 
+17. A higher policy version limits the first sandbox's tool results to 64
+    bytes. Inside the sandbox, `tenuo-openshell-agent sign` signs another read
+    with the provisioned key and warrant, and curl sends it as JSON-RPC id 17.
+    The middleware allows it, the read runs, and OpenShell withholds its
+    larger result with
+    `tenuo_result_too_large`. The block happens after the call, so it limits
+    what reaches the agent; it does not undo the read.
+
+The middleware runs with `--evaluate-results`. Each allowed call through
+OpenShell also gets a result receipt: the status, byte count, and SHA-256 of
+the returned body, linked to the call's allow receipt by hash. Step 17's
+receipt records the block instead of a digest.
+
 The A2A step is maintained under
 [`examples/interoperability`](../interoperability/README.md). It is an
 interoperability proof with a documented Tenuo 0.3.1 compatibility bridge, not
@@ -85,6 +98,13 @@ not use the network. A missing warrant has no chain to commit to, so that
 denial has no receipt. The narrowed calls record both the parent warrant and
 the child. The Agent Toolkit denial is a third signer in that report. A
 receipt does not show that the tool ran.
+
+The auditor verifies the result log with the middleware's
+`receipts export --verify-with openshell.pub`, then checks that every result
+names an allow receipt for the same JSON-RPC id and tool. The suite also
+writes both logs as JSON lines to `results/evidence/openshell-receipts.json`
+and `results/evidence/openshell-results.json`, the format described in
+[Receipts](../../docs/receipts.md).
 
 The launcher installs Python package `tenuo` 0.3.1 into a temporary environment
 for that server. Set `TENUO_DEMO_PYTHON` to an existing interpreter when that
