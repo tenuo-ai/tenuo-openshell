@@ -42,10 +42,11 @@ requires a security incident review, not an automatic reset.
 
 With `--require-receipts`, an allowed decision denies before execution if its
 receipt cannot be appended. Check volume capacity, permissions, and signer-key
-availability. A failed receipt releases its pending approval reservation. If
-Redis cannot confirm that cleanup, the nonce remains pending for at most 30
-seconds; retries deny `tenuo_verifier_failed`, not `tenuo_approval_replayed`,
-until cleanup succeeds or the lease expires. Preserve all per-replica logs and
+availability. A failed receipt releases its approval reservation, including a commit that
+succeeded before the receipt write. No allow receipt is stored for that denial.
+If Redis cannot confirm cleanup while the nonce is still pending, it remains
+pending for at most 30 seconds; retries deny `tenuo_verifier_failed`, not
+`tenuo_approval_replayed`, until cleanup succeeds or the lease expires. Preserve all per-replica logs and
 public signer keys when recovering or replacing a pod.
 
 ## Key compromise

@@ -48,11 +48,11 @@ fail closed.
 Production replicas share a Redis replay store. Approval identity is global to
 the deployment, and multi-approval reservation is one atomic transaction, so a
 failed batch reserves nothing. Redis keys share a deployment-specific cluster
-hash slot. Reservations begin as 30-second pending leases. Required receipt
-failure conditionally releases only the calling reservation; an unconfirmed
-release remains pending rather than appearing replayed and expires with the
-lease. A successful receipt commits the nonce through approval expiry before
-the effect is allowed. Versioned policy
+hash slot. Reservations begin as 30-second pending leases. The nonce is committed
+before the allow receipt is written, and that receipt is written only after
+the commit succeeds. A failed commit or receipt write releases only the
+calling reservation. An unconfirmed release of a still-pending lease remains
+pending rather than appearing replayed and expires with the lease. Versioned policy
 snapshots reload atomically and preserve the last valid snapshot. Signed
 revocation lists have freshness bounds and persistent per-replica rollback
 floors; readiness fails when either revocation or Redis is unavailable.

@@ -135,12 +135,12 @@ A2A child restart with read-only warrant              → denied before the skil
 
 The `replicas=3` restart carries an approval signed by a local fixture key.
 That approval does not cover `replicas=5`. The middleware atomically places the
-signed approval nonce in a short-lived pending state, persists the required
-receipt, and then commits the nonce before allowing the first effect. A
-committed approval cannot be used twice. If receipt persistence fails, the
-token-owned reservation is released; if Redis cannot confirm that release,
-retries fail as verifier-unavailable instead of being misclassified as replays,
-and the pending lease expires after 30 seconds. The Agent Toolkit denial is
+signed approval nonce in a short-lived pending state, commits it, and writes
+the allow receipt only after that commit succeeds. A committed approval cannot
+be used twice. If the commit or the receipt write fails, the token-owned
+reservation is released and no allow receipt is kept. If Redis cannot confirm
+cleanup of a still-pending lease, retries fail as verifier-unavailable instead
+of being misclassified as replays, and the lease expires after 30 seconds. The Agent Toolkit denial is
 recorded in the same offline receipt report as the OpenShell and destination
 decisions.
 

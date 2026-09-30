@@ -309,12 +309,13 @@ impl ReplayStore for RedisReplayStore {
             r#"
             for i = 1, #KEYS do
                 local value = redis.call('GET', KEYS[i])
-                if value and value ~= ARGV[1] then
+                if value and value ~= ARGV[1] and value ~= ARGV[2] then
                     return 0
                 end
             end
             for i = 1, #KEYS do
-                if redis.call('GET', KEYS[i]) == ARGV[1] then
+                local value = redis.call('GET', KEYS[i])
+                if value == ARGV[1] or value == ARGV[2] then
                     redis.call('DEL', KEYS[i])
                 end
             end
@@ -325,7 +326,9 @@ impl ReplayStore for RedisReplayStore {
         for claim in &reservation.claims {
             invocation.key(self.redis_key(claim));
         }
-        invocation.arg(format!("p:{}", hex::encode(reservation.token)));
+        let token = hex::encode(reservation.token);
+        invocation.arg(format!("p:{token}"));
+        invocation.arg(format!("c:{token}"));
         let released: i32 = match &self.connection {
             RedisConnection::Standalone(connection) => {
                 let mut connection = connection.as_ref().clone();
@@ -429,6 +432,11 @@ mod tests {
             store.reserve(&claims).await.unwrap(),
             ReserveResult::Replayed
         );
+        store.release(&reservation).await.unwrap();
+        assert!(matches!(
+            store.reserve(&claims).await.unwrap(),
+            ReserveResult::Reserved(_)
+        ));
     }
 
     #[tokio::test]

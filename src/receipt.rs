@@ -81,6 +81,15 @@ impl ReceiptLog {
         self.required
     }
 
+    /// The log path can be opened for append. This does not write a receipt.
+    pub fn can_append(&self) -> bool {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .is_ok()
+    }
+
     pub fn record(&self, decision: DecisionReceipt<'_>) -> bool {
         if decision.request_id.is_empty() || decision.chain.is_empty() {
             eprintln!("receipt was not stored");

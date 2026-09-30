@@ -208,27 +208,21 @@ async fn authorize_tool(
         srl_hash: receipts.revocation.map(|value| value.1),
         denial: None,
     };
-    if !record(&receipts, allowed) && receipt_is_required(&receipts) {
-        if let Some(reservation) = reservation {
-            if reservation.release().await.is_err() {
-                eprintln!(
-                    "tenuo_replay_cleanup request_id={} outcome=failed",
-                    receipts.request_id
-                );
-            }
-        }
+    if receipt_is_required(&receipts) && !receipt_log_ready(&receipts) {
+        release_reservation(reservation, receipts.request_id).await;
         return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
     }
     if let Some(reservation) = reservation {
         if reservation.commit().await.is_err() {
-            if reservation.release().await.is_err() {
-                eprintln!(
-                    "tenuo_replay_cleanup request_id={} outcome=failed",
-                    receipts.request_id
-                );
-            }
+            release_reservation(Some(reservation), receipts.request_id).await;
             return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
         }
+        if !record(&receipts, allowed) && receipt_is_required(&receipts) {
+            release_reservation(Some(reservation), receipts.request_id).await;
+            return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+        }
+    } else if !record(&receipts, allowed) && receipt_is_required(&receipts) {
+        return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
     }
     identified(
         Outcome {
@@ -252,6 +246,21 @@ fn record(receipts: &ReceiptContext<'_>, mut decision: DecisionReceipt<'_>) -> b
 
 fn receipt_is_required(receipts: &ReceiptContext<'_>) -> bool {
     receipts.log.is_some_and(ReceiptLog::is_required)
+}
+
+fn receipt_log_ready(receipts: &ReceiptContext<'_>) -> bool {
+    receipts.log.is_some_and(ReceiptLog::can_append)
+}
+
+async fn release_reservation(
+    reservation: Option<crate::policy::ApprovalReservation>,
+    request_id: &str,
+) {
+    if let Some(reservation) = reservation {
+        if reservation.release().await.is_err() {
+            eprintln!("tenuo_replay_cleanup request_id={request_id} outcome=failed");
+        }
+    }
 }
 
 fn allow_unchanged() -> Outcome {
@@ -321,6 +330,33 @@ mod tests {
             }
         });
         PolicySet::from_json(document.to_string().as_bytes()).expect("policy")
+    }
+
+    #[derive(Default)]
+    struct CommitFailingStore {
+        inner: InMemoryReplayStore,
+    }
+
+    #[async_trait]
+    impl ReplayStore for CommitFailingStore {
+        async fn reserve(
+            &self,
+            claims: &[crate::replay::ReplayClaim],
+        ) -> Result<ReserveResult, ReplayError> {
+            self.inner.reserve(claims).await
+        }
+
+        async fn commit(&self, _reservation: &ReplayReservation) -> Result<(), ReplayError> {
+            Err(ReplayError)
+        }
+
+        async fn release(&self, reservation: &ReplayReservation) -> Result<(), ReplayError> {
+            self.inner.release(reservation).await
+        }
+
+        async fn healthy(&self) -> bool {
+            true
+        }
     }
 
     #[derive(Default)]
@@ -878,6 +914,38 @@ mod tests {
         );
         assert_eq!(retry.reason_code, reason::VERIFIER_FAILED);
         assert_ne!(retry.reason_code, reason::APPROVAL_REPLAYED);
+    }
+
+    #[test]
+    fn failed_nonce_commit_does_not_store_an_allow_receipt() {
+        let issuer = SigningKey::generate();
+        let policy = policy_for(&issuer).with_replay_store(Arc::new(CommitFailingStore::default()));
+        let (holder, approver, warrant, arguments) = approved_restart(&issuer);
+        let approval = approval_for(&approver, &warrant, "restart_service", &arguments);
+        let body = body_with_approval(
+            &warrant,
+            &holder,
+            "restart_service",
+            &arguments,
+            Some(&approval),
+        );
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("required.jsonl");
+        let required = ReceiptLog::open(&directory.path().join("receipt.key"), &path)
+            .expect("required receipt log")
+            .require_delivery();
+
+        let denied = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &body,
+            MetaMode::Preserve,
+            Some(&required),
+        );
+        assert_eq!(denied.reason_code, reason::VERIFIER_FAILED);
+        let stored = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(stored.trim().is_empty());
     }
 
     #[test]
