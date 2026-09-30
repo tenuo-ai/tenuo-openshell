@@ -597,22 +597,27 @@ sandbox_signed_call() {
 # A higher policy version limits results in the first sandbox to 64 bytes. The
 # sandbox signs a read whose result is larger. The read runs and OpenShell
 # withholds its result, because the upstream call happens before the response.
-result_size_limit() {
-  local id=17 output="$RUN_DIR/result-limit.out" version
-  jq --arg sandbox "$SANDBOX_ID" \
-    '.version = ((.version // 1) + 1) | .sandboxes[$sandbox].max_result_bytes = 64' \
+# Apply a jq edit to the policy as a higher version and wait until the
+# middleware reports that version.
+update_policy() {
+  local edit="$1" label="$2" version
+  jq --arg sandbox "$SANDBOX_ID" "(.version = ((.version // 1) + 1)) | $edit" \
     "$FIXTURE_DIR/policy.json" >"$FIXTURE_DIR/policy.next.json"
   mv "$FIXTURE_DIR/policy.next.json" "$FIXTURE_DIR/policy.json"
   version="$(jq -r .version "$FIXTURE_DIR/policy.json")"
   for _ in {1..30}; do
     if curl -fsS "http://127.0.0.1:$ADMIN_PORT/metrics" 2>/dev/null \
       | grep -Fxq "tenuo_openshell_policy_version $version"; then
-      break
+      return 0
     fi
     sleep 1
   done
-  curl -fsS "http://127.0.0.1:$ADMIN_PORT/metrics" | grep -Fxq "tenuo_openshell_policy_version $version" \
-    || fail "the result limit policy was loaded"
+  fail "$label policy was loaded"
+}
+
+result_size_limit() {
+  local id=17 output="$RUN_DIR/result-limit.out"
+  update_policy '.sandboxes[$sandbox].max_result_bytes = 64' "the result limit"
   sandbox_signed_call "$SANDBOX_NAME" "$id" \
     >"$output" 2>>"$SETUP_LOG" || fail "oversized result returns a response"
   grep -Fq '403 Forbidden' "$output" || fail "oversized result was withheld"
@@ -622,6 +627,8 @@ result_size_limit() {
     || fail "the read behind the withheld result ran"
   grep -Fq "tenuo_result request_id=$id " "$MIDDLEWARE_LOG" || fail "oversized result has a result decision"
   printf 'PASS oversized result was withheld after the read ran\n'
+  # Later scenarios in this sandbox return full results.
+  update_policy 'del(.sandboxes[$sandbox].max_result_bytes)' "the restored"
 }
 
 record_widen() {
