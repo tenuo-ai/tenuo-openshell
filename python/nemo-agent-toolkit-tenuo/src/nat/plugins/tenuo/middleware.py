@@ -128,8 +128,8 @@ class TenuoFunctionMiddleware(FunctionMiddleware):
         if bound is None:
             raise AuthorizationDenied("missing_warrant", _ref())
 
-        from tenuo._enforcement import enforce_tool_call
-        from tenuo.approval import ApprovalRequired as TenuoApprovalRequired
+        from tenuo import ApprovalRequired as TenuoApprovalRequired
+        from tenuo import enforce_tool_call
 
         try:
             result = enforce_tool_call(

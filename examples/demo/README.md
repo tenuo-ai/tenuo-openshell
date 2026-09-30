@@ -80,8 +80,9 @@ receipt records the block instead of a digest.
 
 The A2A step is maintained under
 [`examples/interoperability`](../interoperability/README.md). It is an
-interoperability proof with a documented Tenuo 0.3.1 compatibility bridge, not
-part of the OpenShell middleware package surface.
+interoperability proof that builds the A2A request itself, because the 0.3.1
+A2A client does not send warrant stacks. It is not part of the OpenShell
+middleware package surface.
 
 The effect server verifies the preserved warrant with `MCPVerifier` before it
 runs a tool. After the sandbox calls, the suite sends three requests directly to
