@@ -35,6 +35,14 @@ struct Args {
 
     #[arg(long, requires = "openshell_jwt_dir")]
     openshell_jwt_key_id: Option<String>,
+
+    /// MCP server host written to the policy's sandbox destinations.
+    #[arg(long, default_value = "host.openshell.internal")]
+    mcp_host: String,
+
+    /// MCP server port written to the policy's sandbox destinations.
+    #[arg(long, default_value_t = 8080)]
+    mcp_port: u16,
 }
 
 #[derive(Debug, Subcommand)]
@@ -56,6 +64,10 @@ enum CommandKind {
         task_b_pub: PathBuf,
         #[arg(long)]
         approver_pub: PathBuf,
+        #[arg(long)]
+        mcp_host: String,
+        #[arg(long)]
+        mcp_port: u16,
     },
     /// Sign one restart approval with the fixture approver key.
     Approve {
@@ -134,12 +146,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             task_a_pub,
             task_b_pub,
             approver_pub,
+            mcp_host,
+            mcp_port,
         }) => issue(
             &output,
             &sandbox_id,
             &task_a_pub,
             &task_b_pub,
             &approver_pub,
+            &mcp_host,
+            mcp_port,
         ),
         Some(CommandKind::Approve {
             approver_key,
@@ -193,6 +209,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &args.sandbox_id,
                 args.openshell_jwt_dir.as_deref(),
                 args.openshell_jwt_key_id.as_deref(),
+                &args.mcp_host,
+                args.mcp_port,
             )
         }
     }
@@ -207,8 +225,24 @@ fn bench(
     if iterations == 0 || requests.is_empty() {
         return Err("bench needs iterations and at least one request".into());
     }
-    let policy = tenuo_openshell_middleware::PolicySet::from_json(&fs::read(policy_path)?)
+    let document = fs::read(policy_path)?;
+    let policy = tenuo_openshell_middleware::PolicySet::from_json(&document)
         .map_err(|err| format!("policy: {err}"))?;
+    let document: Value = serde_json::from_slice(&document)?;
+    let destination = &document["sandboxes"][sandbox_id]["destinations"][0];
+    let host = destination["host"]
+        .as_str()
+        .ok_or("policy sandbox has no destination host")?;
+    let port = destination["port"]
+        .as_u64()
+        .and_then(|port| u32::try_from(port).ok())
+        .ok_or("policy sandbox has no destination port")?;
+    let target = tenuo_openshell_middleware::RequestTarget {
+        method: "POST",
+        host,
+        port,
+        path: destination["path"].as_str().unwrap_or("/mcp"),
+    };
     let mut bodies = Vec::with_capacity(requests.len());
     for path in requests {
         bodies.push(fs::read(path)?);
@@ -223,6 +257,7 @@ fn bench(
             &policy,
             sandbox_id,
             true,
+            &target,
             body,
             tenuo_openshell_middleware::MetaMode::Preserve,
             None,
@@ -251,6 +286,8 @@ fn prepare(
     sandbox_id: &str,
     jwt_dir: Option<&Path>,
     jwt_key_id: Option<&str>,
+    mcp_host: &str,
+    mcp_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(output)?;
     if let Some(jwt_dir) = jwt_dir {
@@ -291,6 +328,10 @@ fn prepare(
             path_arg(&task_b.join("public")),
             "--approver-pub".to_string(),
             path_arg(&approver.join("public")),
+            "--mcp-host".to_string(),
+            mcp_host.to_string(),
+            "--mcp-port".to_string(),
+            mcp_port.to_string(),
         ],
     )?;
 
@@ -575,6 +616,8 @@ fn issue(
     task_a_pub: &Path,
     task_b_pub: &Path,
     approver_pub: &Path,
+    mcp_host: &str,
+    mcp_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let issuer = SigningKey::generate();
     let holder_a = read_public(task_a_pub)?;
@@ -615,7 +658,16 @@ fn issue(
     )?;
 
     let mut sandboxes = Map::new();
-    let roots = json!({"trusted_roots": [hex::encode(issuer.public_key().to_bytes())]});
+    let roots = json!({
+        "trusted_roots": [hex::encode(issuer.public_key().to_bytes())],
+        "destinations": [{
+            "host": mcp_host,
+            "port": mcp_port,
+            "path": "/mcp",
+            "tools": ["read_logs", "restart_service"]
+        }],
+        "single_use_tools": ["restart_service"]
+    });
     sandboxes.insert(sandbox_id.to_string(), roots.clone());
     sandboxes.insert("bootstrap-delegate".to_string(), roots);
     write_json(

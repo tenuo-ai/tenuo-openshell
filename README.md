@@ -1,11 +1,11 @@
-# Safe delegation and task-level authorization for NVIDIA agents
+# Tenuo for NVIDIA OpenShell
 
 [![CI](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/ci.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/ci.yml)
 [![OpenShell E2E](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Portable, least-privilege authority for agents running in NVIDIA OpenShell
-and NVIDIA NeMo Agent Toolkit.**
+**Task-level authorization for agents running in NVIDIA OpenShell and NVIDIA
+NeMo Agent Toolkit.** An independent, Apache-2.0 integration by Tenuo.
 
 OpenShell controls which tools an agent can reach. Tenuo constrains what the
 agent may do with an allowed tool for its current task, including the argument
@@ -24,28 +24,32 @@ model or agent
 OpenShell MCP policy ── tool name and destination
       │ admitted request; credential still absent
       ▼
-Tenuo supervisor middleware ── signed task warrant, PoP, arguments
+Tenuo supervisor middleware ── destination, task warrant, PoP, arguments
       │ allowed
       ▼
 OpenShell credential injection ── remote MCP effect
 ```
 
-The same authority can cross runtime boundaries without being translated into
-framework-specific allowlists. A task can originate in LangGraph, delegate over
-A2A to an agent in OpenShell, invoke an Agent Toolkit function, and reach an MCP
-server while every boundary verifies the same chain independently.
+## See the difference
 
-Tenuo has 10+ native integration surfaces across agent frameworks, protocols,
-and execution boundaries, including OpenAI Agents SDK, LangChain, LangGraph,
-CrewAI, AutoGen, Google ADK, MCP, FastMCP, A2A, FastAPI, and Temporal. See the
-[Tenuo integration overview](https://github.com/tenuo-ai/tenuo#integrate-at-the-boundary-you-control).
+```text
+task-scoped read                          -> allowed
+key generated and signing in the sandbox  -> allowed
+unauthorized restart                      -> denied
+approved restart                          -> allowed once
+replayed approval                         -> denied
+delegated child attempting wider action   -> denied
+A2A child using narrowed authority        -> allowed
+```
 
-Tenuo's task-level authorization and monotonic delegation model is being
-advanced through the
-[Attenuating Authorization Tokens for Agentic Delegation Chains](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
-Internet-Draft, authored by Tenuo for interoperable agent delegation.
+The demo compares OpenShell with and without Tenuo, confirms that denied calls
+do not reach the effect, exercises a real A2A handoff, and verifies signed
+receipts offline. See the [demo guide](examples/demo/README.md) for the complete
+scenario matrix, evidence model, prerequisites, and overrides.
 
-The integration is Apache-2.0. It consists of:
+## What is in this repository
+
+The integration consists of:
 
 - `tenuo-openshell-middleware`, an operator-run Rust implementation of
   `openshell.middleware.v1.SupervisorMiddleware`;
@@ -115,27 +119,12 @@ authenticated HTTPS middleware registration, then cleans up the runtime.
 See [the demo guide](examples/demo/README.md) for platform details and
 overrides.
 
-## See the difference
-
-```text
-task-scoped read                         -> allowed
-unauthorized restart                    -> denied
-approved restart                        -> allowed once
-replayed approval                       -> denied
-delegated child attempting wider action -> denied
-A2A child using narrowed authority      -> allowed
-```
-
-The demo compares OpenShell with and without Tenuo, confirms that denied calls
-do not reach the effect, exercises a real A2A handoff, and verifies signed
-receipts offline. See the [demo guide](examples/demo/README.md) for the complete
-scenario matrix, evidence model, prerequisites, and overrides.
-
 ## OpenShell middleware
 
 The supervisor middleware authenticates OpenShell, selects trust roots from the
-immutable `sandbox_id`, verifies the warrant chain and holder proof, checks
-tool arguments and approvals, and returns a stable allow or denial decision.
+immutable `sandbox_id`, checks the destination serves the tool, verifies the
+warrant chain and holder proof, checks tool arguments and approvals, and
+returns a stable allow or denial decision.
 
 See [Deployment](docs/deployment.md) for production configuration and
 [Architecture](docs/architecture.md) for the complete trust boundary.
@@ -171,10 +160,35 @@ binding. Alternate network paths must be denied separately. In OpenShell
 v0.1.2, the middleware does not inspect `tls: skip` endpoints, raw TCP, binary
 WebSocket frames, or server-to-client WebSocket messages.
 
+Each sandbox policy lists the MCP destinations it may reach and the tools each
+serves, because warrants name tools, not servers. Holder keys belong to the
+task runtime inside the sandbox; the warrant bounds what a compromised agent
+can do, and proof of possession makes a copied warrant useless. See
+[holder key custody](docs/architecture.md#holder-key-custody) and
+[replay](docs/architecture.md#replay).
+
 The service runs before credential injection and does not receive provider
-credentials. See [upstream verification](docs/upstream-verification.md) for the
-exact pinned contract and [the MCP gap analysis](docs/openshell-gap-analysis.md)
-for protocol coverage.
+credentials, and it strips `_meta.tenuo` from forwarded requests by default.
+See [upstream verification](docs/upstream-verification.md) for the exact
+pinned contract and [architecture](docs/architecture.md#protocol-coverage) for
+MCP protocol coverage.
+
+## Beyond OpenShell
+
+The same authority can cross runtime boundaries without being translated into
+framework-specific allowlists. A task can originate in LangGraph, delegate over
+A2A to an agent in OpenShell, invoke an Agent Toolkit function, and reach an MCP
+server while every boundary verifies the same chain independently.
+
+Tenuo has 10+ native integration surfaces across agent frameworks, protocols,
+and execution boundaries, including OpenAI Agents SDK, LangChain, LangGraph,
+CrewAI, AutoGen, Google ADK, MCP, FastMCP, A2A, FastAPI, and Temporal. See the
+[Tenuo integration overview](https://github.com/tenuo-ai/tenuo#integrate-at-the-boundary-you-control).
+
+Tenuo's task-level authorization and monotonic delegation model is being
+advanced through the
+[Attenuating Authorization Tokens for Agentic Delegation Chains](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
+Internet-Draft, authored by Tenuo for interoperable agent delegation.
 
 ## Documentation
 
@@ -214,4 +228,5 @@ the repository layout, CI coverage, and development workflow.
 ## License
 
 Apache-2.0. Vendored OpenShell protocol files retain NVIDIA's copyright and
-SPDX headers.
+SPDX headers. NVIDIA, OpenShell, and NeMo are trademarks of NVIDIA
+Corporation.

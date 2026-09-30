@@ -1,9 +1,19 @@
 {
+  "version": 1,
   "max_warrant_lifetime_secs": 3600,
   "approval_replay_protection": true,
   "sandboxes": {
     "sandbox-id": {
-      "trusted_roots": ["0000000000000000000000000000000000000000000000000000000000000000"]
+      "trusted_roots": ["0000000000000000000000000000000000000000000000000000000000000000"],
+      "destinations": [
+        {
+          "host": "mcp.internal",
+          "port": 443,
+          "path": "/mcp",
+          "tools": ["read_logs", "restart_service"]
+        }
+      ],
+      "single_use_tools": ["restart_service"]
     }
   }
 }

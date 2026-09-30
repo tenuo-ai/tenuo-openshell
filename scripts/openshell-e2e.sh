@@ -460,6 +460,55 @@ expect_deny() {
   fi
 }
 
+# The task runtime inside the sandbox generates its own holder key and prints
+# only the public key. Task A, on the host, delegates a read-only warrant to
+# that key. The sandbox then signs the call at run time and curl sends it.
+sandbox_signed_read() {
+  local sandbox="$1"
+  local run="$2"
+  local id="$3"
+  local pub="$RUN_DIR/agent-$sandbox.pub"
+  local stack="$RUN_DIR/agent-$sandbox.stack"
+  local output="$RUN_DIR/agent-$sandbox-read.out"
+  local stack_b64 start end decision_us
+  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c \
+    'tenuo-signer keygen --dir "$HOME/.tenuo" && cat "$HOME/.tenuo/public"' 2>>"$SETUP_LOG" \
+    | tr -d '\r' | tail -1 >"$pub" || fail "sandbox holder key generation"
+  grep -Eq '^[0-9a-f]{64}$' "$pub" || fail "sandbox printed one public key"
+  "$TENUO_TARGET/debug/tenuo-demo-fixture" delegate \
+    --parent-key "$FIXTURE_DIR/signers/task-a/key" \
+    --parent-warrant "$FIXTURE_DIR/warrants/task-a.cbor" \
+    --child-pub "$pub" \
+    --output "$stack" >>"$SETUP_LOG" 2>&1 || fail "delegation to the sandbox key"
+  stack_b64="$(python3 -c 'import base64, sys; print(base64.b64encode(open(sys.argv[1], "rb").read()).decode())' "$stack")"
+  start="$(now_us)"
+  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+    set -e
+    work="$(mktemp -d)"
+    printf "%s" "$1" | base64 -d >"$work/stack"
+    tenuo-signer sign --holder-key "$HOME/.tenuo/key" --warrant "$work/stack" --chain \
+      --output "$work/body.json" --id "$2" --tool read_logs \
+      --arguments "{\"service\":\"payments\",\"environment\":\"staging\"}"
+    curl -sS -i --max-time 20 "http://host.openshell.internal:$3/mcp" \
+      --header "content-type: application/json" \
+      --header "accept: application/json, text/event-stream" \
+      --header "mcp-protocol-version: 2025-11-25" \
+      --data-binary @"$work/body.json"
+  ' sh "$stack_b64" "$id" "$UPSTREAM_PORT" >"$output" 2>>"$SETUP_LOG" || fail "sandbox-signed read completes"
+  end="$(now_us)"
+  LAST_E2E_US=$((end - start))
+  grep -Fq '200 OK' "$output" || fail "sandbox-signed read returns 200"
+  grep -Fq "read payments logs in staging" "$output" || fail "sandbox-signed read reached the effect"
+  if [[ "$run" == "openshell+tenuo" ]]; then
+    decision_us="$(decision_us_for "$id" "$MIDDLEWARE_LOG")" || fail "sandbox-signed read has no decision timing"
+    printf 'PASS sandbox-signed read reached the effect\n'
+  else
+    decision_us=0
+    printf 'PASS openshell-only sandbox-signed read\n'
+  fi
+  record_obs "sandbox-signed read" "$run" "allow" "openshell" "" "$decision_us" "$LAST_E2E_US"
+}
+
 record_widen() {
   local line decision_us
   line="$(grep -F "tenuo_decision request_id=widen " "$FIXTURE_LOG" | tail -1 || true)"
@@ -518,24 +567,25 @@ run_suite() {
     "narrowed warrant restart was denied" "$CHILD_SANDBOX_NAME" "narrowed restart"
   grep -Fxq 'attenuation refused' "$FIXTURE_DIR/widen-refused.txt" \
     || fail "the narrowed warrant could be widened"
+  sandbox_signed_read "$SANDBOX_NAME" "openshell+tenuo" 15
 
   jq -se '
-    length == 4
-    and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 3)
+    length == 5
+    and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 4)
     and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
     and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8 or .arguments.replicas == 5)] | length == 0)
-  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the four authorized calls"
+  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the five authorized calls"
 
   expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart" "direct task B restart"
   expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant" "direct missing warrant"
   expect_destination_deny "$FIXTURE_DIR/delegated-restart.json" "direct narrowed restart" "direct narrowed restart"
-  jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
+  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
   direct_allow="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
     --data-binary @"$FIXTURE_DIR/task-a-read.json")"
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
-  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  jq -se 'length == 6' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
   local denial_out="$RUN_DIR/local-denial.out" denial_line denial_us
   "$DEMO_PYTHON" "$EXAMPLE_DIR/local_denial.py" \
     --policy "$FIXTURE_DIR/policy.json" \
@@ -675,6 +725,7 @@ PY
   control_allow "missing warrant" "$FIXTURE_DIR/missing-warrant.json" "restarted payments in staging"
   control_allow "narrowed read" "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" "$CHILD_SANDBOX_NAME"
   control_allow "narrowed restart" "$FIXTURE_DIR/delegated-restart.json" "restarted payments in staging" "$CHILD_SANDBOX_NAME"
+  sandbox_signed_read "$SANDBOX_NAME" "openshell-only" 16
   control_direct "direct task B restart" "$FIXTURE_DIR/task-b-restart.json"
   control_direct "direct missing warrant" "$FIXTURE_DIR/missing-warrant.json"
   control_direct "direct narrowed restart" "$FIXTURE_DIR/delegated-restart.json"
@@ -682,7 +733,7 @@ PY
   printf 'PASS openshell-only wider child was not checked\n'
 
   jq -se '
-    length == 16
+    length == 17
     and ([.[] | select(.arguments.environment == "production")] | length >= 1)
     and ([.[] | select(.arguments.replicas == 8)] | length >= 1)
   ' "$CONTROL_EFFECT" >/dev/null || fail "comparison effect log is missing calls Tenuo denied"
@@ -751,6 +802,7 @@ prepare_destination_python
 "$TENUO_TARGET/debug/tenuo-demo-fixture" \
   --output "$FIXTURE_DIR" \
   --sandbox-id bootstrap \
+  --mcp-port "$UPSTREAM_PORT" \
   --openshell-jwt-dir "$JWT_DIR" \
   --openshell-jwt-key-id "$RUN_ID" >"$FIXTURE_LOG" 2>&1
 write_gateway_config

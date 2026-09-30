@@ -3,6 +3,7 @@
 //! JSON objects with a repeated key are rejected. `serde_json::Value` would
 //! otherwise keep the last occurrence.
 
+use crate::policy::McpOptions;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 use std::fmt;
@@ -20,8 +21,12 @@ const PASS_THROUGH_METHODS: &[&str] = &[
 
 #[derive(Debug)]
 pub enum McpRequest {
-    /// A listed lifecycle method. No warrant is required.
+    /// A listed lifecycle method, or a method the sandbox policy adds. No
+    /// warrant is required.
     PassThrough,
+    /// A JSON-RPC response the client returns for a server-initiated request.
+    /// It is forwarded only when the sandbox policy allows client responses.
+    ClientResponse,
     ToolCall {
         name: String,
         arguments: Value,
@@ -45,7 +50,7 @@ pub enum McpError {
     InvalidToolCall,
 }
 
-pub fn parse_body(body: &[u8]) -> Result<McpRequest, McpError> {
+pub fn parse_body(body: &[u8], options: &McpOptions) -> Result<McpRequest, McpError> {
     if body.is_empty() {
         return Err(McpError::NotJson);
     }
@@ -54,17 +59,26 @@ pub fn parse_body(body: &[u8]) -> Result<McpRequest, McpError> {
         return Err(McpError::Batch);
     }
     let object = document.as_object().ok_or(McpError::NotAnObject)?;
-    let method = object
-        .get("method")
-        .and_then(Value::as_str)
-        .ok_or(McpError::NotAnObject)?;
+    let Some(method) = object.get("method") else {
+        return if is_response(object) && options.allow_client_responses {
+            Ok(McpRequest::ClientResponse)
+        } else {
+            Err(McpError::UnsupportedMethod)
+        };
+    };
+    let method = method.as_str().ok_or(McpError::NotAnObject)?;
     if method == "tools/call" {
         return parse_tool_call(document);
     }
-    if PASS_THROUGH_METHODS.contains(&method) {
+    if PASS_THROUGH_METHODS.contains(&method) || options.passthrough_methods.contains(method) {
         return Ok(McpRequest::PassThrough);
     }
     Err(McpError::UnsupportedMethod)
+}
+
+/// A JSON-RPC response: an `id` and exactly one of `result` or `error`.
+fn is_response(object: &serde_json::Map<String, Value>) -> bool {
+    object.contains_key("id") && (object.contains_key("result") != object.contains_key("error"))
 }
 
 fn parse_tool_call(document: Value) -> Result<McpRequest, McpError> {

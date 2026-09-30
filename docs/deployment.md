@@ -12,7 +12,7 @@ Production mode is the default. It requires:
 - server TLS;
 - an operator-provisioned OpenShell Ed25519 public key;
 - a versioned Tenuo trust policy;
-- Redis when approval replay protection is enabled; and
+- Redis when approval replay protection or `single_use_tools` is enabled; and
 - a pre-generated receipt key and durable receipt path when receipts are
   required.
 
@@ -61,6 +61,22 @@ max_payload_bytes = 262144
 timeout = "2s"
 ```
 
+Attach it to the sandbox's MCP endpoints in the OpenShell sandbox policy:
+
+```yaml
+network_middlewares:
+  tenuo-task-authority:
+    middleware: tenuo/authorization
+    on_error: fail_closed
+    endpoints:
+      include:
+        - mcp.internal
+```
+
+On allow, the middleware removes `params._meta.tenuo` before OpenShell
+forwards the request. Add `config: {tenuo_meta: preserve}` only when the
+destination verifies the warrant again itself.
+
 The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
 `HTTP_REQUEST / PRE_CREDENTIALS`. See the
 [upstream verification](upstream-verification.md) for the exact contract.
@@ -77,14 +93,40 @@ reusable display name:
   "approval_replay_protection": true,
   "sandboxes": {
     "5ba15c63-8170-4e78-a4aa-df0f94f49642": {
-      "trusted_roots": ["<64 lowercase hex characters>"]
+      "trusted_roots": ["<64 lowercase hex characters>"],
+      "destinations": [
+        {
+          "host": "mcp.internal",
+          "port": 443,
+          "path": "/mcp",
+          "tools": ["read_logs", "restart_service"]
+        }
+      ],
+      "single_use_tools": ["restart_service"],
+      "mcp": {
+        "passthrough_methods": [],
+        "allow_client_responses": false
+      }
     }
   }
 }
 ```
 
-A missing sandbox, missing root, unreadable policy, or unavailable verifier
-denies the request.
+Each sandbox entry:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `trusted_roots` | Yes | Issuer public keys whose warrants this sandbox accepts. |
+| `destinations` | Yes | MCP servers the binding may reach, and the tools each serves. Host matches case-insensitively; `port` and optional `path` match exactly. `"tools": ["*"]` admits any tool and suits a sandbox that reaches one server. |
+| `single_use_tools` | No | Tools whose signed calls are accepted once. Use for non-idempotent tools; an identical call inside the same 30-second proof bucket is also denied. |
+| `mcp.passthrough_methods` | No | Extra JSON-RPC methods forwarded without a warrant, such as `resources/read`. `tools/call` is rejected. |
+| `mcp.allow_client_responses` | No | Forward the client's responses to server-initiated sampling, elicitation, and roots requests. Default `false`. |
+| `revocation` | No | Signed revocation list; see below. |
+
+A missing sandbox, missing root, unlisted destination, unreadable policy, or
+unavailable verifier denies the request. See
+[Architecture](architecture.md#destination-binding) for why destinations are
+required.
 
 Policy files are versioned and polled. A valid higher version replaces the
 active snapshot atomically. Invalid or rolled-back updates preserve the last
@@ -99,6 +141,10 @@ Approval identity is the approver key plus nonce across the whole deployment.
 Sandbox boundaries do not reset single-use semantics. All nonces on one
 request are reserved atomically across replicas, and Redis Cluster keys share
 a deployment-specific hash slot.
+
+Tools in `single_use_tools` reserve each proof of possession the same way, in
+the same atomic reservation as the request's approvals. See
+[Architecture](architecture.md#replay) for what this does and does not cover.
 
 Production startup fails if replay protection is enabled without Redis.
 `--allow-in-memory-replay` is limited to single-instance demonstrations.
