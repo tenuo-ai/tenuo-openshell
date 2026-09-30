@@ -20,8 +20,8 @@ reads Task A's key and the child public key. It does not read the child secret.
 2. Task B reads staging payments logs with its own warrant. Allowed.
 3. Task A restarts staging payments with `replicas` 3. The request carries
    an approval signed by the local fixture approver for those arguments.
-   Allowed. The same request is sent again and allowed again. This demo has
-   no replay store.
+   Allowed. The same approval is sent again and denied
+   `tenuo_approval_replayed` by the middleware's atomic nonce store.
 4. Task A requests that restart without the approval. Denied
    `tenuo_approval_required`.
 5. Task A presents the `replicas` 3 approval with `replicas` 5. Denied
@@ -44,6 +44,11 @@ reads Task A's key and the child public key. It does not read the child secret.
     the same restart. It denies the call before the function runs. That
     denial is in the receipt report and has no OpenShell or destination
     receipt.
+15. A Tenuo A2A worker receives a full parent/child warrant stack over JSON-RPC
+    HTTP with child-holder proof of possession. It executes `read_logs`; a
+    separately minted read-only child warrant is denied before the
+    `restart_service` skill runs. The machine-readable result is retained as
+    `results/evidence/a2a-handoff.json`.
 
 The effect server verifies the preserved warrant with `MCPVerifier` before it
 runs a tool. After the sandbox calls, the suite sends three requests directly to
@@ -76,7 +81,11 @@ not register the middleware. That sandbox policy keeps the same tool
 admission rules and omits the middleware block. `results/outcome-matrix.md`
 is the live comparison, including verification time next to the middleware
 timeout. Matching outcomes are marked baseline with the reason. `results/`
-is local output and is not part of the source tree.
+is local output and is not part of the source tree. The scheduled and manually
+dispatched GitHub workflow uploads the matrix, observations, effect logs,
+public receipt material, offline audit report, and immutable-version manifest
+as a 30-day Actions artifact. Private holder, issuer, JWT, TLS, and receipt
+signing keys are never copied into that artifact.
 
 The launcher pins NVIDIA OpenShell v0.1.2 at commit
 `6648bd0c290efbc41ba131ee9831ee45cd431f94`, builds its gateway and CLI, pulls

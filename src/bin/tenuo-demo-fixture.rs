@@ -619,6 +619,7 @@ fn issue(
         &output.join("policy.json"),
         &json!({
             "max_warrant_lifetime_secs": 3600,
+            "approval_replay_protection": true,
             "sandboxes": Value::Object(sandboxes),
         }),
     )?;

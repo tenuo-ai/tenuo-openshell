@@ -39,7 +39,12 @@ EXPECTED = {
     "task A read": ("allow", "allow", "openshell", ""),
     "task B read": ("allow", "allow", "openshell", ""),
     "approved restart": ("allow", "allow", "openshell", ""),
-    "repeated approved restart": ("allow", "allow", "openshell", ""),
+    "repeated approved restart": (
+        "deny",
+        "allow",
+        "openshell",
+        "tenuo_approval_replayed",
+    ),
     "restart without approval": ("deny", "allow", "openshell", "tenuo_approval_required"),
     "approval does not cover replicas 5": (
         "deny",
@@ -65,7 +70,6 @@ BASELINE_REASON = {
     "task A read": "tool admission and the warrant agree",
     "task B read": "tool admission and the warrant agree",
     "approved restart": "tool admission and the signed approval agree",
-    "repeated approved restart": "the same approval is checked again and there is no replay store",
     "narrowed read": "the child warrant still admits this read",
 }
 

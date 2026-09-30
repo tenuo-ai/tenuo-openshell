@@ -98,8 +98,12 @@ fn decide(
             tenuo,
             document,
         } => authorize_tool(
-            guard,
-            meta_mode,
+            AuthorizationContext {
+                policy,
+                sandbox_id,
+                guard,
+                meta_mode,
+            },
             &name,
             &arguments,
             tenuo.as_ref(),
@@ -119,9 +123,15 @@ struct ReceiptContext<'a> {
     trusted_roots_hash: Option<[u8; 32]>,
 }
 
-fn authorize_tool(
-    guard: &Guard,
+struct AuthorizationContext<'a> {
+    policy: &'a PolicySet,
+    sandbox_id: &'a str,
+    guard: &'a Guard,
     meta_mode: MetaMode,
+}
+
+fn authorize_tool(
+    authorization: AuthorizationContext<'_>,
     name: &str,
     arguments: &Value,
     tenuo: Option<&Value>,
@@ -143,7 +153,7 @@ fn authorize_tool(
         Ok(call) => call,
         Err(_) => return identified(deny(reason::INVALID_REQUEST), receipts.request_id),
     };
-    if let Err(denial) = guard.check_received(&received, &call) {
+    if let Err(denial) = authorization.guard.check_received(&received, &call) {
         record(
             &receipts,
             DecisionReceipt {
@@ -161,6 +171,12 @@ fn authorize_tool(
             receipts.request_id,
         );
     }
+    if let Err(code) = authorization
+        .policy
+        .consume_approvals(authorization.sandbox_id, received.approvals())
+    {
+        return identified(deny(code), receipts.request_id);
+    }
     let allowed = DecisionReceipt {
         request_id: receipts.request_id,
         tool: name,
@@ -170,7 +186,7 @@ fn authorize_tool(
         trusted_roots_hash: [0; 32],
         denial: None,
     };
-    match meta_mode {
+    match authorization.meta_mode {
         MetaMode::Preserve => {
             record(&receipts, allowed);
             identified(allow_unchanged(), receipts.request_id)
@@ -239,8 +255,10 @@ mod tests {
     fn policy_for(root: &SigningKey) -> PolicySet {
         let document = json!({
             "max_warrant_lifetime_secs": 3600,
+            "approval_replay_protection": true,
             "sandboxes": {
-                "sbx": { "trusted_roots": [hex::encode(root.public_key().to_bytes())] }
+                "sbx": { "trusted_roots": [hex::encode(root.public_key().to_bytes())] },
+                "sbx-other": { "trusted_roots": [hex::encode(root.public_key().to_bytes())] }
             }
         });
         PolicySet::from_json(document.to_string().as_bytes()).expect("policy")
@@ -592,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn an_approval_covers_one_argument_set_and_a_repeat_stays_allowed() {
+    fn an_approval_covers_one_argument_set_and_cannot_be_replayed() {
         let issuer = SigningKey::generate();
         let policy = policy_for(&issuer);
         let (holder, approver, warrant, arguments) = approved_restart(&issuer);
@@ -605,7 +623,18 @@ mod tests {
             Some(&approval),
         );
         assert!(evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve, None).allow);
-        assert!(evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve, None).allow);
+        let replay = evaluate(
+            &policy,
+            "sbx-other",
+            true,
+            &allowed,
+            MetaMode::Preserve,
+            None,
+        );
+        assert!(!replay.allow);
+        assert_eq!(replay.reason_code, reason::APPROVAL_REPLAYED);
+        let replay = evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve, None);
+        assert_eq!(replay.reason_code, reason::APPROVAL_REPLAYED);
 
         let missing = body_with_approval(&warrant, &holder, "restart_service", &arguments, None);
         let outcome = evaluate(&policy, "sbx", true, &missing, MetaMode::Preserve, None);

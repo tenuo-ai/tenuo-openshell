@@ -90,7 +90,7 @@ choose_port_block() {
   for _ in {1..200}; do
     start=$((20000 + RANDOM % 20000))
     ok=1
-    for ((offset = 0; offset < 4; offset++)); do
+    for ((offset = 0; offset < 5; offset++)); do
       if ! port_is_free "$((start + offset))"; then
         ok=0
         break
@@ -101,7 +101,7 @@ choose_port_block() {
       return
     fi
   done
-  echo "failed to find four free ports" >&2
+  echo "failed to find five free ports" >&2
   exit 1
 }
 
@@ -126,6 +126,7 @@ MIDDLEWARE_PORT="$PORT_BASE"
 GATEWAY_PORT="$((PORT_BASE + 1))"
 HEALTH_PORT="$((PORT_BASE + 2))"
 UPSTREAM_PORT="$((PORT_BASE + 3))"
+A2A_PORT="$((PORT_BASE + 4))"
 GATEWAY_ENDPOINT="http://127.0.0.1:$GATEWAY_PORT"
 GATEWAY_BIND_ADDRESS="127.0.0.1"
 SUPERVISOR_GRPC_ENDPOINT=""
@@ -146,6 +147,7 @@ MIDDLEWARE_LOG="$LOG_DIR/middleware.log"
 UPSTREAM_LOG="$LOG_DIR/upstream.log"
 FIXTURE_LOG="$LOG_DIR/fixture.log"
 RUN_ID="tenuo-demo-$$-$RANDOM"
+RESULTS_DIR="$ROOT/results"
 SANDBOX_NAME="tn-$$-$RANDOM"
 SUPERVISOR_IMAGE="${TENUO_DEMO_SUPERVISOR_IMAGE:-$PINNED_SUPERVISOR_IMAGE}"
 SANDBOX_RUNTIME_IMAGE="${TENUO_DEMO_SANDBOX_RUNTIME_IMAGE:-$PINNED_SANDBOX_RUNTIME_IMAGE}"
@@ -154,6 +156,7 @@ SANDBOX_CREATED=0
 RECEIPT_DIR="$RUN_DIR/receipts"
 RECEIPT_KEY="$RUN_DIR/secrets/openshell-receipt.key"
 mkdir -p "$LOG_DIR" "$JWT_DIR" "$TLS_DIR" "$FIXTURE_DIR" "$RECEIPT_DIR" "$RUN_DIR/secrets"
+mkdir -p "$RESULTS_DIR/evidence"
 : >"$EFFECT_LOG"
 : >"$OBS"
 : >"$GATEWAY_LOG"
@@ -339,7 +342,7 @@ prepare_destination_python() {
     return
   fi
   python3 -m venv "$RUN_DIR/py"
-  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo==0.3.1' 'nvidia-nat-core>=1.8,<1.9'
+  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo[a2a]==0.3.1' 'uvicorn>=0.30,<1' 'nvidia-nat-core>=1.8,<1.9'
   "$RUN_DIR/py/bin/python" -m pip install -q --no-deps "$ROOT/python/nemo-agent-toolkit-tenuo"
   DEMO_PYTHON="$RUN_DIR/py/bin/python"
 }
@@ -492,8 +495,8 @@ run_suite() {
     "task B read reached the effect" "" "task B read"
   expect_allow "$FIXTURE_DIR/task-a-restart.json" "restarted payments in staging" \
     "task A approved restart reached the effect" "" "approved restart"
-  expect_allow "$FIXTURE_DIR/task-a-restart-repeat.json" "restarted payments in staging" \
-    "repeated approved restart stayed allowed" "" "repeated approved restart"
+  expect_deny "$FIXTURE_DIR/task-a-restart-repeat.json" "tenuo_approval_replayed" \
+    "repeated approved restart was denied" "" "repeated approved restart"
   expect_deny "$FIXTURE_DIR/task-a-unapproved.json" "tenuo_approval_required" \
     "restart without its approval was denied" "" "restart without approval"
   expect_deny "$FIXTURE_DIR/task-a-approval-mismatch.json" "tenuo_invalid_authority" \
@@ -516,22 +519,22 @@ run_suite() {
     || fail "the narrowed warrant could be widened"
 
   jq -se '
-    length == 5
+    length == 4
     and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 3)
-    and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 2)
+    and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
     and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8 or .arguments.replicas == 5)] | length == 0)
-  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the five authorized calls"
+  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the four authorized calls"
 
   expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart" "direct task B restart"
   expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant" "direct missing warrant"
   expect_destination_deny "$FIXTURE_DIR/delegated-restart.json" "direct narrowed restart" "direct narrowed restart"
-  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
+  jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
   direct_allow="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
     --data-binary @"$FIXTURE_DIR/task-a-read.json")"
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
-  jq -se 'length == 6' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
   local denial_out="$RUN_DIR/local-denial.out" denial_line denial_us
   "$DEMO_PYTHON" "$EXAMPLE_DIR/local_denial.py" \
     --policy "$FIXTURE_DIR/policy.json" \
@@ -546,7 +549,10 @@ run_suite() {
   "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
     --dir "$RECEIPT_DIR" \
     --policy "$FIXTURE_DIR/policy.json" \
-    --demo || fail "offline receipt verification"
+    --demo | tee "$RESULTS_DIR/evidence/receipt-audit.txt" || fail "offline receipt verification"
+  "$DEMO_PYTHON" "$EXAMPLE_DIR/a2a_handoff.py" \
+    --port "$A2A_PORT" \
+    --output "$RESULTS_DIR/evidence/a2a-handoff.json" || fail "A2A authority handoff"
   run_control
   run_timing
   printf 'ALL PASS both runs were recorded and the receipts verify offline\n'
@@ -702,7 +708,19 @@ run_timing() {
     --holder-key "$FIXTURE_DIR/signers/task-b/key" \
     --openshell-bench "$bench" \
     --timeout-ms 2000 \
-    --output-dir "$ROOT/results" || fail "outcome matrix"
+    --output-dir "$RESULTS_DIR" || fail "outcome matrix"
+  cp "$OBS" "$RESULTS_DIR/evidence/observations.jsonl"
+  cp "$EFFECT_LOG" "$RESULTS_DIR/evidence/authorized-effects.jsonl"
+  cp "$CONTROL_EFFECT" "$RESULTS_DIR/evidence/openshell-only-effects.jsonl"
+  find "$RECEIPT_DIR" -maxdepth 1 -type f \( -name '*.jsonl' -o -name '*.pub' \) \
+    -exec cp {} "$RESULTS_DIR/evidence/" \;
+  jq -n \
+    --arg commit "$(git -C "$ROOT" rev-parse HEAD)" \
+    --arg openshell_ref "$(git -C "$OPENSHELL_ROOT" rev-parse HEAD)" \
+    --arg supervisor_image "$SUPERVISOR_IMAGE" \
+    --arg sandbox_runtime_image "$SANDBOX_RUNTIME_IMAGE" \
+    '{commit:$commit,openshell_ref:$openshell_ref,supervisor_image:$supervisor_image,sandbox_runtime_image:$sandbox_runtime_image}' \
+    >"$RESULTS_DIR/evidence/manifest.json"
 }
 
 for command in cargo curl git jq nc openssl python3 "$COMPUTE_DRIVER"; do

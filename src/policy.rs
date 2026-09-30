@@ -5,7 +5,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
+use tenuo::approval::SignedApproval;
 use tenuo::sdk::prelude::*;
 use tenuo::PublicKey;
 
@@ -27,6 +29,7 @@ struct Sandbox {
 
 pub struct PolicySet {
     sandboxes: HashMap<String, Sandbox>,
+    approval_replay: Option<Mutex<HashMap<[u8; 48], u64>>>,
 }
 
 #[derive(Debug)]
@@ -62,6 +65,10 @@ impl PolicySet {
             .and_then(Value::as_u64)
             .filter(|secs| *secs > 0)
             .ok_or(PolicyError::Invalid)?;
+        let approval_replay = match object.get("approval_replay_protection") {
+            Some(value) => value.as_bool().ok_or(PolicyError::Invalid)?,
+            None => false,
+        };
         let sandboxes = object
             .get("sandboxes")
             .and_then(Value::as_object)
@@ -107,7 +114,10 @@ impl PolicySet {
                 },
             );
         }
-        Ok(Self { sandboxes: loaded })
+        Ok(Self {
+            sandboxes: loaded,
+            approval_replay: approval_replay.then(|| Mutex::new(HashMap::new())),
+        })
     }
 
     pub fn guard(&self, sandbox_id: &str) -> Result<&Guard, &'static str> {
@@ -116,6 +126,43 @@ impl PolicySet {
 
     pub fn trusted_roots_hash(&self, sandbox_id: &str) -> Result<[u8; 32], &'static str> {
         Ok(self.sandbox(sandbox_id)?.trusted_roots_hash)
+    }
+
+    /// Atomically consume the nonces of approvals that already passed Guard validation.
+    ///
+    /// The store is deliberately integration-owned: Tenuo signs a unique nonce into every
+    /// approval but leaves replay persistence to the enforcing application.
+    pub fn consume_approvals(
+        &self,
+        sandbox_id: &str,
+        approvals: &[SignedApproval],
+    ) -> Result<(), &'static str> {
+        self.sandbox(sandbox_id)?;
+        let Some(store) = &self.approval_replay else {
+            return Ok(());
+        };
+        if approvals.is_empty() {
+            return Ok(());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| reason::VERIFIER_FAILED)?
+            .as_secs();
+        let mut claims = Vec::with_capacity(approvals.len());
+        for approval in approvals {
+            let payload = approval.verify().map_err(|_| reason::INVALID_AUTHORITY)?;
+            let mut key = [0u8; 48];
+            key[..32].copy_from_slice(&approval.approver_key.to_bytes());
+            key[32..].copy_from_slice(&payload.nonce);
+            claims.push((key, payload.expires_at));
+        }
+        let mut used = store.lock().map_err(|_| reason::VERIFIER_FAILED)?;
+        used.retain(|_, expires_at| *expires_at >= now);
+        if claims.iter().any(|(key, _)| used.contains_key(key)) {
+            return Err(reason::APPROVAL_REPLAYED);
+        }
+        used.extend(claims);
+        Ok(())
     }
 
     fn sandbox(&self, sandbox_id: &str) -> Result<&Sandbox, &'static str> {

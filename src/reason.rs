@@ -12,6 +12,7 @@ pub const REVOKED: &str = "tenuo_revoked";
 pub const TOOL_DENIED: &str = "tenuo_tool_denied";
 pub const CONSTRAINT_DENIED: &str = "tenuo_constraint_denied";
 pub const APPROVAL_REQUIRED: &str = "tenuo_approval_required";
+pub const APPROVAL_REPLAYED: &str = "tenuo_approval_replayed";
 pub const INVALID_REQUEST: &str = "tenuo_invalid_request";
 pub const VERIFIER_FAILED: &str = "tenuo_verifier_failed";
 
@@ -84,6 +85,7 @@ mod tests {
             TOOL_DENIED,
             CONSTRAINT_DENIED,
             APPROVAL_REQUIRED,
+            APPROVAL_REPLAYED,
             INVALID_REQUEST,
             VERIFIER_FAILED,
         ] {

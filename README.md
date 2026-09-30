@@ -40,7 +40,7 @@ read-only child for a third holder in a second sandbox.
 ```text
 Task A  read_logs(payments, staging)                  → effect executed
 Task A  restart_service(payments, staging, replicas=3) → effect executed
-        same call again                                    → effect executed
+        same approval presented again                      → tenuo_approval_replayed
         restart without the signed approval                → tenuo_approval_required
         same approval presented for replicas=5             → tenuo_invalid_authority
 Task B  read_logs(payments, staging)                  → effect executed
@@ -53,12 +53,20 @@ child   read_logs(payments, staging)                  → effect executed
 child   restart_service(...)                          → tenuo_tool_denied
 child adding restart_service back                     → attenuation refused
 Agent Toolkit restart with Task B's warrant           → denied before the function
+A2A child read over JSON-RPC HTTP                     → effect executed
+A2A child restart with read-only warrant              → denied before the skill
 ```
 
 The `replicas=3` restart carries an approval signed by a local fixture key.
-That approval does not cover `replicas=5`. There is no replay store, so the
-same approved call is allowed again. The Agent Toolkit denial is recorded in
+That approval does not cover `replicas=5`. The middleware atomically consumes
+the signed approval nonce after the first successful authorization, so the
+same approval cannot be used twice. The Agent Toolkit denial is recorded in
 the same offline receipt report as the OpenShell and destination decisions.
+
+The demo also performs a real Tenuo A2A JSON-RPC handoff over localhost HTTP.
+It sends the full parent/child warrant stack plus a child-holder
+proof-of-possession signature. The worker executes `read_logs`, while the
+read-only delegated authority cannot invoke `restart_service`.
 
 Run the calls through a real OpenShell gateway and sandbox:
 
@@ -162,6 +170,7 @@ reusable display name:
 ```json
 {
   "max_warrant_lifetime_secs": 3600,
+  "approval_replay_protection": true,
   "sandboxes": {
     "5ba15c63-8170-4e78-a4aa-df0f94f49642": {
       "trusted_roots": ["<64 lowercase hex characters>"]
@@ -172,6 +181,11 @@ reusable display name:
 
 A missing sandbox, missing root, unreadable policy, or unavailable verifier
 denies the request.
+
+`approval_replay_protection` enables the integration-owned, in-process nonce
+store. Production deployments that run more than one middleware replica must
+replace this with a shared atomic store before claiming cross-replica replay
+protection; the signed approval nonce is the stable key.
 
 ## NVIDIA NeMo Agent Toolkit plugin
 
