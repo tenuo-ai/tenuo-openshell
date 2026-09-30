@@ -204,6 +204,9 @@ impl Holder {
         authorizer.add_trusted_root(root);
         let guard = Guard::builder()
             .authorizer(authorizer)
+            // The agent receives the denial as a JSON-RPC error; argument
+            // values stay out of the sandbox's logs.
+            .denial_reporting(DenialReporting::Debug)
             .revocation(RevocationMode::TtlOnly {
                 max_lifetime: LOCAL_MAX_LIFETIME,
             })

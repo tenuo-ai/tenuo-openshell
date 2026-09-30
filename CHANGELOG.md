@@ -53,6 +53,8 @@ All notable changes will be documented here. The format follows
 
 ### Fixed
 
+- The middleware and the in-sandbox agent no longer write Tenuo's per-denial
+  message, which can quote argument values, to stderr.
 - Denial receipts commit to the sandbox's trusted-roots digest when they are
   built.
 - `TENUO_DECISION_LOG` is read once rather than on every decision.
