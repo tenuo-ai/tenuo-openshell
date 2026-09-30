@@ -40,3 +40,4 @@ network_policies:
               tool: restart_service
     binaries:
       - path: /usr/bin/curl
+      - path: /usr/local/bin/tenuo-openshell-agent

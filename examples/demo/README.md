@@ -17,11 +17,12 @@ process and stored in its own file, and the sandbox receives only the signed
 body. The issuer secret is not written. The attenuation process reads Task A's
 key and the child public key. It does not read the child secret.
 
-The `sandbox-signed read` scenario (step 16) uses the production custody model
-instead: the task runtime inside the sandbox generates its own holder key,
-Task A delegates to the public key it prints, and the runtime signs the call
-at run time. That private key never leaves the sandbox. See
-[holder key custody](../../docs/architecture.md#holder-key-custody).
+Step 16 uses the production path instead. `tenuo-openshell provision`
+generates the holder key inside the sandbox and installs a warrant that Task A
+delegates to it. An unmodified MCP Python SDK client, with no Tenuo code, talks
+to `tenuo-openshell-agent proxy` on loopback, which signs each call. That
+private key never leaves the sandbox. See
+[Running an agent under Tenuo](../../docs/sandbox-agent.md).
 
 1. Task A reads staging payments logs. Allowed.
 2. Task B reads staging payments logs with its own warrant. Allowed.
@@ -57,10 +58,12 @@ at run time. That private key never leaves the sandbox. See
     `restart_service` skill runs. The machine-readable result is retained as
     `results/evidence/a2a-handoff.json`.
 
-16. The task runtime inside the first sandbox generates a holder key and
-    prints its public key. Task A delegates a read-only child warrant to it.
-    The runtime signs a staging payments read at run time and sends it with
-    curl. Allowed.
+16. `tenuo-openshell provision` gives the first sandbox a read-only warrant
+    for its own key. The MCP SDK client lists tools, reads staging payments
+    logs through the signing proxy (allowed, checked by the middleware and the
+    destination), and asks for a restart, which the proxy denies inside the
+    sandbox with `tool-not-authorized`. The sandbox policy lets only curl and
+    the proxy reach the MCP server.
 
 The A2A step is maintained under
 [`examples/interoperability`](../interoperability/README.md). It is an

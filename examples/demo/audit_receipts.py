@@ -167,8 +167,6 @@ def require_demo(records: list[dict[str, object]]) -> None:
         has("10", "openshell", "deny", "tool-not-authorized")
         and has("10", "destination", "deny", "tool-not-authorized"),
         shows_parent("9") and shows_parent("10"),
-        has("15", "openshell", "allow") and has("15", "destination", "allow"),
-        shows_parent("15"),
         has("2", "openshell", "allow") and "13" not in by_request,
         has("11", "openshell", "deny", "approval-required") and absent("11", "destination"),
         has("12", "openshell", "deny", "approval-invalid") and absent("12", "destination"),

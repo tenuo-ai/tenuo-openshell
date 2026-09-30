@@ -192,6 +192,11 @@ cleanup() {
       wait "$pid" 2>/dev/null || true
     fi
   done
+  # The workload image is tagged per run. Remove it unless the caller supplied
+  # one; a sandbox still being torn down can hold it, so failure is ignored.
+  if [[ -z "${TENUO_DEMO_WORKLOAD_IMAGE:-}" ]]; then
+    "$COMPUTE_DRIVER" rmi "$WORKLOAD_IMAGE" >/dev/null 2>&1 || true
+  fi
   if [[ "$status" == 0 ]]; then
     rm -rf "$RUN_DIR"
   else
@@ -460,53 +465,65 @@ expect_deny() {
   fi
 }
 
-# The task runtime inside the sandbox generates its own holder key and prints
-# only the public key. Task A, on the host, delegates a read-only warrant to
-# that key. The sandbox then signs the call at run time and curl sends it.
-sandbox_signed_read() {
+# The production path. `tenuo-openshell provision` generates the holder key in
+# the sandbox and installs a read-only warrant that Task A delegates to it. An
+# unmodified MCP SDK client then talks to the loopback signing proxy. The
+# sandbox policy lets only curl and the proxy reach the MCP server.
+mcp_client_run() {
   local sandbox="$1"
   local run="$2"
-  local id="$3"
-  local pub="$RUN_DIR/agent-$sandbox.pub"
-  local stack="$RUN_DIR/agent-$sandbox.stack"
-  local output="$RUN_DIR/agent-$sandbox-read.out"
-  local stack_b64 start end decision_us
-  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c \
-    'tenuo-signer keygen --dir "$HOME/.tenuo" && cat "$HOME/.tenuo/public"' 2>>"$SETUP_LOG" \
-    | tr -d '\r' | tail -1 >"$pub" || fail "sandbox holder key generation"
-  grep -Eq '^[0-9a-f]{64}$' "$pub" || fail "sandbox printed one public key"
-  "$TENUO_TARGET/debug/tenuo-demo-fixture" delegate \
-    --parent-key "$FIXTURE_DIR/signers/task-a/key" \
-    --parent-warrant "$FIXTURE_DIR/warrants/task-a.cbor" \
-    --child-pub "$pub" \
-    --output "$stack" >>"$SETUP_LOG" 2>&1 || fail "delegation to the sandbox key"
-  stack_b64="$(python3 -c 'import base64, sys; print(base64.b64encode(open(sys.argv[1], "rb").read()).decode())' "$stack")"
-  start="$(now_us)"
-  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
-    set -e
-    work="$(mktemp -d)"
-    printf "%s" "$1" | base64 -d >"$work/stack"
-    tenuo-signer sign --holder-key "$HOME/.tenuo/key" --warrant "$work/stack" --chain \
-      --output "$work/body.json" --id "$2" --tool read_logs \
-      --arguments "{\"service\":\"payments\",\"environment\":\"staging\"}"
-    curl -sS -i --max-time 20 "http://host.openshell.internal:$3/mcp" \
-      --header "content-type: application/json" \
-      --header "accept: application/json, text/event-stream" \
-      --header "mcp-protocol-version: 2025-11-25" \
-      --data-binary @"$work/body.json"
-  ' sh "$stack_b64" "$id" "$UPSTREAM_PORT" >"$output" 2>>"$SETUP_LOG" || fail "sandbox-signed read completes"
-  end="$(now_us)"
-  LAST_E2E_US=$((end - start))
-  grep -Fq '200 OK' "$output" || fail "sandbox-signed read returns 200"
-  grep -Fq "read payments logs in staging" "$output" || fail "sandbox-signed read reached the effect"
+  local output="$RUN_DIR/mcp-client-$sandbox.json"
+  local before start end decision_us line
   if [[ "$run" == "openshell+tenuo" ]]; then
-    decision_us="$(decision_us_for "$id" "$MIDDLEWARE_LOG")" || fail "sandbox-signed read has no decision timing"
-    printf 'PASS sandbox-signed read reached the effect\n'
+    env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" provision \
+      --sandbox "$sandbox" \
+      --parent-key "$FIXTURE_DIR/signers/task-a/key" \
+      --parent-warrant "$FIXTURE_DIR/warrants/task-a.cbor" \
+      --capabilities '{"read_logs": {"service": "payments", "environment": "staging"}}' \
+      --ttl 300 \
+      --openshell "$CLI_BIN" \
+      --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "provision the sandbox holder"
+    before="$(wc -l <"$MIDDLEWARE_LOG")"
+    start="$(now_us)"
+    "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+      tenuo-openshell-agent proxy --upstream "http://host.openshell.internal:$1/mcp" 2>"$HOME/proxy.log" &
+      proxy=$!
+      sleep 1
+      NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+        /usr/local/lib/tenuo-demo/bin/python /usr/local/lib/tenuo-demo/mcp_client.py http://127.0.0.1:7415/mcp
+      status=$?
+      kill "$proxy"
+      exit "$status"
+    ' sh "$UPSTREAM_PORT" 2>>"$SETUP_LOG" | tr -d '\r' | tail -1 >"$output" || fail "MCP client in the sandbox"
+    end="$(now_us)"
   else
-    decision_us=0
-    printf 'PASS openshell-only sandbox-signed read\n'
+    start="$(now_us)"
+    "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- \
+      /usr/local/lib/tenuo-demo/bin/python /usr/local/lib/tenuo-demo/mcp_client.py \
+      "http://host.openshell.internal:$UPSTREAM_PORT/mcp" 2>>"$SETUP_LOG" \
+      | tr -d '\r' | tail -1 >"$output" || fail "comparison MCP client in the sandbox"
+    end="$(now_us)"
   fi
-  record_obs "sandbox-signed read" "$run" "allow" "openshell" "" "$decision_us" "$LAST_E2E_US"
+  LAST_E2E_US=$((end - start))
+  jq -e '.read_logs.outcome == "allow" and .read_logs.text == "read payments logs in staging"' "$output" >/dev/null \
+    || fail "$run MCP client read reached the effect"
+  if [[ "$run" == "openshell+tenuo" ]]; then
+    jq -e '.restart_service.outcome == "deny" and .restart_service.reason == "tool-not-authorized" and .restart_service.source == "agent"' \
+      "$output" >/dev/null || fail "MCP client restart was denied in the sandbox"
+    line="$(tail -n +"$((before + 1))" "$MIDDLEWARE_LOG" | grep -F 'tenuo_decision ' | grep -F 'outcome=allow' | tail -1 || true)"
+    [[ -n "$line" ]] || fail "MCP client read has no middleware decision"
+    decision_us="$(sed -n 's/.*decision_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
+    record_obs "MCP client read" "$run" "allow" "openshell" "" "$decision_us" "$LAST_E2E_US"
+    record_obs "MCP client restart" "$run" "deny" "sandbox agent" "tool-not-authorized" 0 0
+    printf 'PASS unmodified MCP client read through the signing proxy\n'
+    printf 'PASS unmodified MCP client restart was denied in the sandbox\n'
+  else
+    jq -e '.restart_service.outcome == "allow"' "$output" >/dev/null \
+      || fail "comparison MCP client restart reached the effect"
+    record_obs "MCP client read" "$run" "allow" "openshell" "" 0 "$LAST_E2E_US"
+    record_obs "MCP client restart" "$run" "allow" "sandbox agent" "" 0 0
+    printf 'PASS openshell-only MCP client read and restart\n'
+  fi
 }
 
 record_widen() {
@@ -567,7 +584,7 @@ run_suite() {
     "narrowed warrant restart was denied" "$CHILD_SANDBOX_NAME" "narrowed restart"
   grep -Fxq 'attenuation refused' "$FIXTURE_DIR/widen-refused.txt" \
     || fail "the narrowed warrant could be widened"
-  sandbox_signed_read "$SANDBOX_NAME" "openshell+tenuo" 15
+  mcp_client_run "$SANDBOX_NAME" "openshell+tenuo"
 
   jq -se '
     length == 5
@@ -698,6 +715,9 @@ for line in lines:
         skip = False
     if not skip:
         kept.append(line.replace("__UPSTREAM_PORT__", port))
+        # Without Tenuo there is no signing proxy; the client calls MCP itself.
+        if line.strip() == "- path: /usr/local/bin/tenuo-openshell-agent":
+            kept.append(line.replace("/usr/local/bin/tenuo-openshell-agent", "/usr/bin/python3*"))
 Path(dest).write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
 PY
   if grep -Fq 'tenuo/authorization' "$RUN_DIR/openshell-only-policy.yaml"; then
@@ -725,7 +745,7 @@ PY
   control_allow "missing warrant" "$FIXTURE_DIR/missing-warrant.json" "restarted payments in staging"
   control_allow "narrowed read" "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" "$CHILD_SANDBOX_NAME"
   control_allow "narrowed restart" "$FIXTURE_DIR/delegated-restart.json" "restarted payments in staging" "$CHILD_SANDBOX_NAME"
-  sandbox_signed_read "$SANDBOX_NAME" "openshell-only" 16
+  mcp_client_run "$SANDBOX_NAME" "openshell-only"
   control_direct "direct task B restart" "$FIXTURE_DIR/task-b-restart.json"
   control_direct "direct missing warrant" "$FIXTURE_DIR/missing-warrant.json"
   control_direct "direct narrowed restart" "$FIXTURE_DIR/delegated-restart.json"
@@ -733,7 +753,7 @@ PY
   printf 'PASS openshell-only wider child was not checked\n'
 
   jq -se '
-    length == 17
+    length == 18
     and ([.[] | select(.arguments.environment == "production")] | length >= 1)
     and ([.[] | select(.arguments.replicas == 8)] | length >= 1)
   ' "$CONTROL_EFFECT" >/dev/null || fail "comparison effect log is missing calls Tenuo denied"

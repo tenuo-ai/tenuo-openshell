@@ -10,14 +10,22 @@ repository = "https://github.com/tenuo-ai/tenuo-openshell"
 homepage = "https://tenuo.ai"
 publish = false
 
+[workspace]
+members = [".", "agent"]
+
 [[bin]]
 name = "tenuo-openshell-middleware"
 path = "src/main.rs"
+
+[[bin]]
+name = "tenuo-openshell"
+path = "src/bin/tenuo-openshell.rs"
 
 [dependencies]
 async-trait = "0.1"
 arc-swap = "1.7"
 axum = "0.7"
+base64 = "0.22"
 chrono = "0.4"
 ciborium = "0.2"
 clap = { version = "4.5", features = ["derive", "env"] }

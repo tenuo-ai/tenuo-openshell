@@ -34,7 +34,7 @@ OpenShell credential injection ── remote MCP effect
 
 ```text
 task-scoped read                          -> allowed
-key generated and signing in the sandbox  -> allowed
+unmodified MCP client, signed in sandbox  -> allowed
 unauthorized restart                      -> denied
 approved restart                          -> allowed once
 replayed approval                         -> denied
@@ -53,6 +53,11 @@ The integration consists of:
 
 - `tenuo-openshell-middleware`, an operator-run Rust implementation of
   `openshell.middleware.v1.SupervisorMiddleware`;
+- `tenuo-openshell-agent`, which holds the task's key and warrant inside the
+  sandbox and signs MCP calls through a loopback proxy, so agents need no
+  code changes;
+- `tenuo-openshell`, operator commands to edit the trust policy, print
+  OpenShell configuration, and provision warrants into sandboxes;
 - `nemo-agent-toolkit-tenuo`, a provider-owned Agent Toolkit plugin that denies
   unauthorized function calls before `call_next`; and
 - an authenticated, end-to-end OpenShell demo that proves denied calls do not
@@ -71,6 +76,7 @@ The integration consists of:
 | --- | --- |
 | Verify a standalone checkout | [Run the local smoke test](#quickstart-standalone-smoke-test) |
 | See the security boundary work | [Run the authenticated demo](#quickstart-real-openshell-demo) |
+| Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Operate the supervisor middleware | [Deployment guide](docs/deployment.md) |
 | Add early denial to Agent Toolkit | [Agent Toolkit plugin](python/nemo-agent-toolkit-tenuo/README.md) |
 | Connect an optional control plane | [Provider integration contract](docs/providers.md) |
@@ -195,6 +201,7 @@ Internet-Draft, authored by Tenuo for interoperable agent delegation.
 | Goal | Guide |
 | --- | --- |
 | Understand components and trust boundaries | [Architecture](docs/architecture.md) |
+| Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
 | Configure Kubernetes | [Helm chart](deploy/helm/tenuo-openshell/README.md) |
