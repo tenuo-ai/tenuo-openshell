@@ -127,6 +127,8 @@ GATEWAY_PORT="$((PORT_BASE + 1))"
 HEALTH_PORT="$((PORT_BASE + 2))"
 UPSTREAM_PORT="$((PORT_BASE + 3))"
 GATEWAY_ENDPOINT="http://127.0.0.1:$GATEWAY_PORT"
+GATEWAY_BIND_ADDRESS="127.0.0.1"
+SUPERVISOR_GRPC_ENDPOINT=""
 
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
@@ -146,7 +148,9 @@ SUPERVISOR_IMAGE="${TENUO_DEMO_SUPERVISOR_IMAGE:-$PINNED_SUPERVISOR_IMAGE}"
 SANDBOX_RUNTIME_IMAGE="${TENUO_DEMO_SANDBOX_RUNTIME_IMAGE:-$PINNED_SANDBOX_RUNTIME_IMAGE}"
 WORKLOAD_IMAGE="${TENUO_DEMO_WORKLOAD_IMAGE:-localhost/tenuo-openshell/workload:$RUN_ID}"
 SANDBOX_CREATED=0
-mkdir -p "$LOG_DIR" "$JWT_DIR" "$TLS_DIR" "$FIXTURE_DIR"
+RECEIPT_DIR="$RUN_DIR/receipts"
+RECEIPT_KEY="$RUN_DIR/secrets/openshell-receipt.key"
+mkdir -p "$LOG_DIR" "$JWT_DIR" "$TLS_DIR" "$FIXTURE_DIR" "$RECEIPT_DIR" "$RUN_DIR/secrets"
 : >"$EFFECT_LOG"
 
 dump_logs() {
@@ -263,7 +267,26 @@ supervisor_image = "$SUPERVISOR_IMAGE"
 sandbox_runtime_image = "$SANDBOX_RUNTIME_IMAGE"
 default_image = "$WORKLOAD_IMAGE"
 EOF
+  if [[ -n "$SUPERVISOR_GRPC_ENDPOINT" ]]; then
+    printf 'grpc_endpoint = "%s"\n' "$SUPERVISOR_GRPC_ENDPOINT" >>"$GATEWAY_CONFIG"
+  fi
   sed "s/__UPSTREAM_PORT__/$UPSTREAM_PORT/g" "$EXAMPLE_DIR/openshell-policy.yaml" >"$SANDBOX_POLICY"
+}
+
+configure_supervisor_reachability() {
+  if [[ "$COMPUTE_DRIVER" != "docker" ]]; then
+    return
+  fi
+  local operating_system
+  operating_system="$(docker info --format '{{.OperatingSystem}}')"
+  if [[ "$operating_system" != *"Docker Desktop"* ]]; then
+    return
+  fi
+  # The supervisor container uses host networking. On Docker Desktop that
+  # network is the Linux VM, so the gateway's loopback is not reachable.
+  # OpenShell uses grpc_endpoint for that callback.
+  GATEWAY_BIND_ADDRESS="0.0.0.0"
+  SUPERVISOR_GRPC_ENDPOINT="http://$SERVICE_HOST:$GATEWAY_PORT"
 }
 
 start_middleware() {
@@ -275,7 +298,9 @@ start_middleware() {
     --openshell-jwt-public-key "$JWT_DIR/public.pem" \
     --openshell-gateway-id "$RUN_ID" \
     --openshell-jwt-key-id "$RUN_ID" \
-    --audience "$AUDIENCE" >>"$MIDDLEWARE_LOG" 2>&1 &
+    --audience "$AUDIENCE" \
+    --receipt-key "$RECEIPT_KEY" \
+    --receipt-log "$RECEIPT_DIR/openshell.jsonl" >>"$MIDDLEWARE_LOG" 2>&1 &
   MIDDLEWARE_PID=$!
 }
 
@@ -304,6 +329,7 @@ prepare_destination_python() {
 
 start_upstream() {
   env TENUO_DEMO_EFFECT_LOG="$EFFECT_LOG" \
+    TENUO_DEMO_RECEIPT_DIR="$RECEIPT_DIR" \
     "$DEMO_PYTHON" "$EXAMPLE_DIR/mcp_server.py" \
     --port "$UPSTREAM_PORT" \
     --policy "$FIXTURE_DIR/policy.json" >"$UPSTREAM_LOG" 2>&1 &
@@ -314,7 +340,7 @@ start_gateway() {
   env -u OPENSHELL_DRIVERS -u OPENSHELL_COMPUTE_DRIVER "$GATEWAY_BIN" \
     --compute-driver "$COMPUTE_DRIVER" \
     --config "$GATEWAY_CONFIG" \
-    --bind-address 127.0.0.1 \
+    --bind-address "$GATEWAY_BIND_ADDRESS" \
     --port "$GATEWAY_PORT" \
     --health-port "$HEALTH_PORT" \
     --metrics-port 0 \
@@ -404,7 +430,11 @@ run_suite() {
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
   jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
-  printf 'ALL PASS the destination verified the warrant with and without OpenShell\n'
+  "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
+    --dir "$RECEIPT_DIR" \
+    --policy "$FIXTURE_DIR/policy.json" \
+    --demo || fail "offline receipt verification"
+  printf 'ALL PASS the destination verified the warrant with and without OpenShell, and the receipts verify offline\n'
 }
 
 expect_destination_deny() {
@@ -423,6 +453,7 @@ for command in cargo curl git jq nc openssl python3 "$COMPUTE_DRIVER"; do
   require_command "$command"
 done
 require_supported_runtime
+configure_supervisor_reachability
 
 OPEN_TARGET="$(cd "$OPENSHELL_ROOT" && cargo metadata --format-version=1 --no-deps | jq -er '.target_directory')"
 TENUO_TARGET="$(cargo_target_dir "$ROOT/Cargo.toml")"

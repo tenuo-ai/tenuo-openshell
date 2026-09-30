@@ -29,6 +29,13 @@ warrant. Both are JSON-RPC `-32001` and neither is executed. One direct read
 with Task A's warrant is executed, which shows the destination check does not
 depend on OpenShell being in front.
 
+Each enforcement point signs its own receipt. The OpenShell middleware and
+the effect server use different receipt keys, and both put the JSON-RPC id
+in `request_id`. `examples/demo/audit_receipts.py` checks those receipts
+with the issuer public keys and the two receipt-signer public keys. It does
+not use the network. A missing warrant has no chain to commit to, so that
+denial has no receipt. A receipt does not show that the tool ran.
+
 The launcher installs Python package `tenuo` 0.3.1 into a temporary environment
 for that server. Set `TENUO_DEMO_PYTHON` to an existing interpreter when that
 package is already installed.
@@ -47,7 +54,9 @@ builds a non-root demo workload from NVIDIA's Ubuntu base pinned by digest,
 generates temporary TLS and gateway JWT material, and cleans up the sandbox and
 processes afterward. Docker Desktop/Engine 28.0+ or Podman 5.x+, `cargo`,
 `curl`, `jq`, `openssl`, and Python 3 are required. The launcher checks the
-container runtime version before doing any builds.
+container runtime version before doing any builds. On Docker Desktop the
+supervisor's host network is the Linux VM, so the launcher publishes the
+gateway on the machine address and sets the driver's `grpc_endpoint` to it.
 
 Set `OPENSHELL_SOURCE` to an existing pinned OpenShell checkout to skip the
 bootstrap download. Set `TENUO_DEMO_DRIVER=podman` to use Podman instead of

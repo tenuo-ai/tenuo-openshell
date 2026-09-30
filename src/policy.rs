@@ -20,8 +20,13 @@ pub enum MetaMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidMiddlewareConfig;
 
+struct Sandbox {
+    guard: Guard,
+    trusted_roots_hash: [u8; 32],
+}
+
 pub struct PolicySet {
-    sandboxes: HashMap<String, Guard>,
+    sandboxes: HashMap<String, Sandbox>,
 }
 
 #[derive(Debug)]
@@ -78,11 +83,14 @@ impl PolicySet {
                 let text = root.as_str().ok_or(PolicyError::Invalid)?;
                 keys.push(parse_root(text)?);
             }
-            let Some(first) = keys.pop() else {
+            let Some(first) = keys.first() else {
                 return Err(PolicyError::Invalid);
             };
-            let mut builder = Tenuo::enforcement().trusted_root(first);
-            for key in keys {
+            let trusted_roots_hash = tenuo::trusted_roots_digest(
+                &keys.iter().map(PublicKey::to_bytes).collect::<Vec<_>>(),
+            );
+            let mut builder = Tenuo::enforcement().trusted_root(first.clone());
+            for key in keys.into_iter().skip(1) {
                 builder = builder.trusted_root(key);
             }
             let guard = builder
@@ -91,12 +99,26 @@ impl PolicySet {
                 })
                 .build()
                 .map_err(|_| PolicyError::Invalid)?;
-            loaded.insert(sandbox_id.clone(), guard);
+            loaded.insert(
+                sandbox_id.clone(),
+                Sandbox {
+                    guard,
+                    trusted_roots_hash,
+                },
+            );
         }
         Ok(Self { sandboxes: loaded })
     }
 
     pub fn guard(&self, sandbox_id: &str) -> Result<&Guard, &'static str> {
+        Ok(&self.sandbox(sandbox_id)?.guard)
+    }
+
+    pub fn trusted_roots_hash(&self, sandbox_id: &str) -> Result<[u8; 32], &'static str> {
+        Ok(self.sandbox(sandbox_id)?.trusted_roots_hash)
+    }
+
+    fn sandbox(&self, sandbox_id: &str) -> Result<&Sandbox, &'static str> {
         if sandbox_id.is_empty() {
             return Err(reason::VERIFIER_FAILED);
         }

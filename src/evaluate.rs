@@ -1,8 +1,11 @@
-//! One HTTP middleware decision. No network and no receipt export.
+//! One HTTP middleware decision. No network.
+//!
+//! Receipt export is optional and does not change the decision.
 
 use crate::mcp::{self, McpError, McpRequest};
 use crate::policy::{MetaMode, PolicySet};
 use crate::reason;
+use crate::receipt::{DecisionReceipt, ReceiptLog};
 use serde_json::Value;
 use tenuo::sdk::prelude::*;
 use tenuo::sdk::transport::mcp_meta::decode_meta;
@@ -20,6 +23,7 @@ pub fn evaluate(
     pre_credentials: bool,
     body: &[u8],
     meta_mode: MetaMode,
+    receipts: Option<&ReceiptLog>,
 ) -> Outcome {
     if !pre_credentials {
         return deny(reason::INVALID_REQUEST);
@@ -28,6 +32,7 @@ pub fn evaluate(
         Ok(guard) => guard,
         Err(code) => return deny(code),
     };
+    let trusted_roots_hash = policy.trusted_roots_hash(sandbox_id).ok();
     let request = match mcp::parse_body(body) {
         Ok(request) => request,
         Err(
@@ -47,6 +52,7 @@ pub fn evaluate(
         McpRequest::ToolCall {
             name,
             arguments,
+            request_id,
             tenuo,
             document,
         } => authorize_tool(
@@ -56,8 +62,19 @@ pub fn evaluate(
             &arguments,
             tenuo.as_ref(),
             &document,
+            ReceiptContext {
+                log: receipts,
+                request_id: &request_id,
+                trusted_roots_hash,
+            },
         ),
     }
+}
+
+struct ReceiptContext<'a> {
+    log: Option<&'a ReceiptLog>,
+    request_id: &'a str,
+    trusted_roots_hash: Option<[u8; 32]>,
 }
 
 fn authorize_tool(
@@ -67,6 +84,7 @@ fn authorize_tool(
     arguments: &Value,
     tenuo: Option<&Value>,
     document: &Value,
+    receipts: ReceiptContext<'_>,
 ) -> Outcome {
     let Some(tenuo) = tenuo else {
         return deny(reason::MISSING_WARRANT);
@@ -84,19 +102,54 @@ fn authorize_tool(
         Err(_) => return deny(reason::INVALID_REQUEST),
     };
     if let Err(denial) = guard.check_received(&received, &call) {
+        record(
+            &receipts,
+            DecisionReceipt {
+                request_id: receipts.request_id,
+                tool: name,
+                chain: received.chain(),
+                pop: received.signature().to_bytes(),
+                pop_args: call.pop_args(),
+                trusted_roots_hash: [0; 32],
+                denial: Some(&denial),
+            },
+        );
         return deny(reason::from_denial_code(denial.code()));
     }
+    let allowed = DecisionReceipt {
+        request_id: receipts.request_id,
+        tool: name,
+        chain: received.chain(),
+        pop: received.signature().to_bytes(),
+        pop_args: call.pop_args(),
+        trusted_roots_hash: [0; 32],
+        denial: None,
+    };
     match meta_mode {
-        MetaMode::Preserve => allow_unchanged(),
+        MetaMode::Preserve => {
+            record(&receipts, allowed);
+            allow_unchanged()
+        }
         MetaMode::Strip => match mcp::strip_tenuo(document) {
-            Ok(body) => Outcome {
-                allow: true,
-                reason_code: "",
-                replacement: Some(body),
-            },
+            Ok(body) => {
+                record(&receipts, allowed);
+                Outcome {
+                    allow: true,
+                    reason_code: "",
+                    replacement: Some(body),
+                }
+            }
             Err(_) => deny(reason::VERIFIER_FAILED),
         },
     }
+}
+
+fn record(receipts: &ReceiptContext<'_>, mut decision: DecisionReceipt<'_>) {
+    let (Some(log), Some(trusted_roots_hash)) = (receipts.log, receipts.trusted_roots_hash) else {
+        return;
+    };
+    decision.trusted_roots_hash = trusted_roots_hash;
+    log.record(decision);
 }
 
 fn allow_unchanged() -> Outcome {
@@ -118,6 +171,7 @@ fn deny(reason_code: &'static str) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::receipt::ReceiptLog;
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tenuo::sdk::transport::mcp_meta::encode_meta;
@@ -178,7 +232,7 @@ mod tests {
         let issuer = SigningKey::generate();
         let policy = policy_for(&issuer);
         let body = tools_call("restart_service", json!({"service": "payments"}), None);
-        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, None);
         assert!(!outcome.allow);
         assert_eq!(outcome.reason_code, reason::MISSING_WARRANT);
         assert!(outcome.replacement.is_none());
@@ -193,7 +247,7 @@ mod tests {
         let arguments = json!({"service": "payments", "environment": "staging"});
         let meta = sign(&issued, &holder, "restart_service", &arguments);
         let body = tools_call("restart_service", arguments, Some(meta));
-        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, None);
         assert!(!outcome.allow);
         assert_eq!(outcome.reason_code, reason::TOOL_DENIED);
     }
@@ -207,11 +261,11 @@ mod tests {
         let arguments = json!({"service": "payments"});
         let meta = sign(&issued, &holder, "read_logs", &arguments);
         let body = tools_call("read_logs", arguments, Some(meta));
-        let preserved = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve);
+        let preserved = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, None);
         assert!(preserved.allow);
         assert!(preserved.replacement.is_none());
 
-        let stripped = evaluate(&policy, "sbx", true, &body, MetaMode::Strip);
+        let stripped = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None);
         assert!(stripped.allow);
         let replacement = stripped.replacement.expect("replacement");
         let document: Value = serde_json::from_slice(&replacement).expect("json");
@@ -230,17 +284,17 @@ mod tests {
             "params": {}
         }))
         .unwrap();
-        assert!(evaluate(&policy, "sbx", true, &init, MetaMode::Preserve).allow);
+        assert!(evaluate(&policy, "sbx", true, &init, MetaMode::Preserve, None).allow);
 
         let batch = serde_json::to_vec(&json!([])).unwrap();
-        let outcome = evaluate(&policy, "sbx", true, &batch, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &batch, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::INVALID_REQUEST);
 
         let duplicate = br#"{"jsonrpc":"2.0","method":"ping","method":"ping"}"#;
-        let outcome = evaluate(&policy, "sbx", true, duplicate, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, duplicate, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::INVALID_REQUEST);
 
-        let outcome = evaluate(&policy, "other", true, &init, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "other", true, &init, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::VERIFIER_FAILED);
     }
 
@@ -278,7 +332,7 @@ mod tests {
             restart.clone(),
             Some(sign(&warrant_a, &task_a, "restart_service", &restart)),
         );
-        let outcome = evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &allowed, MetaMode::Preserve, None);
         assert!(outcome.allow);
 
         let other_task = tools_call(
@@ -286,7 +340,7 @@ mod tests {
             restart.clone(),
             Some(sign(&warrant_b, &task_b, "restart_service", &restart)),
         );
-        let outcome = evaluate(&policy, "sbx", true, &other_task, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &other_task, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::TOOL_DENIED);
 
         let copied = tools_call(
@@ -294,7 +348,7 @@ mod tests {
             restart.clone(),
             Some(sign(&warrant_a, &task_b, "restart_service", &restart)),
         );
-        let outcome = evaluate(&policy, "sbx", true, &copied, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &copied, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::INVALID_AUTHORITY);
 
         let too_many = json!({"service": "payments", "environment": "staging", "replicas": 8});
@@ -303,7 +357,47 @@ mod tests {
             too_many.clone(),
             Some(sign(&warrant_a, &task_a, "restart_service", &too_many)),
         );
-        let outcome = evaluate(&policy, "sbx", true, &over_limit, MetaMode::Preserve);
+        let outcome = evaluate(&policy, "sbx", true, &over_limit, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::CONSTRAINT_DENIED);
+    }
+
+    #[test]
+    fn receipts_follow_the_decision_and_a_failed_write_does_not_change_it() {
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let issued = warrant(&issuer, &holder, "read_logs");
+        let arguments = json!({"service": "payments"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let body = tools_call("read_logs", arguments, Some(meta));
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let log = ReceiptLog::open(
+            &directory.path().join("receipt.key"),
+            &directory.path().join("openshell.jsonl"),
+        )
+        .expect("receipt log");
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, Some(&log));
+        assert!(outcome.allow);
+        let line = std::fs::read_to_string(directory.path().join("openshell.jsonl")).expect("log");
+        let bytes = hex::decode(line.trim()).expect("hex");
+        let receipt: tenuo::Receipt =
+            ciborium::from_reader(bytes.as_slice()).expect("receipt cbor");
+        let payload = receipt.verify_signature().expect("signature");
+        assert_eq!(payload.request_id, "1");
+        assert_eq!(payload.action, "tool:read_logs");
+        assert_eq!(payload.outcome.as_str(), "allow");
+        assert!(payload.pop_signature.is_some());
+        assert_eq!(payload.authorizer_id.as_deref(), Some("openshell"));
+        assert!(payload.request_hash.is_some());
+        assert!(payload.trusted_roots_hash.is_some());
+
+        let blocked = tempfile::tempdir().expect("tempdir");
+        let blocked_log = blocked.path().join("openshell.jsonl");
+        std::fs::create_dir(&blocked_log).expect("directory blocks the log");
+        let log = ReceiptLog::open(&blocked.path().join("receipt.key"), &blocked_log)
+            .expect("receipt log opens before the first write");
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, Some(&log));
+        assert!(outcome.allow);
     }
 }

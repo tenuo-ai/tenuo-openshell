@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use tenuo_openshell_middleware::auth::ExtensionJwtVerifier;
 use tenuo_openshell_middleware::policy::PolicySet;
 use tenuo_openshell_middleware::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddlewareServer;
+use tenuo_openshell_middleware::receipt::ReceiptLog;
 use tenuo_openshell_middleware::service::MiddlewareService;
 use tokio::net::TcpListener;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
@@ -51,6 +52,14 @@ struct Args {
     /// Optional exact JWT kid expected from the OpenShell gateway.
     #[arg(long)]
     openshell_jwt_key_id: Option<String>,
+
+    /// 32-byte Ed25519 key that signs authorization receipts. Created mode 0600 when missing.
+    #[arg(long)]
+    receipt_key: Option<PathBuf>,
+
+    /// Hex receipt log. A write failure does not change the authorization decision.
+    #[arg(long)]
+    receipt_log: Option<PathBuf>,
 }
 
 struct ProductionSecurity {
@@ -86,6 +95,10 @@ async fn main() -> ExitCode {
         Ok(security) => security,
         Err(error) => return usage_error(error),
     };
+    let receipts = match receipt_log(&args) {
+        Ok(receipts) => receipts,
+        Err(error) => return usage_error(error),
+    };
     let listener = match TcpListener::bind(args.listen).await {
         Ok(listener) => listener,
         Err(error) => return usage_error(format!("bind {} failed: {error}", args.listen)),
@@ -98,7 +111,10 @@ async fn main() -> ExitCode {
                 "development-only: accepting unauthenticated middleware calls on {}",
                 args.listen
             );
-            let service = SupervisorMiddlewareServer::new(MiddlewareService::new(policy));
+            let service = SupervisorMiddlewareServer::new(install_receipts(
+                MiddlewareService::new(policy),
+                receipts,
+            ));
             Server::builder()
                 .add_service(service)
                 .serve_with_incoming(incoming)
@@ -106,7 +122,8 @@ async fn main() -> ExitCode {
         }
         Some(security) => {
             let audience = security.verifier.audience().to_string();
-            let service = MiddlewareService::authenticated(policy, audience);
+            let service =
+                install_receipts(MiddlewareService::authenticated(policy, audience), receipts);
             let interceptor = OpenShellAuthInterceptor {
                 verifier: security.verifier,
             };
@@ -126,6 +143,21 @@ async fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
+}
+
+fn receipt_log(args: &Args) -> Result<Option<ReceiptLog>, String> {
+    match (&args.receipt_key, &args.receipt_log) {
+        (None, None) => Ok(None),
+        (Some(key), Some(log)) => ReceiptLog::open(key, log).map(Some),
+        _ => Err("--receipt-key and --receipt-log must be set together".to_string()),
+    }
+}
+
+fn install_receipts(service: MiddlewareService, receipts: Option<ReceiptLog>) -> MiddlewareService {
+    match receipts {
+        Some(receipts) => service.with_receipts(receipts),
+        None => service,
+    }
 }
 
 fn production_security(args: &Args) -> Result<Option<ProductionSecurity>, String> {

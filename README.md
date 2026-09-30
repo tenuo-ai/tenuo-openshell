@@ -57,7 +57,10 @@ The launcher downloads the pinned OpenShell source when needed, builds its
 gateway and supervisor image, creates an authenticated HTTPS middleware
 registration, runs the requests, verifies that the effect server observed only
 the three allowed sandbox calls, then checks that the effect server still
-denies a direct call that did not pass through OpenShell, and cleans up. See [the demo guide](examples/demo/README.md)
+denies a direct call that did not pass through OpenShell. It then verifies
+the signed authorization receipts offline with the issuer and receipt-signer
+public keys. A receipt records the decision; it does not show that a tool
+ran. The launcher cleans up afterward. See [the demo guide](examples/demo/README.md)
 for prerequisites and overrides.
 
 ## OpenShell middleware

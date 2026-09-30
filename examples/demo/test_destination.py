@@ -47,6 +47,8 @@ def main() -> None:
     fixture = args.fixture
     effect_log = fixture / "effects.jsonl"
     effect_log.write_text("", encoding="utf-8")
+    receipt_dir = fixture / "receipts"
+    receipt_dir.mkdir(exist_ok=True)
     port = free_port()
     server = subprocess.Popen(
         [
@@ -59,7 +61,11 @@ def main() -> None:
             "--policy",
             str(fixture / "policy.json"),
         ],
-        env={**os.environ, "TENUO_DEMO_EFFECT_LOG": str(effect_log)},
+        env={
+            **os.environ,
+            "TENUO_DEMO_EFFECT_LOG": str(effect_log),
+            "TENUO_DEMO_RECEIPT_DIR": str(receipt_dir),
+        },
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -94,6 +100,28 @@ def main() -> None:
         recorded = json.loads(lines[0])
         if recorded["tool"] != "read_logs" or recorded["arguments"]["service"] != "payments":
             raise SystemExit(f"unexpected effect: {recorded}")
+
+        audit = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("audit_receipts.py")),
+                "--dir",
+                str(receipt_dir),
+                "--policy",
+                str(fixture / "policy.json"),
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if audit.returncode != 0:
+            raise SystemExit(audit.stdout + audit.stderr)
+        if "destination allow" not in audit.stdout or "request 1" not in audit.stdout:
+            raise SystemExit(audit.stdout)
+        if "destination deny tool-not-authorized" not in audit.stdout:
+            raise SystemExit(audit.stdout)
+        if "request 8" in audit.stdout:
+            raise SystemExit(audit.stdout)
     finally:
         server.terminate()
         try:

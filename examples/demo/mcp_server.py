@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextvars
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -95,6 +97,12 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "tenuo-demo-mcp/1"
     verifier: Any = None
     effect_log: Path | None = None
+    runtime: Any = None
+    receipt_log: Path | None = None
+    request_ids: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+        "tenuo_demo_request_id", default=None
+    )
+    receipt_lock = threading.Lock()
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":
@@ -178,13 +186,22 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(name, str) or not name or not isinstance(arguments, dict):
             self._denied(request_id, -32001)
             return
+        token = None
+        if request_id is not None:
+            token = self.request_ids.set(str(request_id))
         try:
-            meta = normalize_meta(params.get("_meta"))
-            result = self.verifier.verify(name, arguments, meta=meta)
-        except Exception:
-            print(f"destination verifier failed for {name}", flush=True)
-            self._denied(request_id, -32001)
-            return
+            with self.receipt_lock:
+                try:
+                    meta = normalize_meta(params.get("_meta"))
+                    result = self.verifier.verify(name, arguments, meta=meta)
+                except Exception:
+                    print(f"destination verifier failed for {name}", flush=True)
+                    self._denied(request_id, -32001)
+                    return
+                self._store_receipts()
+        finally:
+            if token is not None:
+                self.request_ids.reset(token)
         if not result.allowed:
             code = result.jsonrpc_error_code or -32001
             print(f"destination denied {name} code={code}", flush=True)
@@ -208,6 +225,28 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
 
+    def _store_receipts(self) -> None:
+        runtime = self.runtime
+        path = self.receipt_log
+        if runtime is None or path is None:
+            return
+        try:
+            wires = runtime.drain_receipts()
+        except Exception:
+            print("receipt was not stored", flush=True)
+            return
+        if not wires:
+            return
+        try:
+            with path.open("a", encoding="ascii") as handle:
+                for wire in wires:
+                    handle.write(str(wire).strip() + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            runtime.acknowledge_receipts(len(wires))
+        except OSError:
+            print("receipt was not stored", flush=True)
+
     def _denied(self, request_id: object, code: int) -> None:
         self._json(
             200,
@@ -230,6 +269,34 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+def install_destination_receipts(directory: Path, roots: list[Any]) -> Any:
+    """Collect destination receipts with this process's own signing key."""
+    import tenuo.receipts as receipts
+    from tenuo.identity import HolderIdentity
+    from tenuo.runtime import Runtime
+
+    identity = HolderIdentity.generate()
+    runtime = Runtime(identity, roots, receipts="collect")
+    directory.mkdir(parents=True, exist_ok=True)
+    public = identity.public_key.to_bytes().hex()
+    (directory / "destination.pub").write_text(public + "\n", encoding="ascii")
+    original = receipts.collect_enforcement_receipt
+
+    def collect(result: object, chain_result: object = None, runtime: object = None) -> None:
+        request_id = Handler.request_ids.get()
+        if request_id:
+            try:
+                setattr(result, "request_id", request_id)
+            except Exception:
+                pass
+        return original(result, chain_result, runtime=runtime)
+
+    receipts.collect_enforcement_receipt = collect
+    Handler.runtime = runtime
+    Handler.receipt_log = directory / "destination.jsonl"
+    return runtime
+
+
 def main() -> None:
     require_tenuo()
     from tenuo import Authorizer
@@ -243,7 +310,15 @@ def main() -> None:
     effect_log = os.environ.get("TENUO_DEMO_EFFECT_LOG")
     if not effect_log:
         raise SystemExit("TENUO_DEMO_EFFECT_LOG is required")
-    Handler.verifier = MCPVerifier(authorizer=Authorizer(trusted_roots=load_roots(args.policy)))
+    roots = load_roots(args.policy)
+    runtime = None
+    receipt_dir = os.environ.get("TENUO_DEMO_RECEIPT_DIR")
+    if receipt_dir:
+        runtime = install_destination_receipts(Path(receipt_dir), roots)
+    Handler.verifier = MCPVerifier(
+        authorizer=Authorizer(trusted_roots=roots),
+        runtime=runtime,
+    )
     Handler.effect_log = Path(effect_log)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 

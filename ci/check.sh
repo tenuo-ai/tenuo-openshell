@@ -8,7 +8,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh
-python3 -m py_compile examples/demo/mcp_server.py
+python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py
 
 fixture_dir="$(mktemp -d)"
 trap 'rm -rf "$fixture_dir"' EXIT

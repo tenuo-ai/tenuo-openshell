@@ -25,6 +25,8 @@ pub enum McpRequest {
     ToolCall {
         name: String,
         arguments: Value,
+        /// JSON-RPC id, used as the receipt request id when it is present.
+        request_id: String,
         /// `params._meta.tenuo` when present.
         tenuo: Option<Value>,
         /// Full JSON-RPC object, used when `_meta.tenuo` is removed on allow.
@@ -89,9 +91,18 @@ fn parse_tool_call(document: Value) -> Result<McpRequest, McpError> {
     Ok(McpRequest::ToolCall {
         name,
         arguments,
+        request_id: jsonrpc_id(&document),
         tenuo,
         document,
     })
+}
+
+fn jsonrpc_id(document: &Value) -> String {
+    match document.get("id") {
+        Some(Value::String(text)) if !text.is_empty() => text.clone(),
+        Some(Value::Number(number)) => number.to_string(),
+        _ => String::new(),
+    }
 }
 
 /// JSON encoding of `document` with `params._meta.tenuo` removed.

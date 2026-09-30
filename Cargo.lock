@@ -1885,6 +1885,7 @@ dependencies = [
 name = "tenuo-openshell-middleware"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "clap",
  "hex",
  "jsonwebtoken",

@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod policy;
 pub mod proto;
 pub mod reason;
+pub mod receipt;
 pub mod service;
 
 pub use evaluate::{evaluate, Outcome};

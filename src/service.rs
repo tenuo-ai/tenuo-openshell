@@ -10,6 +10,7 @@ use crate::proto::openshell::middleware::v1::{
     SupervisorMiddlewarePhase, ValidateConfigRequest, ValidateConfigResponse,
 };
 use crate::reason;
+use crate::receipt::ReceiptLog;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
@@ -19,6 +20,7 @@ const CONTRACT_CAPABILITY: &str = "openshell.supervisor-middleware.contract";
 pub struct MiddlewareService {
     policy: Arc<PolicySet>,
     expected_audience: Option<String>,
+    receipts: Option<Arc<ReceiptLog>>,
 }
 
 impl MiddlewareService {
@@ -26,6 +28,7 @@ impl MiddlewareService {
         Self {
             policy: Arc::new(policy),
             expected_audience: None,
+            receipts: None,
         }
     }
 
@@ -33,7 +36,13 @@ impl MiddlewareService {
         Self {
             policy: Arc::new(policy),
             expected_audience: Some(expected_audience),
+            receipts: None,
         }
+    }
+
+    pub fn with_receipts(mut self, receipts: ReceiptLog) -> Self {
+        self.receipts = Some(Arc::new(receipts));
+        self
     }
 
     #[allow(clippy::result_large_err)]
@@ -154,6 +163,7 @@ impl SupervisorMiddleware for MiddlewareService {
             pre_credentials,
             &request.body,
             meta_mode,
+            self.receipts.as_deref(),
         );
         Ok(Response::new(http_result(outcome)))
     }
