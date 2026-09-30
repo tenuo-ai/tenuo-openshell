@@ -23,6 +23,14 @@ All notable changes will be documented here. The format follows
 - `single_use_tools` accepts each proof of possession for a listed tool once
   across the deployment; resends deny `tenuo_pop_replayed`.
 - Per-sandbox `mcp.passthrough_methods` and `mcp.allow_client_responses`.
+- `tenuo-openshell-agent`: in-sandbox holder key, warrant from a file or
+  `TENUO_WARRANT`, and a loopback MCP proxy that signs `tools/call`, denies
+  out-of-warrant calls locally, and turns OpenShell denials into JSON-RPC
+  errors.
+- `tenuo-openshell`: `policy add`, `register`, `warrant issue`, and
+  `provision` operator commands.
+- Demo scenario with an unmodified MCP Python SDK client through the signing
+  proxy.
 - Demo scenario where the sandbox generates its holder key and signs calls at
   run time; documented holder-key custody model.
 

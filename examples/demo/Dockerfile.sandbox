@@ -1,21 +1,26 @@
-FROM rust:1.91-bookworm AS signer
+FROM rust:1.91-bookworm AS build
 WORKDIR /source
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto ./proto
 COPY src ./src
-RUN cargo build --release --locked --bin tenuo-demo-fixture
+COPY agent ./agent
+RUN cargo build --release --locked -p tenuo-openshell-agent --bin tenuo-openshell-agent
 
 FROM nvcr.io/nvidia/base/ubuntu@sha256:c280ee89f8bfcbdaba6179ad4347f60c509e841cbe63eb93002f01bf70e0819c
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl python3 python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && groupmod --new-name sandbox ubuntu \
     && usermod --login sandbox --home /home/sandbox --move-home ubuntu
 
-# The task runtime generates its holder key and signs each call inside the
-# sandbox. The signer makes no network request; curl sends the signed body.
-COPY --from=signer /source/target/release/tenuo-demo-fixture /usr/local/bin/tenuo-signer
+# The task runtime: holder key, warrant, and the loopback signing proxy.
+COPY --from=build /source/target/release/tenuo-openshell-agent /usr/local/bin/tenuo-openshell-agent
+
+# An unmodified MCP client. It has no Tenuo dependency.
+RUN python3 -m venv /usr/local/lib/tenuo-demo \
+    && /usr/local/lib/tenuo-demo/bin/pip install --no-cache-dir 'mcp==1.30.0'
+COPY examples/demo/mcp_client.py /usr/local/lib/tenuo-demo/mcp_client.py
 
 USER sandbox
 WORKDIR /home/sandbox

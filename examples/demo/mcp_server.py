@@ -22,6 +22,9 @@ from pathlib import Path
 from typing import Any
 
 
+SUPPORTED_PROTOCOL_VERSIONS = {"2025-03-26", "2025-06-18", "2025-11-25"}
+
+
 def require_tenuo() -> None:
     try:
         import tenuo
@@ -109,6 +112,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":
             self._json(200, {"ok": True})
+        elif self.path == "/mcp":
+            # No server-to-client event stream is offered. MCP clients treat
+            # 405 as "not supported" and continue.
+            self._json(405, {"error": "method_not_allowed"})
         else:
             self._json(404, {"error": "not_found"})
 
@@ -132,13 +139,16 @@ class Handler(BaseHTTPRequestHandler):
             self._tool_call(request_id, document.get("params"))
             return
         if method == "initialize":
+            params = document.get("params")
+            requested = params.get("protocolVersion") if isinstance(params, dict) else None
+            version = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else "2025-11-25"
             self._json(
                 200,
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
-                        "protocolVersion": "2025-11-25",
+                        "protocolVersion": version,
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": "tenuo-demo", "version": "1"},
                     },

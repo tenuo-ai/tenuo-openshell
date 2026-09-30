@@ -7,4 +7,5 @@ python
 tests
 docs
 examples
+!examples/demo/mcp_client.py
 results

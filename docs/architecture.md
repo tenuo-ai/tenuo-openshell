@@ -26,6 +26,7 @@ credential injection ──► destination (optional defense-in-depth verificati
 
 | Component | Responsibility | Security boundary? |
 | --- | --- | --- |
+| `tenuo-openshell-agent` | Hold the task's key and warrant in the sandbox; sign MCP calls through a loopback proxy | No; it gives early, readable denials. The middleware enforces |
 | Agent Toolkit plugin | Fast denial before a Python function runs | Defense in depth; shares the application process |
 | OpenShell middleware | Verify caller identity, destination, and Tenuo authority for covered outbound MCP calls | Yes, for configured bindings |
 | OpenShell L7 policy | Restrict destination and MCP tool name | Yes, but does not inspect nested tool arguments |
@@ -64,11 +65,16 @@ What it does not guarantee: that the agent only uses its authority for the
 task's intent. That is what narrow warrants, approvals, and short lifetimes
 are for.
 
+`tenuo-openshell-agent` implements this model: it generates the key, holds the
+warrant, and signs calls through a loopback MCP proxy so the agent's MCP client
+is unchanged. `tenuo-openshell provision` performs steps 1 and 2 from the
+operator side. See [Running an agent under Tenuo](sandbox-agent.md).
+
 A signer outside the sandbox adds protection only if it decides what to sign.
 A signer that signs whatever the sandbox asks is equivalent to a key inside
-the sandbox. The demo's `sandbox-signed read` scenario exercises the supported
-model end to end; the other scenarios use host-signed fixtures so that each
-negative case is reproducible.
+the sandbox. The demo's `MCP client` scenarios exercise the supported model
+end to end with an unmodified MCP SDK client; the other scenarios use
+host-signed fixtures so that each negative case is reproducible.
 
 ## Destination binding
 

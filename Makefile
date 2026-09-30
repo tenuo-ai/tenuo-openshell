@@ -6,7 +6,7 @@ check:
 test: test-rust test-python
 
 test-rust:
-	cargo test --all-targets --locked
+	cargo test --workspace --all-targets --locked
 
 test-python:
 	uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q

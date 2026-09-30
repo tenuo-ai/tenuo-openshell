@@ -3,6 +3,7 @@ WORKDIR /source
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto ./proto
 COPY src ./src
+COPY agent ./agent
 RUN cargo build --release --locked --bin tenuo-openshell-middleware
 
 FROM debian:bookworm-slim
