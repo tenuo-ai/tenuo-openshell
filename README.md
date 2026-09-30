@@ -204,6 +204,7 @@ Internet-Draft, authored by Tenuo for interoperable agent delegation.
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
+| Review attackers, controls, and residual risk | [Threat model](docs/threat-model.md) |
 | Configure Kubernetes | [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Connect an optional control plane | [Provider contract](docs/providers.md) |
 | Inspect the pinned NVIDIA contract | [Upstream verification](docs/upstream-verification.md) |

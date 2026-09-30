@@ -37,6 +37,9 @@ Trust roots are selected by authenticated, immutable `sandbox_id`, never a
 display name. The middleware runs before OpenShell injects provider
 credentials and therefore must not receive them.
 
+The [threat model](threat-model.md) lists the attackers these boundaries face,
+where each control is enforced, and the residual risk.
+
 ## Holder key custody
 
 Proof of possession is signed per call over the warrant, tool, arguments, and
