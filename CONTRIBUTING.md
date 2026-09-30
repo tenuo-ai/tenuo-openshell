@@ -19,6 +19,27 @@ When Helm is installed it also lints the production chart. Set
 Use `make e2e` for changes to protocols, policy evaluation, authentication,
 container behavior, demo assets, or the OpenShell pin.
 
+`make check` also formats, lints, and compiles the fuzz targets, and runs
+`cargo deny check` when `cargo-deny` is installed. `deny.toml` holds the
+advisory, license, and source policy. Add an advisory ignore only with the
+reason it does not apply and the condition for removing it.
+
+## Fuzzing
+
+`fuzz/` is a separate cargo-fuzz workspace with three targets: `mcp_parse`
+(MCP body parsing), `policy_load` (policy documents), and `evaluate` (the full
+decision against a fixed policy). Run one with a nightly toolchain:
+
+```bash
+cd fuzz
+cargo +nightly fuzz run evaluate corpus/evaluate seeds/evaluate -- -max_total_time=300
+```
+
+`seeds/` holds committed starting inputs; `corpus/` and `artifacts/` stay
+local. On macOS, add `--sanitizer none` if AddressSanitizer hangs at startup.
+Fix a crash with a regression test in the main crate, not only in the fuzz
+target.
+
 ## Pull requests
 
 - Keep changes focused and add tests for allow and deny behavior.
