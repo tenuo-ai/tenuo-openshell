@@ -1,4 +1,4 @@
-//! Atomic approval replay protection.
+//! Atomic replay protection for approval nonces and single-use proofs.
 
 use async_trait::async_trait;
 use redis::aio::ConnectionManager;
@@ -383,6 +383,26 @@ pub fn claims(approvals: &[SignedApproval]) -> Result<Vec<ReplayClaim>, ReplayEr
         });
     }
     Ok(claims)
+}
+
+/// Domain prefix for proof-of-possession claims. Approval claims start with a
+/// 32-byte approver key, so the two claim families do not share keys.
+const POP_CLAIM_DOMAIN: &[u8; 16] = b"tenuo-pop-claim1";
+
+/// Claim for one proof-of-possession signature.
+///
+/// The proof signs the warrant, tool, arguments, and a time bucket. Ed25519 is
+/// deterministic and verification is strict, so an identical call in the same
+/// bucket has the same signature and maps to the same claim.
+pub fn pop_claim(signature: &[u8], ttl_secs: u64) -> ReplayClaim {
+    let mut key = [0u8; 48];
+    key[..16].copy_from_slice(POP_CLAIM_DOMAIN);
+    key[16..].copy_from_slice(&Sha256::digest(signature));
+    let now = unix_time().unwrap_or(0);
+    ReplayClaim {
+        key,
+        expires_at: now.saturating_add(ttl_secs.max(1)),
+    }
 }
 
 fn new_reservation(claims: &[ReplayClaim]) -> ReplayReservation {

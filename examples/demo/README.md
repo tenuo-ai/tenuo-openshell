@@ -11,10 +11,17 @@ key, created in its own process and not copied into a sandbox. Task A then
 attenuates that warrant to a read-only child, with a 120 second lifetime, for
 a third holder.
 
-Each holder key is created by its own process and stored in its own file. The
-sandbox command receives the signed request body only. No holder key is copied
-into a sandbox. The issuer secret is not written. The attenuation process
-reads Task A's key and the child public key. It does not read the child secret.
+The negative scenarios use requests signed ahead of time on the host, so each
+denial is reproducible. Each of those holder keys is created by its own
+process and stored in its own file, and the sandbox receives only the signed
+body. The issuer secret is not written. The attenuation process reads Task A's
+key and the child public key. It does not read the child secret.
+
+The `sandbox-signed read` scenario (step 16) uses the production custody model
+instead: the task runtime inside the sandbox generates its own holder key,
+Task A delegates to the public key it prints, and the runtime signs the call
+at run time. That private key never leaves the sandbox. See
+[holder key custody](../../docs/architecture.md#holder-key-custody).
 
 1. Task A reads staging payments logs. Allowed.
 2. Task B reads staging payments logs with its own warrant. Allowed.
@@ -49,6 +56,11 @@ reads Task A's key and the child public key. It does not read the child secret.
     separately minted read-only child warrant is denied before the
     `restart_service` skill runs. The machine-readable result is retained as
     `results/evidence/a2a-handoff.json`.
+
+16. The task runtime inside the first sandbox generates a holder key and
+    prints its public key. Task A delegates a read-only child warrant to it.
+    The runtime signs a staging payments read at run time and sends it with
+    curl. Allowed.
 
 The A2A step is maintained under
 [`examples/interoperability`](../interoperability/README.md). It is an

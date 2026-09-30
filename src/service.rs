@@ -2,7 +2,7 @@
 
 use crate::auth::{AuthenticatedCaller, CallerKind};
 use crate::evaluate::{self, Outcome};
-use crate::policy::{self, PolicyManager, PolicySet};
+use crate::policy::{self, PolicyManager, PolicySet, RequestTarget};
 use crate::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddleware;
 use crate::proto::openshell::middleware::v1::{
     Decision, HttpRequestEvaluation, HttpRequestResult, MiddlewareBinding,
@@ -191,11 +191,27 @@ impl SupervisorMiddleware for MiddlewareService {
             .map(|context| context.sandbox_id.as_str())
             .unwrap_or("");
         let pre_credentials = request.phase == SupervisorMiddlewarePhase::PreCredentials as i32;
+        let Some(target) = request.target.as_ref() else {
+            return Ok(Response::new(http_result(evaluate::Outcome {
+                allow: false,
+                reason_code: reason::INVALID_REQUEST,
+                replacement: None,
+                request_id: String::new(),
+                decision_us: 0,
+            })));
+        };
+        let target = RequestTarget {
+            method: &target.method,
+            host: &target.host,
+            port: target.port,
+            path: &target.path,
+        };
         let policy = self.policy.snapshot();
         let outcome = evaluate::evaluate(
             &policy,
             sandbox_id,
             pre_credentials,
+            &target,
             &request.body,
             meta_mode,
             self.receipts.as_deref(),

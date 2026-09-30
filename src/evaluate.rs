@@ -4,10 +4,11 @@
 //! receipt persistence fails closed before an effect is allowed.
 
 use crate::mcp::{self, McpError, McpRequest};
-use crate::policy::{MetaMode, PolicySet};
+use crate::policy::{MetaMode, PolicySet, RequestTarget};
 use crate::reason;
 use crate::receipt::{DecisionReceipt, ReceiptLog};
 use serde_json::Value;
+use std::sync::OnceLock;
 use tenuo::sdk::prelude::*;
 use tenuo::sdk::transport::mcp_meta::decode_meta;
 
@@ -22,16 +23,17 @@ pub struct Outcome {
     pub decision_us: u64,
 }
 
-/// Check one admitted MCP body.
+/// Check one admitted MCP request.
 ///
 /// `decision_us` is the time spent in this check. When `TENUO_DECISION_LOG` is
-/// set and the JSON-RPC id is present, one `tenuo_decision` line is written
-/// to stderr. The line carries the request id, duration, outcome, and reason
-/// code.
+/// set at startup and the JSON-RPC id is present, one `tenuo_decision` line is
+/// written to stderr. The line carries the request id, duration, outcome, and
+/// reason code.
 pub async fn evaluate(
     policy: &PolicySet,
     sandbox_id: &str,
     pre_credentials: bool,
+    target: &RequestTarget<'_>,
     body: &[u8],
     meta_mode: MetaMode,
     receipts: Option<&ReceiptLog>,
@@ -41,13 +43,14 @@ pub async fn evaluate(
         policy,
         sandbox_id,
         pre_credentials,
+        target,
         body,
         meta_mode,
         receipts,
     )
     .await;
     outcome.decision_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-    if std::env::var_os("TENUO_DECISION_LOG").is_some() && !outcome.request_id.is_empty() {
+    if decision_log_enabled() && !outcome.request_id.is_empty() {
         let name = if outcome.allow { "allow" } else { "deny" };
         let reason = if outcome.reason_code.is_empty() {
             "-"
@@ -62,10 +65,16 @@ pub async fn evaluate(
     outcome
 }
 
+fn decision_log_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("TENUO_DECISION_LOG").is_some())
+}
+
 async fn decide(
     policy: &PolicySet,
     sandbox_id: &str,
     pre_credentials: bool,
+    target: &RequestTarget<'_>,
     body: &[u8],
     meta_mode: MetaMode,
     receipts: Option<&ReceiptLog>,
@@ -77,9 +86,26 @@ async fn decide(
         Ok(guard) => guard,
         Err(code) => return deny(code),
     };
-    let trusted_roots_hash = policy.trusted_roots_hash(sandbox_id).ok();
+    let trusted_roots_hash = match policy.trusted_roots_hash(sandbox_id) {
+        Ok(hash) => hash,
+        Err(code) => return deny(code),
+    };
     let revocation = policy.revocation_commitment(sandbox_id).ok().flatten();
-    let request = match mcp::parse_body(body) {
+    if let Err(code) = policy.admit_destination(sandbox_id, target, None) {
+        return deny(code);
+    }
+    // Streamable HTTP opens the server-to-client stream with GET and ends the
+    // session with DELETE. Neither carries a JSON-RPC message.
+    match target.method {
+        "POST" => {}
+        "GET" | "DELETE" if body.is_empty() => return allow_unchanged(),
+        _ => return deny(reason::INVALID_REQUEST),
+    }
+    let options = match policy.mcp_options(sandbox_id) {
+        Ok(options) => options,
+        Err(code) => return deny(code),
+    };
+    let request = match mcp::parse_body(body, options) {
         Ok(request) => request,
         Err(
             McpError::Batch
@@ -94,7 +120,7 @@ async fn decide(
         }
     };
     match request {
-        McpRequest::PassThrough => allow_unchanged(),
+        McpRequest::PassThrough | McpRequest::ClientResponse => allow_unchanged(),
         McpRequest::ToolCall {
             name,
             arguments,
@@ -102,6 +128,9 @@ async fn decide(
             tenuo,
             document,
         } => {
+            if let Err(code) = policy.admit_destination(sandbox_id, target, Some(&name)) {
+                return identified(deny(code), &request_id);
+            }
             authorize_tool(
                 AuthorizationContext {
                     policy,
@@ -128,7 +157,7 @@ async fn decide(
 struct ReceiptContext<'a> {
     log: Option<&'a ReceiptLog>,
     request_id: &'a str,
-    trusted_roots_hash: Option<[u8; 32]>,
+    trusted_roots_hash: [u8; 32],
     revocation: Option<(u64, [u8; 32])>,
 }
 
@@ -171,7 +200,7 @@ async fn authorize_tool(
                 chain: received.chain(),
                 pop: received.signature().to_bytes(),
                 pop_args: call.pop_args(),
-                trusted_roots_hash: [0; 32],
+                trusted_roots_hash: receipts.trusted_roots_hash,
                 srl_version: receipts.revocation.map(|value| value.0),
                 srl_hash: receipts.revocation.map(|value| value.1),
                 denial: Some(&denial),
@@ -191,7 +220,12 @@ async fn authorize_tool(
     };
     let reservation = match authorization
         .policy
-        .reserve_approvals(authorization.sandbox_id, received.approvals())
+        .reserve_claims(
+            authorization.sandbox_id,
+            name,
+            &received.signature().to_bytes(),
+            received.approvals(),
+        )
         .await
     {
         Ok(reservation) => reservation,
@@ -203,7 +237,7 @@ async fn authorize_tool(
         chain: received.chain(),
         pop: received.signature().to_bytes(),
         pop_args: call.pop_args(),
-        trusted_roots_hash: [0; 32],
+        trusted_roots_hash: receipts.trusted_roots_hash,
         srl_version: receipts.revocation.map(|value| value.0),
         srl_hash: receipts.revocation.map(|value| value.1),
         denial: None,
@@ -236,12 +270,8 @@ async fn authorize_tool(
     )
 }
 
-fn record(receipts: &ReceiptContext<'_>, mut decision: DecisionReceipt<'_>) -> bool {
-    let (Some(log), Some(trusted_roots_hash)) = (receipts.log, receipts.trusted_roots_hash) else {
-        return receipts.log.is_none();
-    };
-    decision.trusted_roots_hash = trusted_roots_hash;
-    log.record(decision)
+fn record(receipts: &ReceiptContext<'_>, decision: DecisionReceipt<'_>) -> bool {
+    receipts.log.is_none_or(|log| log.record(decision))
 }
 
 fn receipt_is_required(receipts: &ReceiptContext<'_>) -> bool {
@@ -253,7 +283,7 @@ fn receipt_log_ready(receipts: &ReceiptContext<'_>) -> bool {
 }
 
 async fn release_reservation(
-    reservation: Option<crate::policy::ApprovalReservation>,
+    reservation: Option<crate::policy::ClaimReservation>,
     request_id: &str,
 ) {
     if let Some(reservation) = reservation {
@@ -302,9 +332,36 @@ mod tests {
     use tenuo::sdk::transport::mcp_meta::encode_meta;
     use tenuo::{ConstraintSet, Exact, Range, SigningKey, Warrant, SIGNATURE_CONTEXT};
 
+    const MCP: RequestTarget<'static> = RequestTarget {
+        method: "POST",
+        host: "mcp.test",
+        port: 443,
+        path: "/mcp",
+    };
+
     fn evaluate(
         policy: &PolicySet,
         sandbox_id: &str,
+        pre_credentials: bool,
+        body: &[u8],
+        meta_mode: MetaMode,
+        receipts: Option<&ReceiptLog>,
+    ) -> Outcome {
+        evaluate_at(
+            policy,
+            sandbox_id,
+            &MCP,
+            pre_credentials,
+            body,
+            meta_mode,
+            receipts,
+        )
+    }
+
+    fn evaluate_at(
+        policy: &PolicySet,
+        sandbox_id: &str,
+        target: &RequestTarget<'_>,
         pre_credentials: bool,
         body: &[u8],
         meta_mode: MetaMode,
@@ -314,10 +371,15 @@ mod tests {
             policy,
             sandbox_id,
             pre_credentials,
+            target,
             body,
             meta_mode,
             receipts,
         ))
+    }
+
+    fn destinations() -> Value {
+        json!([{"host": "mcp.test", "port": 443, "path": "/mcp", "tools": ["*"]}])
     }
 
     fn policy_for(root: &SigningKey) -> PolicySet {
@@ -325,8 +387,14 @@ mod tests {
             "max_warrant_lifetime_secs": 3600,
             "approval_replay_protection": true,
             "sandboxes": {
-                "sbx": { "trusted_roots": [hex::encode(root.public_key().to_bytes())] },
-                "sbx-other": { "trusted_roots": [hex::encode(root.public_key().to_bytes())] }
+                "sbx": {
+                    "trusted_roots": [hex::encode(root.public_key().to_bytes())],
+                    "destinations": destinations()
+                },
+                "sbx-other": {
+                    "trusted_roots": [hex::encode(root.public_key().to_bytes())],
+                    "destinations": destinations()
+                }
             }
         });
         PolicySet::from_json(document.to_string().as_bytes()).expect("policy")
@@ -484,6 +552,7 @@ mod tests {
             "sandboxes": {
                 "sbx": {
                     "trusted_roots": [hex::encode(issuer.public_key().to_bytes())],
+                    "destinations": destinations(),
                     "revocation": {
                         "signed_list_base64": srl.to_base64().expect("encoded srl"),
                         "max_staleness_secs": 300,
@@ -1012,5 +1081,198 @@ mod tests {
         );
         assert!(!outcome.allow);
         assert_eq!(outcome.reason_code, reason::VERIFIER_FAILED);
+    }
+
+    fn policy_with(root: &SigningKey, sandbox: Value) -> PolicySet {
+        let mut sandbox = sandbox;
+        sandbox["trusted_roots"] = json!([hex::encode(root.public_key().to_bytes())]);
+        let document = json!({
+            "max_warrant_lifetime_secs": 3600,
+            "approval_replay_protection": true,
+            "sandboxes": { "sbx": sandbox }
+        });
+        PolicySet::from_json(document.to_string().as_bytes()).expect("policy")
+    }
+
+    #[test]
+    fn a_warrant_is_spent_only_at_a_destination_that_serves_the_tool() {
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let policy = policy_with(
+            &issuer,
+            json!({"destinations": [
+                {"host": "logs.test", "port": 443, "path": "/mcp", "tools": ["read_logs"]},
+                {"host": "ops.test", "port": 443, "path": "/mcp", "tools": ["restart_service"]}
+            ]}),
+        );
+        let issued = warrant(&issuer, &holder, "read_logs");
+        let arguments = json!({"service": "payments"});
+        let body = tools_call(
+            "read_logs",
+            arguments.clone(),
+            Some(sign(&issued, &holder, "read_logs", &arguments)),
+        );
+        let at = |host, port, path| RequestTarget {
+            method: "POST",
+            host,
+            port,
+            path,
+        };
+        let run = |target: RequestTarget<'_>| {
+            evaluate_at(&policy, "sbx", &target, true, &body, MetaMode::Strip, None)
+        };
+        assert!(run(at("LOGS.test", 443, "/mcp")).allow);
+        let outcome = run(at("ops.test", 443, "/mcp"));
+        assert_eq!(outcome.reason_code, reason::DESTINATION_DENIED);
+        assert_eq!(outcome.request_id, "1");
+        let outcome = run(at("logs.test", 8443, "/mcp"));
+        assert_eq!(outcome.reason_code, reason::DESTINATION_DENIED);
+        let outcome = run(at("logs.test", 443, "/other"));
+        assert_eq!(outcome.reason_code, reason::DESTINATION_DENIED);
+        let outcome = run(at("unknown.test", 443, "/mcp"));
+        assert_eq!(outcome.reason_code, reason::DESTINATION_DENIED);
+    }
+
+    #[test]
+    fn streamable_http_stream_and_session_requests_pass_without_a_body() {
+        let issuer = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let with = |method| RequestTarget { method, ..MCP };
+        for method in ["GET", "DELETE"] {
+            let outcome = evaluate_at(
+                &policy,
+                "sbx",
+                &with(method),
+                true,
+                b"",
+                MetaMode::Strip,
+                None,
+            );
+            assert!(outcome.allow, "{method}");
+        }
+        let body = tools_call("read_logs", json!({}), None);
+        let outcome = evaluate_at(
+            &policy,
+            "sbx",
+            &with("GET"),
+            true,
+            &body,
+            MetaMode::Strip,
+            None,
+        );
+        assert_eq!(outcome.reason_code, reason::INVALID_REQUEST);
+        let outcome = evaluate_at(
+            &policy,
+            "sbx",
+            &with("PUT"),
+            true,
+            b"",
+            MetaMode::Strip,
+            None,
+        );
+        assert_eq!(outcome.reason_code, reason::INVALID_REQUEST);
+        let elsewhere = RequestTarget {
+            method: "GET",
+            host: "other.test",
+            ..MCP
+        };
+        let outcome = evaluate_at(&policy, "sbx", &elsewhere, true, b"", MetaMode::Strip, None);
+        assert_eq!(outcome.reason_code, reason::DESTINATION_DENIED);
+    }
+
+    #[test]
+    fn extra_methods_and_client_responses_are_opt_in_per_sandbox() {
+        let issuer = SigningKey::generate();
+        let read = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": "file:///a"}
+        }))
+        .unwrap();
+        let response = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "id": "s-1", "result": {"roots": []}
+        }))
+        .unwrap();
+
+        let strict = policy_for(&issuer);
+        for body in [&read, &response] {
+            let outcome = evaluate(&strict, "sbx", true, body, MetaMode::Strip, None);
+            assert_eq!(outcome.reason_code, reason::INVALID_REQUEST);
+        }
+
+        let open = policy_with(
+            &issuer,
+            json!({
+                "destinations": destinations(),
+                "mcp": {
+                    "passthrough_methods": ["resources/read"],
+                    "allow_client_responses": true
+                }
+            }),
+        );
+        for body in [&read, &response] {
+            assert!(evaluate(&open, "sbx", true, body, MetaMode::Strip, None).allow);
+        }
+        let ambiguous = br#"{"jsonrpc":"2.0","id":3,"result":{},"error":{}}"#;
+        let outcome = evaluate(&open, "sbx", true, ambiguous, MetaMode::Strip, None);
+        assert_eq!(outcome.reason_code, reason::INVALID_REQUEST);
+    }
+
+    #[test]
+    fn a_single_use_tool_accepts_one_copy_of_a_signed_call() {
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let policy = policy_with(
+            &issuer,
+            json!({
+                "destinations": destinations(),
+                "single_use_tools": ["restart_service"]
+            }),
+        );
+        let restart = scoped_warrant(&issuer, &holder, true);
+        let arguments = json!({"service": "payments", "environment": "staging", "replicas": 3});
+        let body = tools_call(
+            "restart_service",
+            arguments.clone(),
+            Some(sign(&restart, &holder, "restart_service", &arguments)),
+        );
+        assert!(evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None).allow);
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None);
+        assert_eq!(outcome.reason_code, reason::POP_REPLAYED);
+
+        let read = json!({"service": "payments", "environment": "staging"});
+        let body = tools_call(
+            "read_logs",
+            read.clone(),
+            Some(sign(&restart, &holder, "read_logs", &read)),
+        );
+        assert!(evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None).allow);
+        assert!(evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None).allow);
+    }
+
+    #[test]
+    fn denial_receipts_commit_to_the_trusted_roots() {
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let issued = warrant(&issuer, &holder, "read_logs");
+        let arguments = json!({"service": "payments"});
+        let body = tools_call(
+            "restart_service",
+            arguments.clone(),
+            Some(sign(&issued, &holder, "restart_service", &arguments)),
+        );
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("receipts.jsonl");
+        let log = ReceiptLog::open(&directory.path().join("receipt.key"), &path).expect("log");
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, Some(&log));
+        assert_eq!(outcome.reason_code, reason::TOOL_DENIED);
+        let line = std::fs::read_to_string(&path).expect("receipt");
+        let bytes = hex::decode(line.trim()).expect("hex");
+        let receipt: tenuo::Receipt = ciborium::from_reader(bytes.as_slice()).expect("cbor");
+        let payload = receipt.verify_signature().expect("signature");
+        assert_eq!(payload.outcome.as_str(), "deny");
+        assert_eq!(
+            payload.trusted_roots_hash,
+            Some(policy.trusted_roots_hash("sbx").unwrap())
+        );
     }
 }

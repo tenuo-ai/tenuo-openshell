@@ -20,9 +20,27 @@ All notable changes will be documented here. The format follows
 - Hardened HA Helm deployment with required receipt persistence and network
   isolation.
 - Native Redis Cluster replay support and provider-neutral policy readiness.
+- `single_use_tools` accepts each proof of possession for a listed tool once
+  across the deployment; resends deny `tenuo_pop_replayed`.
+- Per-sandbox `mcp.passthrough_methods` and `mcp.allow_client_responses`.
+- Demo scenario where the sandbox generates its holder key and signs calls at
+  run time; documented holder-key custody model.
+
+### Changed
+
+- Sandbox policies must list `destinations`: the MCP host, port, optional
+  path, and tools each serves. Other destinations, and tools a destination
+  does not serve, deny `tenuo_destination_denied`.
+- The middleware strips `params._meta.tenuo` on allow unless the binding sets
+  `tenuo_meta: preserve`.
+- Bodyless Streamable HTTP `GET` and `DELETE` requests are forwarded; other
+  bodyless or non-`POST` requests deny.
 
 ### Fixed
 
+- Denial receipts commit to the sandbox's trusted-roots digest when they are
+  built.
+- `TENUO_DECISION_LOG` is read once rather than on every decision.
 - Unified approval replay semantics across in-memory, standalone Redis, and
   Redis Cluster backends; approval nonces are single-use per deployment.
 - Release approval reservations when required receipt persistence prevents an

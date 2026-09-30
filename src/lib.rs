@@ -17,5 +17,5 @@ pub mod telemetry;
 
 pub use admin::ReadinessCheck;
 pub use evaluate::{evaluate, Outcome};
-pub use policy::{FilePolicyProvider, MetaMode, PolicyProvider, PolicySet};
+pub use policy::{FilePolicyProvider, MetaMode, PolicyProvider, PolicySet, RequestTarget};
 pub use service::MiddlewareService;

@@ -59,6 +59,7 @@ EXPECTED = {
     "missing warrant": ("deny", "allow", "openshell", "tenuo_missing_warrant"),
     "narrowed read": ("allow", "allow", "openshell", ""),
     "narrowed restart": ("deny", "allow", "openshell", "tenuo_tool_denied"),
+    "sandbox-signed read": ("allow", "allow", "openshell", ""),
     "wider child": ("refused", "not checked", "attenuation", "attenuation-refused"),
     "direct task B restart": ("deny", "allow", "destination", ""),
     "direct missing warrant": ("deny", "allow", "destination", ""),
@@ -71,6 +72,7 @@ BASELINE_REASON = {
     "task B read": "tool admission and the warrant agree",
     "approved restart": "tool admission and the signed approval agree",
     "narrowed read": "the child warrant still admits this read",
+    "sandbox-signed read": "the sandbox's own key signs a read its warrant admits",
 }
 
 
