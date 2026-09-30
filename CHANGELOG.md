@@ -53,6 +53,8 @@ All notable changes will be documented here. The format follows
   `tenuo_openshell_result_receipt_failures_total`, and
   `tenuo_openshell_result_correlation_evictions_total`.
 - Helm values for result evaluation and OTLP export.
+- The sandbox proxy reports a withheld result as a call that already ran, so
+  agents do not retry it as if it were denied.
 
 ### Changed
 

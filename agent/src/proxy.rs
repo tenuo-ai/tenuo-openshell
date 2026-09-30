@@ -122,15 +122,16 @@ async fn openshell_denial(upstream: reqwest::Response, id: &Value) -> Response<B
         })
         .unwrap_or_else(|| "forbidden".to_string());
     let approval = reason == "tenuo_approval_required";
+    // A result block comes after the call: the tool ran, only its result was
+    // withheld. Say so, so the agent does not retry a non-idempotent call.
+    let message = if reason.starts_with("tenuo_result_") {
+        "OpenShell withheld the result; the call already ran on the MCP server"
+    } else {
+        "OpenShell denied this call before it reached the MCP server"
+    };
     json(
         StatusCode::OK,
-        error_response(
-            id,
-            &reason,
-            "OpenShell denied this call before it reached the MCP server",
-            approval,
-            "openshell",
-        ),
+        error_response(id, &reason, message, approval, "openshell"),
     )
 }
 
@@ -213,13 +214,18 @@ mod tests {
         let body = to_bytes(request.into_body(), 1 << 20).await.unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         seen.bodies.lock().unwrap().push(value.clone());
-        if value["params"]["name"] == "denied_upstream" {
+        let reason = match value["params"]["name"].as_str() {
+            Some("denied_upstream") => Some("tenuo_constraint_denied"),
+            Some("withheld_upstream") => Some("tenuo_result_too_large"),
+            _ => None,
+        };
+        if let Some(reason) = reason {
             return Response::builder()
                 .status(403)
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"error":"middleware_denied","reason_code":"tenuo_constraint_denied"}"#,
-                ))
+                .body(Body::from(format!(
+                    r#"{{"error":"middleware_denied","reason_code":"{reason}"}}"#
+                )))
                 .unwrap();
         }
         Response::builder()
@@ -245,6 +251,7 @@ mod tests {
         let warrant = Warrant::builder()
             .capability("read_logs", ConstraintSet::new())
             .capability("denied_upstream", ConstraintSet::new())
+            .capability("withheld_upstream", ConstraintSet::new())
             .holder(key.public_key())
             .ttl(Duration::from_secs(300))
             .build(&SigningKey::generate())
@@ -330,5 +337,27 @@ mod tests {
             remote["error"]["data"]["tenuo"]["code"],
             "tenuo_constraint_denied"
         );
+        assert!(remote["error"]["data"]["tenuo"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("before it reached"));
+
+        let withheld: Value = client
+            .post(&url)
+            .json(&call("withheld_upstream"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            withheld["error"]["data"]["tenuo"]["code"],
+            "tenuo_result_too_large"
+        );
+        assert!(withheld["error"]["data"]["tenuo"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already ran"));
     }
 }

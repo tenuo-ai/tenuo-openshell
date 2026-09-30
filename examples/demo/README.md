@@ -66,8 +66,10 @@ private key never leaves the sandbox. See
     the proxy reach the MCP server.
 
 17. A higher policy version limits the first sandbox's tool results to 64
-    bytes. The sandbox runtime signs another read. The middleware allows it,
-    the read runs, and OpenShell withholds its larger result with
+    bytes. Inside the sandbox, `tenuo-openshell-agent sign` signs another read
+    with the provisioned key and warrant, and curl sends it as JSON-RPC id 17.
+    The middleware allows it, the read runs, and OpenShell withholds its
+    larger result with
     `tenuo_result_too_large`. The block happens after the call, so it limits
     what reaches the agent; it does not undo the read.
 
