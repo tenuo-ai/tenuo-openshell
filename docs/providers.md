@@ -6,9 +6,9 @@ request to a hosted Tenuo service. An account, API key, or control plane is not
 part of the quickstart or the authorization path.
 
 This document defines the narrow interfaces for operators that later want a
-control plane. The interfaces are deliberately provider-neutral, but the
-recommended shape matches the operational guarantees needed by Tenuo Cloud and
-other managed control planes.
+control plane. The interfaces are provider-neutral. Any control plane that
+follows them can refresh snapshots and export receipts without joining the
+authorization path.
 
 ## Invariants
 
@@ -107,9 +107,7 @@ the agent or enforcement protocol:
 | Readiness state | Report cache age and required-export backlog locally |
 | Optional status loop | Register the deployment and publish bounded health metrics |
 
-Tenuo Cloud is one possible implementation of those operations. It should be
-presented as an optional fleet-operations path, not as a prerequisite for the
-open-source integration.
+Tenuo Cloud is one optional implementation of this contract.
 
 ## Adapter acceptance tests
 
