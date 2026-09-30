@@ -166,12 +166,27 @@ class Handler(BaseHTTPRequestHandler):
                             {
                                 "name": "read_logs",
                                 "description": "Read service logs",
-                                "inputSchema": {"type": "object"},
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "service": {"type": "string"},
+                                        "environment": {"type": "string"},
+                                    },
+                                    "required": ["service", "environment"],
+                                },
                             },
                             {
                                 "name": "restart_service",
                                 "description": "Restart a service",
-                                "inputSchema": {"type": "object"},
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "service": {"type": "string"},
+                                        "environment": {"type": "string"},
+                                        "replicas": {"type": "integer"},
+                                    },
+                                    "required": ["service", "environment", "replicas"],
+                                },
                             },
                         ]
                     },

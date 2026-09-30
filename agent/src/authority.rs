@@ -5,6 +5,7 @@
 //! read from `TENUO_WARRANT` or from a file that the operator may replace
 //! while the proxy runs.
 
+use crate::approvals::ApprovalStore;
 use base64::Engine;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -158,6 +159,7 @@ fn check_holder(chain: &[Warrant], holder: &PublicKey) -> Result<(), AuthorityEr
 pub struct Holder {
     key: SigningKey,
     source: WarrantSource,
+    approvals: Option<ApprovalStore>,
 }
 
 /// A warrant chain ready to sign calls, with a local guard for early denial.
@@ -172,7 +174,21 @@ pub struct Presented {
 
 impl Holder {
     pub fn new(key: SigningKey, source: WarrantSource) -> Self {
-        Self { key, source }
+        Self {
+            key,
+            source,
+            approvals: None,
+        }
+    }
+
+    /// Attach installed approvals to gated calls and record pending requests.
+    pub fn with_approvals(mut self, store: ApprovalStore) -> Self {
+        self.approvals = Some(store);
+        self
+    }
+
+    pub fn approvals(&self) -> Option<&ApprovalStore> {
+        self.approvals.as_ref()
     }
 
     pub fn public_key(&self) -> PublicKey {

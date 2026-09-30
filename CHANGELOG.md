@@ -31,6 +31,12 @@ All notable changes will be documented here. The format follows
   `provision` operator commands.
 - Demo scenario with an unmodified MCP Python SDK client through the signing
   proxy.
+- Approvals through the sandbox proxy: pending requests recorded in the
+  sandbox, `tenuo-openshell approve` to review and sign them (hash recomputed
+  from what the approver sees), and single-use attachment on retry.
+- NeMo Agent Toolkit 1.8 ReAct agent example with a human approval step,
+  runnable without a model key, and an in-sandbox approval scenario in the
+  OpenShell demo.
 - Demo scenario where the sandbox generates its holder key and signs calls at
   run time; documented holder-key custody model.
 - Threat model covering assets, trust boundaries, attackers, controls, and

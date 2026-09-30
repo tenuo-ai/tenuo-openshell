@@ -167,15 +167,53 @@ failure:
 
 ```json
 {"jsonrpc": "2.0", "id": 3, "error": {
-  "code": -32001, "message": "Authorization denied",
+  "code": -32001, "message": "Authorization denied: Tool not authorized by warrant",
   "data": {"tenuo": {"code": "tool-not-authorized",
                      "message": "Tool not authorized by warrant",
                      "source": "agent"}}}}
 ```
 
+`message` carries the reason because many MCP clients show only that field.
 `source` is `agent` for a local denial and `openshell` for a middleware denial,
 whose `code` is the middleware reason code, such as `tenuo_constraint_denied`.
-Approval-gated calls use `-32002`.
+Approval-gated calls use `-32002`; see below.
+
+## Approvals
+
+A warrant can require signed approvals for a tool. When the agent calls it
+without one, the proxy records the pending request in the sandbox and returns
+`-32002` with the request hash:
+
+```json
+{"code": -32002,
+ "message": "Approval required: request 88c6…55ba is waiting for an approver (…); retry the same call once it is approved",
+ "data": {"tenuo": {"code": "approval-required", "request_hash": "88c6…55ba", "source": "agent"}}}
+```
+
+An approver reviews and signs it from outside the sandbox:
+
+```bash
+tenuo-openshell approve --sandbox my-sandbox --request 88c676b2 --approver-key approver.key
+```
+
+`approve` reads the pending request from the sandbox, shows the tool,
+arguments, and warrant, and recomputes the request hash from them before
+signing, so the approval covers exactly what was shown. It refuses a key the
+warrant does not list as an approver and asks for confirmation unless `--yes`
+is passed. The approval is installed in the sandbox, valid for `--ttl` seconds
+(300 by default).
+
+The agent retries the same call. The proxy attaches the approval, removes it,
+and the middleware accepts its nonce once. A second identical call needs a new
+approval. With `min_approvals` above one, each approver runs `approve`; the
+proxy attaches every approval installed for that request.
+
+For approvals signed elsewhere, `tenuo-openshell approve --pending <file>`
+reads the output of `tenuo-openshell-agent pending --json` and prints the
+approval, and `tenuo-openshell-agent install-approval -` installs it.
+
+The [NeMo Agent Toolkit example](../examples/nemo-agent-toolkit/README.md)
+runs this flow with a ReAct agent.
 
 With result evaluation on, OpenShell can also withhold a result above the
 sandbox's `max_result_bytes`. The code is `tenuo_result_too_large` or
@@ -185,8 +223,6 @@ retry a non-idempotent tool on those codes. See
 
 ## Current limits
 
-- The proxy does not attach approvals. A tool gated on approval is denied with
-  `-32002` until approval delivery is added.
 - The proxy's local check trusts the warrant chain's own root. It exists for
   clear errors; the middleware applies the operator's trust roots and is the
   enforcement point.

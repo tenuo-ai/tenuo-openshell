@@ -60,7 +60,8 @@ EXPECTED = {
     "narrowed read": ("allow", "allow", "openshell", ""),
     "narrowed restart": ("deny", "allow", "openshell", "tenuo_tool_denied"),
     "MCP client read": ("allow", "allow", "openshell", ""),
-    "MCP client restart": ("deny", "allow", "sandbox agent", "tool-not-authorized"),
+    "MCP client restart": ("deny", "allow", "sandbox agent", "approval-required"),
+    "MCP client approved restart": ("allow", "allow", "openshell", ""),
     "wider child": ("refused", "not checked", "attenuation", "attenuation-refused"),
     "direct task B restart": ("deny", "allow", "destination", ""),
     "direct missing warrant": ("deny", "allow", "destination", ""),
@@ -74,6 +75,7 @@ BASELINE_REASON = {
     "approved restart": "tool admission and the signed approval agree",
     "narrowed read": "the child warrant still admits this read",
     "MCP client read": "the sandbox-signed read is within its warrant",
+    "MCP client approved restart": "an approver signed this exact restart",
 }
 
 

@@ -13,12 +13,14 @@ cargo clippy --manifest-path fuzz/Cargo.toml --bins --locked -- -D warnings
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny check --hide-inclusion-graph
 fi
-bash -n scripts/bootstrap-openshell.sh scripts/onboarding-smoke.sh scripts/openshell-e2e.sh
+bash -n scripts/bootstrap-openshell.sh scripts/onboarding-smoke.sh scripts/openshell-e2e.sh examples/nemo-agent-toolkit/run.sh
 TENUO_SMOKE_SKIP_BUILD=1 scripts/onboarding-smoke.sh
 if command -v helm >/dev/null 2>&1; then
   helm lint deploy/helm/tenuo-openshell
 fi
 python3 -m py_compile \
+  examples/nemo-agent-toolkit/scripted_llm.py \
+  examples/demo/mcp_client.py \
   examples/demo/mcp_server.py \
   examples/demo/audit_receipts.py \
   examples/demo/test_destination.py \

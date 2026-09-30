@@ -36,6 +36,7 @@ OpenShell credential injection ── remote MCP effect
 task-scoped read                          -> allowed
 unmodified MCP client, signed in sandbox  -> allowed
 unauthorized restart                      -> denied
+restart awaiting a human approver         -> held
 approved restart                          -> allowed once
 replayed approval                         -> denied
 delegated child attempting wider action   -> denied
@@ -78,6 +79,7 @@ The integration consists of:
 | Verify a standalone checkout | [Run the local smoke test](#quickstart-standalone-smoke-test) |
 | See the security boundary work | [Run the authenticated demo](#quickstart-real-openshell-demo) |
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
+| Run a NeMo Agent Toolkit agent with approvals | [NeMo Agent Toolkit example](examples/nemo-agent-toolkit/README.md) |
 | Operate the supervisor middleware | [Deployment guide](docs/deployment.md) |
 | Add early denial to Agent Toolkit | [Agent Toolkit plugin](python/nemo-agent-toolkit-tenuo/README.md) |
 | Connect an optional control plane | [Provider integration contract](docs/providers.md) |

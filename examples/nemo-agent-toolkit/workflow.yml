@@ -1,0 +1,28 @@
+# NeMo Agent Toolkit ReAct agent whose MCP tools go through the Tenuo signing
+# proxy. The agent has no Tenuo code: `tenuo-openshell-agent proxy` signs each
+# tools/call with the sandbox's holder key, and the warrant decides which
+# calls leave the sandbox.
+#
+#   export NVIDIA_API_KEY=...
+#   nat run --config_file workflow.yml --input "Check the payments logs in staging"
+
+function_groups:
+  ops:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: http://127.0.0.1:7415/mcp
+
+llms:
+  nim:
+    _type: nim
+    model_name: meta/llama-3.3-70b-instruct
+    temperature: 0.0
+
+workflow:
+  _type: react_agent
+  tool_names: [ops]
+  llm_name: nim
+  verbose: true
+  # A denial is an observation the model can act on, not a crash.
+  pass_tool_call_errors_to_agent: true
