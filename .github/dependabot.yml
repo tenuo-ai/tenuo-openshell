@@ -1,0 +1,47 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: monthly
+    groups:
+      fuzz:
+        patterns: ["*"]
+
+  # The Agent Toolkit plugin is locked with uv; the uv ecosystem updates
+  # uv.lock together with pyproject.toml.
+  - package-ecosystem: uv
+    directory: /python/nemo-agent-toolkit-tenuo
+    schedule:
+      interval: weekly
+    groups:
+      python-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /examples/demo
+    schedule:
+      interval: weekly
+    ignore:
+      # The builder image tracks `rust-version` in Cargo.toml. Raise both
+      # together by hand.
+      - dependency-name: rust
+        update-types: [version-update:semver-major, version-update:semver-minor]

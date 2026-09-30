@@ -1,0 +1,55 @@
+name: Fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * *"
+  pull_request:
+    paths:
+      - src/mcp.rs
+      - src/policy.rs
+      - src/evaluate.rs
+      - fuzz/**
+      - .github/workflows/fuzz.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [mcp_parse, policy_load, evaluate]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+      # cargo-fuzz itself builds on stable; its pinned dependencies do not
+      # always compile on the newest nightly. The targets still use nightly.
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable install cargo-fuzz --locked --version 0.13.1
+      # -close_fd_mask=2 drops the target's stderr. libFuzzer and sanitizer
+      # reports still print. Reproduce a crash locally with
+      # `cargo fuzz run <target> <artifact>` to see the panic message.
+      - name: Run ${{ matrix.target }} for 60 seconds
+        working-directory: fuzz
+        run: |
+          mkdir -p "corpus/${{ matrix.target }}"
+          cargo fuzz run "${{ matrix.target }}" \
+            "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" \
+            -- -max_total_time=60 -max_len=8192 -close_fd_mask=2
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30

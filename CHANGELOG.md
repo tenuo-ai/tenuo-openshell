@@ -33,9 +33,16 @@ All notable changes will be documented here. The format follows
   proxy.
 - Demo scenario where the sandbox generates its holder key and signs calls at
   run time; documented holder-key custody model.
+- Threat model covering assets, trust boundaries, attackers, controls, and
+  residual risks.
+- cargo-fuzz targets for MCP body parsing, policy loading, and the full
+  decision, with committed seeds and a daily and pull-request Fuzz workflow.
+- `cargo deny` policy for advisories, licenses, and sources, a Supply chain
+  workflow, and Dependabot for Cargo, uv, GitHub Actions, and Docker.
 
 ### Changed
 
+- GitHub Actions in every workflow are pinned by commit SHA.
 - Sandbox policies must list `destinations`: the MCP host, port, optional
   path, and tools each serves. Other destinations, and tools a destination
   does not serve, deny `tenuo_destination_denied`.
@@ -46,9 +53,14 @@ All notable changes will be documented here. The format follows
 
 ### Fixed
 
+- The middleware and the in-sandbox agent no longer write Tenuo's per-denial
+  message, which can quote argument values, to stderr.
 - Denial receipts commit to the sandbox's trusted-roots digest when they are
   built.
 - `TENUO_DECISION_LOG` is read once rather than on every decision.
+- Decision and replay-cleanup log lines write a JSON-RPC id outside
+  `[A-Za-z0-9-_.:/+@]` (or longer than 128 bytes) as `hex:` plus its bytes, so
+  a sandbox-chosen id cannot add log lines or fields.
 - Unified approval replay semantics across in-memory, standalone Redis, and
   Redis Cluster backends; approval nonces are single-use per deployment.
 - Release approval reservations when required receipt persistence prevents an

@@ -1,0 +1,19 @@
+{
+  "id": 11,
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "_meta": {
+      "tenuo": {
+        "signature": "FIkKXcblNZDl5bfizYFgCStevkRZ5YQ8_HofUre4NWlNH6crTIA3X4ft0snlTuASWHtWB_xB_6oEcJP0zWphBA",
+        "warrant": "gYMBWQG_rQABAVABoPOqD_Z0uqK5DHyb5bjDAgADomlyZWFkX2xvZ3Oha2NvbnN0cmFpbnRzomtlbnZpcm9ubWVudIIBoWV2YWx1ZWdzdGFnaW5nZ3NlcnZpY2WCAaFldmFsdWVocGF5bWVudHNvcmVzdGFydF9zZXJ2aWNloWtjb25zdHJhaW50c6NrZW52aXJvbm1lbnSCAaFldmFsdWVnc3RhZ2luZ2hyZXBsaWNhc4IDpGNtaW72Y21hePlFAG1taW5faW5jbHVzaXZl9W1tYXhfaW5jbHVzaXZl9WdzZXJ2aWNlggGhZXZhbHVlaHBheW1lbnRzBIIBWCAYx7E7RUSOVPAg5KDybRBxbLcYOvUpKRFA7HRg9UQqAwWCAVggPMUNL0eRjMW_oKDiveeH0sXeqgKjDu3wzVJ_m6LWQ0AGGmq9WqMHGmq9W88IGEAKoXR0ZW51by5hcHByb3ZhbF9nYXRlc5gYGKEYbxhyGGUYcxh0GGEYchh0GF8YcxhlGHIYdhhpGGMYZRihGGQYYRhyGGcYcxj2D4GCAVggEqFyTL1r-FiGQetyVysaz5xWhqqEbCoVx_SDNtZfOXQQARIAggFYQGuPKAWt03g4K6az5BTjgeuM-zh-fqmSi0K1Io3wPxQYTDiWuipiGwCA-ZK3wWu28fJn-OE9Ua1_n7a5CEf1Aws"
+      }
+    },
+    "arguments": {
+      "environment": "staging",
+      "replicas": 3,
+      "service": "payments"
+    },
+    "name": "restart_service"
+  }
+}

@@ -1,0 +1,70 @@
+# cargo-deny policy for the middleware crate. Run `cargo deny check`.
+#
+# The fuzz crate is its own workspace and is not checked here; it adds only
+# libfuzzer-sys on top of these dependencies.
+
+[graph]
+# Release images are Linux; developers build on macOS. Windows-only crates
+# stay out of the license and duplicate checks.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+all-features = false
+no-default-features = false
+
+[advisories]
+# RustSec advisories, including unmaintained and yanked crates, fail the check.
+# Add an ignore only with the advisory id, the reason it does not apply, and
+# the condition for removing the ignore.
+yanked = "deny"
+ignore = [
+    # rustls-pemfile is unmaintained, not vulnerable. It arrives only through
+    # tonic 0.12's `tls` feature, which reads the server certificate and key
+    # PEM at startup (`--tls-cert`, `--tls-key`); no request data reaches it.
+    # Current releases are thin wrappers over rustls-pki-types. Remove this
+    # entry when tonic is upgraded to a release that drops the dependency.
+    { id = "RUSTSEC-2025-0134", reason = "unmaintained, transitive via tonic 0.12 TLS; startup-only PEM parsing" },
+]
+
+[licenses]
+# Licenses compatible with distributing the middleware and its container image
+# under Apache-2.0. Copyleft licenses are not listed; r-efi also offers
+# MIT OR Apache-2.0, which cargo-deny selects.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+exceptions = []
+
+[licenses.private]
+# The crate is `publish = false`; it is still license-checked.
+ignore = false
+
+[bans]
+# Duplicate versions are reported, not failed. Several are transitive and
+# outside this crate's control (for example sha2 0.10 through jsonwebtoken and
+# sha2 0.11 directly). Review the warnings when changing cryptographic or TLS
+# dependencies, where two copies can mean two different security fixes.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+# Only crates.io. A git or alternate-registry dependency needs an explicit
+# entry here and a review.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

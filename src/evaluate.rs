@@ -8,6 +8,7 @@ use crate::policy::{MetaMode, PolicySet, RequestTarget};
 use crate::reason;
 use crate::receipt::{DecisionReceipt, ReceiptLog};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use tenuo::sdk::prelude::*;
 use tenuo::sdk::transport::mcp_meta::decode_meta;
@@ -59,10 +60,30 @@ pub async fn evaluate(
         };
         eprintln!(
             "tenuo_decision request_id={} decision_us={} outcome={} reason={}",
-            outcome.request_id, outcome.decision_us, name, reason
+            log_safe_id(&outcome.request_id),
+            outcome.decision_us,
+            name,
+            reason
         );
     }
     outcome
+}
+
+/// The JSON-RPC id as written in a `key=value` log line.
+///
+/// The id is chosen by the sandbox. An id outside a small token alphabet is
+/// written as `hex:` and its UTF-8 bytes, so it cannot add a line or a field
+/// such as `outcome=allow`.
+fn log_safe_id(request_id: &str) -> Cow<'_, str> {
+    let plain = request_id.len() <= 128
+        && request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:/+@".contains(&byte));
+    if plain {
+        Cow::Borrowed(request_id)
+    } else {
+        Cow::Owned(format!("hex:{}", hex::encode(request_id.as_bytes())))
+    }
 }
 
 fn decision_log_enabled() -> bool {
@@ -288,7 +309,10 @@ async fn release_reservation(
 ) {
     if let Some(reservation) = reservation {
         if reservation.release().await.is_err() {
-            eprintln!("tenuo_replay_cleanup request_id={request_id} outcome=failed");
+            eprintln!(
+                "tenuo_replay_cleanup request_id={} outcome=failed",
+                log_safe_id(request_id)
+            );
         }
     }
 }
@@ -594,6 +618,23 @@ mod tests {
         let document: Value = serde_json::from_slice(&replacement).expect("json");
         assert!(document["params"].get("_meta").is_none());
         assert_eq!(document["params"]["name"], "read_logs");
+    }
+
+    #[test]
+    fn sandbox_chosen_request_ids_cannot_forge_log_fields() {
+        assert_eq!(log_safe_id("14"), "14");
+        assert_eq!(log_safe_id("task-a:read/1"), "task-a:read/1");
+        for forged in [
+            "1 outcome=allow",
+            "1\ntenuo_decision request_id=2 decision_us=0 outcome=allow reason=-",
+            "a=b",
+            "\u{202e}",
+        ] {
+            let logged = log_safe_id(forged);
+            assert!(logged.starts_with("hex:"), "{forged:?}");
+            assert!(!logged.contains([' ', '\n', '=']), "{forged:?}");
+        }
+        assert!(log_safe_id(&"a".repeat(129)).starts_with("hex:"));
     }
 
     #[test]

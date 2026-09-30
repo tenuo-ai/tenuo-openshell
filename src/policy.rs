@@ -272,6 +272,8 @@ impl PolicySet {
                 None => {
                     let guard = Guard::builder()
                         .authorizer(authorizer)
+                        // Denial messages can quote argument values; keep them out of logs.
+                        .denial_reporting(DenialReporting::Debug)
                         .revocation(RevocationMode::TtlOnly {
                             max_lifetime: Duration::from_secs(lifetime),
                         })
@@ -327,6 +329,8 @@ impl PolicySet {
                         .map_err(|_| PolicyError::Invalid)?;
                     let guard = Guard::builder()
                         .authorizer(authorizer)
+                        // Denial messages can quote argument values; keep them out of logs.
+                        .denial_reporting(DenialReporting::Debug)
                         .revocation(RevocationMode::SignedSrl)
                         .revocation_tracker(tracker.clone())
                         .build()

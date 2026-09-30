@@ -1,0 +1,18 @@
+{
+  "id": 9,
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "_meta": {
+      "tenuo": {
+        "signature": "mN4hKa6EeOpaBaMYU4_V44tLVTrn0dHm3PBS9DSJLLZHOXC4lxgIVoAqP7cp4ZzLtIhMdJKqbh7ehXHU6pSBDQ",
+        "warrant": "goMBWQG_rQABAVABoPOqD_Z0uqK5DHyb5bjDAgADomlyZWFkX2xvZ3Oha2NvbnN0cmFpbnRzomtlbnZpcm9ubWVudIIBoWV2YWx1ZWdzdGFnaW5nZ3NlcnZpY2WCAaFldmFsdWVocGF5bWVudHNvcmVzdGFydF9zZXJ2aWNloWtjb25zdHJhaW50c6NrZW52aXJvbm1lbnSCAaFldmFsdWVnc3RhZ2luZ2hyZXBsaWNhc4IDpGNtaW72Y21hePlFAG1taW5faW5jbHVzaXZl9W1tYXhfaW5jbHVzaXZl9WdzZXJ2aWNlggGhZXZhbHVlaHBheW1lbnRzBIIBWCAYx7E7RUSOVPAg5KDybRBxbLcYOvUpKRFA7HRg9UQqAwWCAVggPMUNL0eRjMW_oKDiveeH0sXeqgKjDu3wzVJ_m6LWQ0AGGmq9WqMHGmq9W88IGEAKoXR0ZW51by5hcHByb3ZhbF9nYXRlc5gYGKEYbxhyGGUYcxh0GGEYchh0GF8YcxhlGHIYdhhpGGMYZRihGGQYYRhyGGcYcxj2D4GCAVggEqFyTL1r-FiGQetyVysaz5xWhqqEbCoVx_SDNtZfOXQQARIAggFYQGuPKAWt03g4K6az5BTjgeuM-zh-fqmSi0K1Io3wPxQYTDiWuipiGwCA-ZK3wWu28fJn-OE9Ua1_n7a5CEf1AwuDAVkBK60AAQFQAaDzqhBkc_qdlICBplBxfwIAA6FpcmVhZF9sb2dzoWtjb25zdHJhaW50c6JrZW52aXJvbm1lbnSCAaFldmFsdWVnc3RhZ2luZ2dzZXJ2aWNlggGhZXZhbHVlaHBheW1lbnRzBIIBWCDbPhLcnl7CbPUAgWon9XuqMMf0_scnB7IKwe_y1WL_gwWCAVggGMexO0VEjlTwIOSg8m0QcWy3GDr1KSkRQOx0YPVEKgMGGmq9WqMHGmq9WxsIGEAJmCAYihiaBhifGCYCGCgY-hjHGH0Y9hhuGFUY2RiPGOUYVBg2GEcYZhjSGM0LGN0Y4xjBGNEYwhjYGGYY3RhhD4GCAVggEqFyTL1r-FiGQetyVysaz5xWhqqEbCoVx_SDNtZfOXQQARIBggFYQLbzeh7KBoEjz2okE5_yrWXfI0t4Ijs_lx_D_wm-vKSwNNItwnp9-xN1Nh4y9gdr_G5YnS6pgvcwG_g9QaF1YgM"
+      }
+    },
+    "arguments": {
+      "environment": "staging",
+      "service": "payments"
+    },
+    "name": "read_logs"
+  }
+}
