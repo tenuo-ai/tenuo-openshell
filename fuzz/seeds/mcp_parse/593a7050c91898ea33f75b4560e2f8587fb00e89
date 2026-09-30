@@ -1,0 +1,13 @@
+{
+  "id": 8,
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "arguments": {
+      "environment": "staging",
+      "replicas": 3,
+      "service": "payments"
+    },
+    "name": "restart_service"
+  }
+}
