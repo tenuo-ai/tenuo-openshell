@@ -50,3 +50,13 @@ The policy's `revocation.rollback_floor_path` should point under
 `/var/lib/tenuo`, which is a per-replica persistent volume. Every policy change
 must increment the top-level `version`; invalid or rolled-back updates keep the
 last valid policy and increment the reload-failure metric.
+
+Set `results.evaluate=true` to add the `HTTP_RESPONSE / PRE_RETURN` binding.
+Result receipts go to `/var/lib/tenuo/receipts.results.jsonl` on the same
+volume, and policies may then set `max_result_bytes`. Restart the OpenShell
+gateway after changing it so it reads the new manifest.
+
+Set `otel.endpoint` to an OTLP gRPC collector to export decision spans. The
+NetworkPolicy then admits egress to pods matching `otelNamespaceSelector` and
+`otelPodSelector` on `otelPort`. Empty `otel.endpoint` sends nothing and adds
+no egress rule.

@@ -151,7 +151,9 @@ See [Provider integration](providers.md) for the adapter contract.
 ## Protocol coverage
 
 The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
-`HTTP_REQUEST / PRE_CREDENTIALS`. `tls: skip`, raw TCP, binary WebSocket frames,
+`HTTP_REQUEST / PRE_CREDENTIALS`. The optional `HTTP_RESPONSE / PRE_RETURN`
+binding records and limits results; see [Tool results](#tool-results).
+`tls: skip`, raw TCP, binary WebSocket frames,
 and server-to-client WebSocket messages are outside the boundary and must be
 blocked by network policy. See [Upstream verification](upstream-verification.md)
 for the pinned contract.
@@ -169,3 +171,47 @@ Within a configured destination:
 
 Passthrough methods and client responses carry no warrant check. Enable them
 only for servers whose resources and prompts the sandbox may read freely.
+
+### Tool results
+
+With `--evaluate-results`, `Describe` also advertises
+`HTTP_RESPONSE / PRE_RETURN`. OpenShell then sends this service the response
+to every request on the attachment. The response runs after the upstream call,
+so this binding records and limits results. It is not an authorization point.
+
+OpenShell reuses one `RequestContext.request_id` for a request and its
+response. When the request path allows a `tools/call`, it records that id with
+the sandbox id, JSON-RPC id, tool, leaf warrant id, allow receipt hash, and
+the sandbox's `max_result_bytes`. The record lives in a bounded map on the
+replica that decided the call: 65,536 in-flight calls, ten minutes each.
+Eviction is counted in metrics. A response takes its record once.
+
+| Response | Action |
+| --- | --- |
+| No record: lifecycle traffic, denied calls, calls a later stage stopped, an expired or evicted record, or a response on another replica | Skipped. Delivered unchanged. |
+| Declared `Content-Length` above `max_result_bytes` | Blocked at the response head. |
+| Known length, `WHOLE_BODY_BYTES` offered | Read as one unit, hashed, receipted, then delivered. Over the limit blocks before the head is sent. |
+| Unknown length or too large for one unit, such as Server-Sent Events | Read with `STREAM_BYTES`, hashed per unit, receipted at the final unit. Passing the limit aborts delivery mid-stream. |
+| Only `HEADERS_ONLY` offered: bodyless, partial, encoded, or `no-transform` | Skipped, except that a limit with an unknown, unreadable length blocks `tenuo_result_unmeasurable`. |
+
+A block before the response head returns OpenShell's 403 with
+`tenuo_result_too_large` or `tenuo_result_unmeasurable`. A block during
+streaming ends delivery without a reason code. A block withholds the result;
+the tool call already ran and is not rolled back.
+
+The size limit is the only point where this binding fails closed. Result
+receipts are best-effort, including with `--require-receipts`. That flag
+guarantees an authorization receipt exists before an effect is allowed.
+Withholding the result of an effect that already ran because its result
+receipt could not be written adds no evidence about the effect, and invites a
+retry of a non-idempotent call. Failed result receipts are counted in
+`tenuo_openshell_result_receipt_failures_total`.
+
+The limit lives in the Tenuo policy, keyed by `sandbox_id`, rather than in
+the attachment `config`. The attachment is part of the OpenShell sandbox
+policy, which the sandbox creator writes; the Tenuo policy is the operator's.
+`ValidateConfig` therefore still accepts only `tenuo_meta`.
+
+When the attachment is `fail_closed`, an unreachable middleware now blocks
+responses as well as requests on that attachment. See
+[Receipts](receipts.md) for the result receipt format.

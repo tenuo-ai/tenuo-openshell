@@ -95,6 +95,10 @@ Do not send raw provider credentials, private keys, unrestricted arguments, or
 extra warrant material beyond the signed receipt artifact. Log rotation must
 coordinate with the export checkpoint; never truncate an unacknowledged log.
 
+With `--evaluate-results`, `<log>.results.jsonl` is a second outbox with the
+same line format and its own chain. `tenuo-openshell-middleware receipts
+export` is a reference decoder for both; see [Receipts](receipts.md).
+
 ## Mapping a managed control plane
 
 A managed adapter can map this contract onto four operations without changing

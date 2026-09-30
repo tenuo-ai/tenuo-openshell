@@ -47,12 +47,29 @@ Those docs agree with the pin on `pre_credentials`, `sandbox_id`, `fail_closed` 
 
 ### Implemented
 
-One binding: `HTTP_REQUEST` / `PRE_CREDENTIALS`, via `Describe`, `ValidateConfig`, and `EvaluateHttpRequest`.
+- `HTTP_REQUEST` / `PRE_CREDENTIALS`, via `Describe`, `ValidateConfig`, and `EvaluateHttpRequest`.
+- With `--evaluate-results`, `HTTP_RESPONSE` / `PRE_RETURN`, via the separate `HttpResponsePreReturn.Evaluate` stream on the same listener and credentials.
+
+### Response binding
+
+Confirmed in the pinned source under `crates/`:
+
+| Contract | Pinned source |
+|---|---|
+| Binding selection | `openshell-supervisor-middleware/src/lib.rs` `supported_binding` (line 870) accepts `HTTP_RESPONSE` only with `PRE_RETURN`. `describe_chain_for` (line 1542) builds each operation/phase chain from the same policy attachments; an attachment whose manifest lacks the pair is left out of that chain. Advertising the pair therefore puts every attachment of the registration on the response path, with the attachment's `config` and `on_error`. |
+| Payload limit | `validate_manifest_bindings` (line 899) rejects a registration whose `max_payload_bytes` exceeds any advertised binding's limit, so both bindings advertise 262144. |
+| Request/response correlation | `openshell-supervisor-network/src/l7/middleware.rs` `HttpMiddlewareExchange` (line 33) holds one `request_id` for a request and its response; `response_relay` (line 80) copies it into the response `RequestContext`. For MCP, `l7/relay.rs` `relay_jsonrpc` (line 2153) creates a UUID v4 `request_id` (line 2315), evaluates the request chain with it, and passes it to the response relay. |
+| Transport | `openshell-supervisor-middleware/src/remote.rs` (lines 153 and 156) builds the request and response clients on one channel with one bearer interceptor, so both RPCs carry the same extension JWT and reach the same endpoint. |
+| Preflight input | `response/preflight.rs` sends the attachment `config` (line 90), the effective `max_payload_bytes`, and the permitted modes per stage. |
+| Body modes | `response/validation.rs` `body_restriction` (line 246) returns `HEADERS_ONLY` alone for `HEAD`, 204, 304, 206, `Content-Range`, `multipart/byteranges`, `Cache-Control: no-transform`, and any non-identity `Content-Encoding`. `permitted_body_modes` (line 292) omits `WHOLE_BODY_BYTES` for a declared length above the limit and for `text/event-stream` or `multipart/x-mixed-replace` (`is_open_ended_response`, line 314), and offers `STREAM_BYTES` whenever the limit is nonzero. Server-Sent Events responses are therefore streamed, not headers-only. |
+| Request headers | `l7/middleware.rs` `safe_middleware_headers` (line 828) forwards every request header except credential, routing, framing, and hop-by-hop fields. W3C `traceparent` reaches `HttpRequestEvaluation.headers`. |
+
+The proto states that a response block does not roll back the upstream request. Before response commitment OpenShell returns its canonical 403 with the `reason_code`; after commitment it aborts delivery without one.
 
 ### Present in the proto and not implemented
 
 - `EvaluateWebSocketSession`. The proto includes a `binary` payload variant. The supervisor middleware docs say binary frames are not delivered to middleware and pass through.
-- `HTTP_RESPONSE` and the separate `HttpResponsePreReturn` service. Response inspection runs after the upstream request has already executed.
+- Response header and body transforms. The response binding only passes through, skips, or blocks.
 - Extension client-certificate authentication. OpenShell v0.1.2 supports
   server-authenticated TLS plus an extension bearer JWT, but does not provision
   client certificates. The production listener implements that exact contract;
@@ -61,7 +78,7 @@ One binding: `HTTP_REQUEST` / `PRE_CREDENTIALS`, via `Describe`, `ValidateConfig
 
 ### Uncovered paths
 
-Fail-closed middleware does not inspect `tls: skip` endpoints, non-HTTP TCP, or binary WebSocket frames. A protected tool is still reachable on those routes unless network policy denies them. `WEBSOCKET_MESSAGE / PRE_CREDENTIALS` covers complete client text messages only, and this service does not implement that RPC. `HTTP_RESPONSE` runs after the upstream call and is not an authorization point. The repository's `make e2e` suite exercises the HTTP path through a real pinned gateway and sandbox.
+Fail-closed middleware does not inspect `tls: skip` endpoints, non-HTTP TCP, or binary WebSocket frames. A protected tool is still reachable on those routes unless network policy denies them. `WEBSOCKET_MESSAGE / PRE_CREDENTIALS` covers complete client text messages only, and this service does not implement that RPC. `HTTP_RESPONSE` runs after the upstream call and is not an authorization point. The repository's `make e2e` suite exercises the request and response paths through a real pinned gateway and sandbox.
 
 ## MCP policy surface
 
@@ -105,7 +122,10 @@ The supported dependency is `nvidia-nat-core>=1.8,<1.9`; this repository does no
 uses NVIDIA's pinned supervisor and sandbox-runtime images; creates an
 authenticated HTTPS middleware registration; and runs the complete outcome
 matrix through real sandboxes. Four protected sandbox calls execute in the
-middleware-enabled run; denied calls do not reach the effect. `make check`
+middleware-enabled run; denied calls do not reach the effect. The run enables
+the response binding: allowed calls get result receipts linked to their
+authorization receipts, and a policy reload with `max_result_bytes` shows a
+read that runs while OpenShell withholds its result. `make check`
 covers Rust formatting, linting, tests and release builds, JWT negative cases, signed
 fixture generation, Agent Toolkit 1.8 plugin tests, entry-point discovery, and
 package builds. The full gateway suite requires a supported container runtime
