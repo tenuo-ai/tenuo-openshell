@@ -387,11 +387,11 @@ now_us() {
   python3 -c 'import time; print(int(time.time() * 1000000))'
 }
 
-verify_us_for() {
+decision_us_for() {
   local id="$1" log="$2" line
   line="$(grep -F "tenuo_decision request_id=${id} " "$log" 2>/dev/null | tail -1 || true)"
   [[ -n "$line" ]] || return 1
-  sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$line"
+  sed -n 's/.*decision_us=\([0-9][0-9]*\).*/\1/p' <<<"$line"
 }
 
 record_obs() {
@@ -401,9 +401,9 @@ record_obs() {
     --arg outcome "$3" \
     --arg point "$4" \
     --arg reason "$5" \
-    --argjson verify_us "$6" \
+    --argjson decision_us "$6" \
     --argjson e2e_us "$7" \
-    '{scenario:$scenario,run:$run,outcome:$outcome,point:$point,reason:$reason,verify_us:$verify_us,e2e_us:$e2e_us}' >>"$OBS"
+    '{scenario:$scenario,run:$run,outcome:$outcome,point:$point,reason:$reason,decision_us:$decision_us,e2e_us:$e2e_us}' >>"$OBS"
 }
 
 send_request() {
@@ -429,15 +429,15 @@ expect_allow() {
   local sandbox="${4:-$SANDBOX_NAME}"
   local scenario="${5:-}"
   local output="$RUN_DIR/$(basename "$fixture").out"
-  local id verify_us
+  local id decision_us
   send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "$label completes"
   grep -Fq '200 OK' "$output" || fail "$label returns 200"
   grep -Fq "$marker" "$output" || fail "$label effect response is returned"
   printf 'PASS %s\n' "$label"
   if [[ -n "$scenario" ]]; then
     id="$(jq -r .id "$fixture")"
-    verify_us="$(verify_us_for "$id" "$MIDDLEWARE_LOG")" || fail "$scenario has no verification timing"
-    record_obs "$scenario" "openshell+tenuo" "allow" "openshell" "" "$verify_us" "$LAST_E2E_US"
+    decision_us="$(decision_us_for "$id" "$MIDDLEWARE_LOG")" || fail "$scenario has no decision timing"
+    record_obs "$scenario" "openshell+tenuo" "allow" "openshell" "" "$decision_us" "$LAST_E2E_US"
   fi
 }
 
@@ -448,24 +448,24 @@ expect_deny() {
   local sandbox="${4:-$SANDBOX_NAME}"
   local scenario="${5:-}"
   local output="$RUN_DIR/$(basename "$fixture").out"
-  local id verify_us
+  local id decision_us
   send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "$label returns a response"
   grep -Fq '403 Forbidden' "$output" || fail "$label is denied"
   grep -Fq "$reason" "$output" || fail "$label reason is $reason"
   printf 'PASS %s\n' "$label"
   if [[ -n "$scenario" ]]; then
     id="$(jq -r .id "$fixture")"
-    verify_us="$(verify_us_for "$id" "$MIDDLEWARE_LOG")" || fail "$scenario has no verification timing"
-    record_obs "$scenario" "openshell+tenuo" "deny" "openshell" "$reason" "$verify_us" "$LAST_E2E_US"
+    decision_us="$(decision_us_for "$id" "$MIDDLEWARE_LOG")" || fail "$scenario has no decision timing"
+    record_obs "$scenario" "openshell+tenuo" "deny" "openshell" "$reason" "$decision_us" "$LAST_E2E_US"
   fi
 }
 
 record_widen() {
-  local line verify_us
+  local line decision_us
   line="$(grep -F "tenuo_decision request_id=widen " "$FIXTURE_LOG" | tail -1 || true)"
-  [[ -n "$line" ]] || fail "attenuation has no verification timing"
-  verify_us="$(sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
-  record_obs "wider child" "openshell+tenuo" "refused" "attenuation" "attenuation-refused" "$verify_us" 0
+  [[ -n "$line" ]] || fail "attenuation has no decision timing"
+  decision_us="$(sed -n 's/.*decision_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
+  record_obs "wider child" "openshell+tenuo" "refused" "attenuation" "attenuation-refused" "$decision_us" 0
 }
 
 stop_one() {
@@ -544,8 +544,8 @@ run_suite() {
     --receipt-dir "$RECEIPT_DIR" \
     --request-id 14 | tee "$denial_out" || fail "in-process denial"
   denial_line="$(grep -F "tenuo_decision request_id=14 " "$denial_out" | tail -1)"
-  [[ -n "$denial_line" ]] || fail "in-process denial has no verification timing"
-  denial_us="$(sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$denial_line")"
+  [[ -n "$denial_line" ]] || fail "in-process denial has no decision timing"
+  denial_us="$(sed -n 's/.*decision_us=\([0-9][0-9]*\).*/\1/p' <<<"$denial_line")"
   record_obs "in-process task B restart" "openshell+tenuo" "deny" "agent-toolkit" "tool_denied" "$denial_us" 0
   "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
     --dir "$RECEIPT_DIR" \
@@ -563,7 +563,7 @@ expect_destination_deny() {
   local fixture="$1"
   local label="$2"
   local scenario="${3:-}"
-  local start end body id line verify_us reason
+  local start end body id line decision_us reason
   start="$(now_us)"
   body="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
@@ -577,9 +577,9 @@ expect_destination_deny() {
     id="$(jq -r .id "$fixture")"
     line="$(grep -F "tenuo_decision request_id=${id} " "$UPSTREAM_LOG" | tail -1 || true)"
     [[ -n "$line" ]] || fail "$scenario has no destination timing"
-    verify_us="$(sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
+    decision_us="$(sed -n 's/.*decision_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
     reason="$(sed -n 's/.*reason=\([^ ]*\).*/\1/p' <<<"$line")"
-    record_obs "$scenario" "openshell+tenuo" "deny" "destination" "$reason" "$verify_us" "$LAST_E2E_US"
+    record_obs "$scenario" "openshell+tenuo" "deny" "destination" "$reason" "$decision_us" "$LAST_E2E_US"
   fi
 }
 

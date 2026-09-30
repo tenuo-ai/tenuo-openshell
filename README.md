@@ -37,7 +37,8 @@ The integration is Apache-2.0. It consists of:
 > [!IMPORTANT]
 > The production deployment profile is implemented and tested from source.
 > Registry artifacts have not been published yet, so install from a pinned
-> source revision until the first signed release. See
+> source revision and override the Helm image until the first signed release.
+> Release image tags include the Git tag's `v` prefix. See
 > [Releasing](docs/releasing.md) for the publication gate.
 
 ## Choose a path
@@ -133,10 +134,12 @@ A2A child restart with read-only warrant              → denied before the skil
 ```
 
 The `replicas=3` restart carries an approval signed by a local fixture key.
-That approval does not cover `replicas=5`. The middleware atomically consumes
-the signed approval nonce after the first successful authorization, so the
-same approval cannot be used twice. The Agent Toolkit denial is recorded in
-the same offline receipt report as the OpenShell and destination decisions.
+That approval does not cover `replicas=5`. The middleware atomically reserves
+the signed approval nonce before allowing the first effect, so the same
+approval cannot be used twice. If required receipt persistence fails, the
+token-owned reservation is released and a safe retry can present the approval
+again. The Agent Toolkit denial is recorded in the same offline receipt report
+as the OpenShell and destination decisions.
 
 The demo also performs a real Tenuo A2A JSON-RPC handoff over localhost HTTP.
 It sends the full parent/child warrant stack plus a child-holder
@@ -214,6 +217,9 @@ cargo run --release -- \
   --admin-listen 0.0.0.0:9090
 ```
 
+For native Redis Cluster, replace `--replay-redis-url` with
+`--replay-redis-cluster-urls redis://node-a:6379/,redis://node-b:6379/`.
+
 The verifier pins `alg=EdDSA`, `typ=openshell-ext+jwt`, optional `kid`, exact
 issuer, exact audience, caller shape, expiry, issue time, and OpenShell's
 one-hour maximum token lifetime. OpenShell intentionally reuses extension
@@ -259,10 +265,12 @@ A missing sandbox, missing root, unreadable policy, or unavailable verifier
 denies the request.
 
 `approval_replay_protection` uses Redis in the supported production profile.
-All approval nonces on one request are consumed atomically with expiry, across
-replicas. Production startup fails if replay protection is enabled without
-Redis. `--allow-in-memory-replay` is an explicit single-instance demo escape
-hatch.
+Approval identity is the approver key plus nonce across the whole deployment;
+sandbox boundaries do not reset single-use semantics. All nonces on one
+request are reserved atomically with expiry across replicas, and the keys share
+a deployment-specific Redis Cluster hash slot. Production startup fails if
+replay protection is enabled without Redis. `--allow-in-memory-replay` is an
+explicit single-instance demo escape hatch.
 
 Policy files are versioned and polled. A valid higher version replaces the
 active snapshot atomically; invalid or rolled-back updates preserve the last

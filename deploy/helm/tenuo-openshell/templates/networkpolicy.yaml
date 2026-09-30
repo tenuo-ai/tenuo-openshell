@@ -18,19 +18,32 @@ spec:
         - port: {{ .Values.service.port }}
           protocol: TCP
     - from:
-        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.adminNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.adminPodSelector | nindent 14 }}
       ports:
         - port: {{ .Values.service.adminPort }}
           protocol: TCP
   egress:
     - to:
+        {{- if .Values.networkPolicy.dnsIpBlock }}
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.dnsIpBlock | quote }}
+        {{- else }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: kube-system
+              {{- toYaml .Values.networkPolicy.dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dnsPodSelector | nindent 14 }}
+        {{- end }}
       ports:
-        - port: 53
+        - port: {{ .Values.networkPolicy.dnsPort }}
           protocol: UDP
-        - port: 53
+        - port: {{ .Values.networkPolicy.dnsPort }}
           protocol: TCP
     - to:
         - namespaceSelector:

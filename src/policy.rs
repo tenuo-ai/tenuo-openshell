@@ -1,7 +1,7 @@
 //! Static sandbox-to-trust-root map. A missing sandbox denies.
 
 use crate::reason;
-use crate::replay::{claims, ConsumeResult, InMemoryReplayStore, ReplayStore};
+use crate::replay::{claims, InMemoryReplayStore, ReplayReservation, ReplayStore, ReserveResult};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -48,6 +48,23 @@ pub struct PolicySet {
     sandboxes: HashMap<String, Sandbox>,
     approval_replay_enabled: bool,
     replay_store: Arc<dyn ReplayStore>,
+}
+
+/// Claims reserved after approval verification and before an effect is allowed.
+/// Dropping a reservation commits it as consumed. Release it only when a
+/// required pre-effect step, such as durable receipt persistence, fails.
+pub struct ApprovalReservation {
+    store: Arc<dyn ReplayStore>,
+    reservation: ReplayReservation,
+}
+
+impl ApprovalReservation {
+    pub async fn release(self) -> Result<(), &'static str> {
+        self.store
+            .release(&self.reservation)
+            .await
+            .map_err(|_| reason::VERIFIER_FAILED)
+    }
 }
 
 #[derive(Debug)]
@@ -308,26 +325,29 @@ impl PolicySet {
             })
     }
 
-    /// Atomically consume the nonces of approvals that already passed Guard validation.
+    /// Atomically reserve the nonces of approvals that already passed Guard validation.
     ///
     /// The store is deliberately integration-owned: Tenuo signs a unique nonce into every
     /// approval but leaves replay persistence to the enforcing application.
-    pub async fn consume_approvals(
+    pub async fn reserve_approvals(
         &self,
         sandbox_id: &str,
         approvals: &[SignedApproval],
-    ) -> Result<(), &'static str> {
+    ) -> Result<Option<ApprovalReservation>, &'static str> {
         self.sandbox(sandbox_id)?;
         if !self.approval_replay_enabled {
-            return Ok(());
+            return Ok(None);
         }
         if approvals.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let claims = claims(approvals).map_err(|_| reason::INVALID_AUTHORITY)?;
-        match self.replay_store.consume(sandbox_id, &claims).await {
-            Ok(ConsumeResult::Consumed) => Ok(()),
-            Ok(ConsumeResult::Replayed) => Err(reason::APPROVAL_REPLAYED),
+        match self.replay_store.reserve(&claims).await {
+            Ok(ReserveResult::Reserved(reservation)) => Ok(Some(ApprovalReservation {
+                store: self.replay_store.clone(),
+                reservation,
+            })),
+            Ok(ReserveResult::Replayed) => Err(reason::APPROVAL_REPLAYED),
             Err(_) => Err(reason::VERIFIER_FAILED),
         }
     }

@@ -1,8 +1,13 @@
 # Release and distribution gate
 
-This repository intentionally has no automatic publication workflow yet. Add
-registry credentials and enable publishing only after package ownership,
-artifact names, support policy, and rollback ownership are agreed.
+This repository has a manually dispatched, environment-gated release workflow.
+Its default `publish=false` mode verifies an existing signed version tag,
+builds the Python and Helm artifacts, builds the multi-platform image, and
+attaches provenance without publishing to registries. `publish=true` additionally
+publishes to PyPI and GHCR, signs the image, and creates the GitHub release.
+Protect the `release` environment and enable publishing only after package
+ownership, trusted publishing, artifact names, support policy, and rollback
+ownership are agreed.
 
 ## Pre-release checklist
 
@@ -18,9 +23,11 @@ artifact names, support policy, and rollback ownership are agreed.
    dependency inventory. Generate SBOMs for the Python and container artifacts.
 6. Scan dependencies and images, sign artifacts, attach provenance, and record
    immutable digests.
-7. Publish a signed Git tag and GitHub release. Publish the Python package and
-   container only from that tag; the Rust crate remains `publish = false` unless
-   a supported library interface is deliberately introduced.
+7. Create and push a signed Git tag, then dispatch `.github/workflows/release.yml`
+   for that exact tag. Publish the Python package and container only from that
+   workflow; the Rust crate remains `publish = false` unless a supported library
+   interface is deliberately introduced. Image tags include the Git tag's `v`
+   prefix, matching the Helm value (for example, `v0.1.0`).
 8. Repeat the quickstart using only public artifacts, then verify signatures,
    checksums, plugin discovery, secure startup, one allowed call, and negative
    authorization cases.

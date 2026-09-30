@@ -66,7 +66,11 @@ spec:
             - /var/lib/tenuo/receipts.jsonl
             - --require-receipts
           env:
+            {{- if .Values.replay.cluster }}
+            - name: TENUO_REPLAY_REDIS_CLUSTER_URLS
+            {{- else }}
             - name: TENUO_REPLAY_REDIS_URL
+            {{- end }}
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.replay.redisSecret }}

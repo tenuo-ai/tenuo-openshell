@@ -227,7 +227,7 @@ fn bench(
             tenuo_openshell_middleware::MetaMode::Preserve,
             None,
         ));
-        samples.push(outcome.verify_us);
+        samples.push(outcome.decision_us);
     }
     samples.sort_unstable();
     let p50 = percentile(&samples, 0.50);
@@ -698,13 +698,13 @@ fn refuse_widen(
         .tool("restart_service", restart_constraints()?)
         .ttl(Duration::from_secs(60))
         .build(&holder);
-    let verify_us = started.elapsed().as_micros();
+    let decision_us = started.elapsed().as_micros();
     match widened {
         Err(tenuo::Error::MonotonicityViolation(message))
             if message.contains("restart_service") =>
         {
             eprintln!(
-                "tenuo_decision request_id=widen verify_us={verify_us} outcome=deny reason=attenuation-refused"
+                "tenuo_decision request_id=widen decision_us={decision_us} outcome=deny reason=attenuation-refused"
             );
             fs::write(output, "attenuation refused\n")?;
             Ok(())

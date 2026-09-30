@@ -1,6 +1,7 @@
-//! One HTTP middleware decision. No network.
+//! One HTTP middleware decision. No control-plane network request.
 //!
-//! Receipt export is optional and does not change the decision.
+//! Best-effort receipt persistence does not change the decision. Required
+//! receipt persistence fails closed before an effect is allowed.
 
 use crate::mcp::{self, McpError, McpRequest};
 use crate::policy::{MetaMode, PolicySet};
@@ -16,13 +17,14 @@ pub struct Outcome {
     /// Set when the forwarded body must replace the admitted body.
     pub replacement: Option<Vec<u8>>,
     pub request_id: String,
-    /// Time inside this check, excluding network transit.
-    pub verify_us: u64,
+    /// End-to-end time inside this enforcement decision. This includes local
+    /// parsing and verification plus configured replay and receipt I/O.
+    pub decision_us: u64,
 }
 
 /// Check one admitted MCP body.
 ///
-/// `verify_us` is the time spent in this check. When `TENUO_DECISION_LOG` is
+/// `decision_us` is the time spent in this check. When `TENUO_DECISION_LOG` is
 /// set and the JSON-RPC id is present, one `tenuo_decision` line is written
 /// to stderr. The line carries the request id, duration, outcome, and reason
 /// code.
@@ -44,7 +46,7 @@ pub async fn evaluate(
         receipts,
     )
     .await;
-    outcome.verify_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    outcome.decision_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     if std::env::var_os("TENUO_DECISION_LOG").is_some() && !outcome.request_id.is_empty() {
         let name = if outcome.allow { "allow" } else { "deny" };
         let reason = if outcome.reason_code.is_empty() {
@@ -53,8 +55,8 @@ pub async fn evaluate(
             outcome.reason_code
         };
         eprintln!(
-            "tenuo_decision request_id={} verify_us={} outcome={} reason={}",
-            outcome.request_id, outcome.verify_us, name, reason
+            "tenuo_decision request_id={} decision_us={} outcome={} reason={}",
+            outcome.request_id, outcome.decision_us, name, reason
         );
     }
     outcome
@@ -180,13 +182,21 @@ async fn authorize_tool(
             receipts.request_id,
         );
     }
-    if let Err(code) = authorization
+    let replacement = match authorization.meta_mode {
+        MetaMode::Preserve => None,
+        MetaMode::Strip => match mcp::strip_tenuo(document) {
+            Ok(body) => Some(body),
+            Err(_) => return identified(deny(reason::VERIFIER_FAILED), receipts.request_id),
+        },
+    };
+    let reservation = match authorization
         .policy
-        .consume_approvals(authorization.sandbox_id, received.approvals())
+        .reserve_approvals(authorization.sandbox_id, received.approvals())
         .await
     {
-        return identified(deny(code), receipts.request_id);
-    }
+        Ok(reservation) => reservation,
+        Err(code) => return identified(deny(code), receipts.request_id),
+    };
     let allowed = DecisionReceipt {
         request_id: receipts.request_id,
         tool: name,
@@ -198,32 +208,24 @@ async fn authorize_tool(
         srl_hash: receipts.revocation.map(|value| value.1),
         denial: None,
     };
-    match authorization.meta_mode {
-        MetaMode::Preserve => {
-            if !record(&receipts, allowed) && receipt_is_required(&receipts) {
-                return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+    if !record(&receipts, allowed) && receipt_is_required(&receipts) {
+        if let Some(reservation) = reservation {
+            if reservation.release().await.is_err() {
+                eprintln!("approval reservation release failed");
             }
-            identified(allow_unchanged(), receipts.request_id)
         }
-        MetaMode::Strip => match mcp::strip_tenuo(document) {
-            Ok(body) => {
-                if !record(&receipts, allowed) && receipt_is_required(&receipts) {
-                    return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
-                }
-                identified(
-                    Outcome {
-                        allow: true,
-                        reason_code: "",
-                        replacement: Some(body),
-                        request_id: String::new(),
-                        verify_us: 0,
-                    },
-                    receipts.request_id,
-                )
-            }
-            Err(_) => identified(deny(reason::VERIFIER_FAILED), receipts.request_id),
-        },
+        return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
     }
+    identified(
+        Outcome {
+            allow: true,
+            reason_code: "",
+            replacement,
+            request_id: String::new(),
+            decision_us: 0,
+        },
+        receipts.request_id,
+    )
 }
 
 fn record(receipts: &ReceiptContext<'_>, mut decision: DecisionReceipt<'_>) -> bool {
@@ -244,7 +246,7 @@ fn allow_unchanged() -> Outcome {
         reason_code: "",
         replacement: None,
         request_id: String::new(),
-        verify_us: 0,
+        decision_us: 0,
     }
 }
 
@@ -254,7 +256,7 @@ fn deny(reason_code: &'static str) -> Outcome {
         reason_code,
         replacement: None,
         request_id: String::new(),
-        verify_us: 0,
+        decision_us: 0,
     }
 }
 
@@ -735,7 +737,61 @@ mod tests {
     }
 
     #[test]
-    fn receipts_follow_the_decision_and_a_failed_write_does_not_change_it() {
+    fn required_receipt_failure_releases_the_approval_reservation() {
+        let issuer = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let (holder, approver, warrant, arguments) = approved_restart(&issuer);
+        let approval = approval_for(&approver, &warrant, "restart_service", &arguments);
+        let body = body_with_approval(
+            &warrant,
+            &holder,
+            "restart_service",
+            &arguments,
+            Some(&approval),
+        );
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("required.jsonl");
+        let required = ReceiptLog::open(&directory.path().join("receipt.key"), &path)
+            .expect("required receipt log")
+            .require_delivery();
+        std::fs::create_dir(&path).expect("directory blocks required log");
+
+        let denied = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &body,
+            MetaMode::Preserve,
+            Some(&required),
+        );
+        assert!(!denied.allow);
+        assert_eq!(denied.reason_code, reason::VERIFIER_FAILED);
+
+        std::fs::remove_dir(&path).expect("restore receipt path");
+        assert!(
+            evaluate(
+                &policy,
+                "sbx-other",
+                true,
+                &body,
+                MetaMode::Preserve,
+                Some(&required),
+            )
+            .allow
+        );
+        let replay = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &body,
+            MetaMode::Preserve,
+            Some(&required),
+        );
+        assert_eq!(replay.reason_code, reason::APPROVAL_REPLAYED);
+    }
+
+    #[test]
+    fn receipts_are_chained_best_effort_or_required() {
         let issuer = SigningKey::generate();
         let holder = SigningKey::generate();
         let policy = policy_for(&issuer);

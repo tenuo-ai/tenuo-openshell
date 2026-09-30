@@ -154,7 +154,7 @@ def check_pairs(paired: dict[str, dict[str, dict]]) -> list[dict]:
                 "baseline_reason": BASELINE_REASON.get(scenario, "") if same else "",
                 "point": point,
                 "reason": tenuo["reason"],
-                "verify_us": tenuo["verify_us"],
+                "decision_us": tenuo["decision_us"],
             }
         )
     return checked
@@ -247,23 +247,23 @@ def render(checked: list[dict], latency: list[dict], timeout_ms: int, median_us:
         f"OpenShell middleware timeout: {timeout_ms} ms.",
         f"Median end-to-end sandbox call with Tenuo: {median_us} us.",
         "",
-        "| Scenario | OpenShell only | OpenShell + Tenuo | Class | Enforcement point | Reason | Verification us |",
+        "| Scenario | OpenShell only | OpenShell + Tenuo | Class | Enforcement point | Reason | Decision us |",
         "| --- | --- | --- | --- | --- | --- | ---: |",
     ]
     for row in checked:
         reason = row["reason"] or "—"
         if row["classification"] == "baseline":
             reason = row["baseline_reason"]
-        verify = str(row["verify_us"])
+        decision = str(row["decision_us"])
         lines.append(
-            "| {scenario} | {openshell_only} | {openshell_tenuo} | {classification} | {point} | {why} | {verify} |".format(
+            "| {scenario} | {openshell_only} | {openshell_tenuo} | {classification} | {point} | {why} | {decision} |".format(
                 scenario=row["scenario"],
                 openshell_only=row["openshell_only"],
                 openshell_tenuo=row["openshell_tenuo"],
                 classification=row["classification"],
                 point=row["point"],
                 why=reason,
-                verify=verify,
+                decision=decision,
             )
         )
     lines.extend(
@@ -304,7 +304,7 @@ def main() -> None:
                     "outcome": "function ran",
                     "point": "agent-toolkit",
                     "reason": "",
-                    "verify_us": 0,
+                    "decision_us": 0,
                     "e2e_us": 0,
                 }
             )

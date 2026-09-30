@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/tenuo-ai/tenuo-openshell
-  tag: "0.1.0"
+  tag: "v0.1.0"
   pullPolicy: IfNotPresent
 
 service:
@@ -30,6 +30,7 @@ openshell:
 replay:
   redisSecret: tenuo-openshell-redis
   redisUrlKey: url
+  cluster: false
   keyPrefix: tenuo:openshell:production:approval
 
 receipts:
@@ -52,6 +53,16 @@ networkPolicy:
   enabled: true
   callerNamespaceSelector:
     kubernetes.io/metadata.name: openshell
+  adminNamespaceSelector:
+    kubernetes.io/metadata.name: monitoring
+  adminPodSelector:
+    app.kubernetes.io/name: prometheus
+  dnsNamespaceSelector:
+    kubernetes.io/metadata.name: kube-system
+  dnsPodSelector:
+    k8s-app: kube-dns
+  dnsIpBlock: ""
+  dnsPort: 53
   redisNamespaceSelector:
     kubernetes.io/metadata.name: redis
   redisPodSelector:

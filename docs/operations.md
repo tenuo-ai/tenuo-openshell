@@ -9,9 +9,10 @@ replay backend. Provider-synchronized policies also require an unexpired
 unready pod from service; do not route around a failed authorization dependency.
 
 Prometheus metrics on the admin port report allow/deny counts, verifier
-failures, aggregate verification time, active policy version, and policy reload
-failures. They never contain warrant bodies, arguments, approvals, keys, or
-OpenShell display names.
+failures, aggregate enforcement-decision time, active policy version, and
+policy reload failures. Decision time includes configured replay-store and
+receipt-persistence I/O. Metrics never contain warrant bodies, arguments,
+approvals, keys, or OpenShell display names.
 
 ## Policy rollout and rollback
 
@@ -51,8 +52,8 @@ recovering or replacing a pod.
 2. Publish a signed revocation list when warrant authority may remain live.
 3. Rotate receipt and TLS keys through new immutable Secrets.
 4. Restart the OpenShell gateway when its middleware registration changes.
-5. Preserve receipts, OCSF events, policy versions, and revocation floors for
-   incident analysis.
+5. Preserve receipts, structured decision logs, policy versions, and revocation
+   floors for incident analysis.
 
 ## Upgrade and rollback
 

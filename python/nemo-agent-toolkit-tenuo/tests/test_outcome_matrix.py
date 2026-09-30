@@ -26,7 +26,7 @@ def observations() -> list[dict]:
                     "outcome": protected,
                     "point": point,
                     "reason": reason,
-                    "verify_us": 7,
+                    "decision_us": 7,
                     "e2e_us": 10 if point == "openshell" else 0,
                 },
                 {
@@ -35,7 +35,7 @@ def observations() -> list[dict]:
                     "outcome": control,
                     "point": point,
                     "reason": "",
-                    "verify_us": 0,
+                    "decision_us": 0,
                     "e2e_us": 8 if point == "openshell" else 0,
                 },
             ]

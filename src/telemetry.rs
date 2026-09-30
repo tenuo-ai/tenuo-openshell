@@ -8,7 +8,7 @@ pub struct Telemetry {
     allows: AtomicU64,
     denies: AtomicU64,
     verifier_failures: AtomicU64,
-    verify_us: AtomicU64,
+    decision_us: AtomicU64,
 }
 
 impl Telemetry {
@@ -21,8 +21,8 @@ impl Telemetry {
                 self.verifier_failures.fetch_add(1, Ordering::Relaxed);
             }
         }
-        self.verify_us
-            .fetch_add(outcome.verify_us, Ordering::Relaxed);
+        self.decision_us
+            .fetch_add(outcome.decision_us, Ordering::Relaxed);
     }
 
     pub fn prometheus(&self, policy_version: u64, reload_failures: u64) -> String {
@@ -33,8 +33,8 @@ impl Telemetry {
                 "tenuo_openshell_decisions_total{{outcome=\"deny\"}} {}\n",
                 "# TYPE tenuo_openshell_verifier_failures_total counter\n",
                 "tenuo_openshell_verifier_failures_total {}\n",
-                "# TYPE tenuo_openshell_verify_microseconds_total counter\n",
-                "tenuo_openshell_verify_microseconds_total {}\n",
+                "# TYPE tenuo_openshell_decision_microseconds_total counter\n",
+                "tenuo_openshell_decision_microseconds_total {}\n",
                 "# TYPE tenuo_openshell_policy_version gauge\n",
                 "tenuo_openshell_policy_version {}\n",
                 "# TYPE tenuo_openshell_policy_reload_failures_total counter\n",
@@ -43,7 +43,7 @@ impl Telemetry {
             self.allows.load(Ordering::Relaxed),
             self.denies.load(Ordering::Relaxed),
             self.verifier_failures.load(Ordering::Relaxed),
-            self.verify_us.load(Ordering::Relaxed),
+            self.decision_us.load(Ordering::Relaxed),
             policy_version,
             reload_failures,
         )

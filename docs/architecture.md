@@ -45,8 +45,11 @@ roots, verification errors, and unavailable verifier state deny by default.
 MCP lifecycle methods pass only through an explicit allowlist. Unknown methods
 fail closed.
 
-Production replicas share a Redis replay store. Multi-approval consumption is
-one atomic transaction, so a failed batch consumes nothing. Versioned policy
+Production replicas share a Redis replay store. Approval identity is global to
+the deployment, and multi-approval reservation is one atomic transaction, so a
+failed batch reserves nothing. Redis keys share a deployment-specific cluster
+hash slot. A required receipt failure conditionally releases only the calling
+reservation; a successful decision leaves it consumed. Versioned policy
 snapshots reload atomically and preserve the last valid snapshot. Signed
 revocation lists have freshness bounds and persistent per-replica rollback
 floors; readiness fails when either revocation or Redis is unavailable.

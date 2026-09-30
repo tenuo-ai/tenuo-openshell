@@ -84,7 +84,7 @@ make demo
 The same launcher then repeats the calls through a second gateway that does
 not register the middleware. That sandbox policy keeps the same tool
 admission rules and omits the middleware block. `results/outcome-matrix.md`
-is the live comparison, including verification time next to the middleware
+is the live comparison, including enforcement-decision time next to the middleware
 timeout. Matching outcomes are marked baseline with the reason. `results/`
 is local output and is not part of the source tree. The scheduled and manually
 dispatched GitHub workflow uploads the matrix, observations, effect logs,

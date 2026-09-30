@@ -19,5 +19,17 @@ All notable changes will be documented here. The format follows
   rollback floors, health/readiness endpoints, and Prometheus metrics.
 - Hardened HA Helm deployment with required receipt persistence and network
   isolation.
+- Native Redis Cluster replay support and provider-neutral policy readiness.
+
+### Fixed
+
+- Unified approval replay semantics across in-memory, standalone Redis, and
+  Redis Cluster backends; approval nonces are single-use per deployment.
+- Release approval reservations when required receipt persistence prevents an
+  effect from being allowed.
+- Label enforcement-decision timing accurately when it includes replay and
+  receipt I/O.
+- Restricted admin and DNS NetworkPolicy rules, made DNS selectors configurable,
+  aligned Helm and release image tags, and scaled voluntary disruption policy.
 
 There has not yet been a public release.

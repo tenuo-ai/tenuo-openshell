@@ -101,11 +101,11 @@ async def deny_restart(middleware: TenuoFunctionMiddleware, bound, request_id: s
                 context=context,
             )
         except AuthorizationDenied as exc:
-            verify_us = int((time.perf_counter() - started) * 1_000_000)
+            decision_us = int((time.perf_counter() - started) * 1_000_000)
             if exc.category != "tool_denied":
                 raise SystemExit(f"unexpected denial category {exc.category}") from exc
             print(
-                f"tenuo_decision request_id={request_id} verify_us={verify_us} "
+                f"tenuo_decision request_id={request_id} decision_us={decision_us} "
                 "outcome=deny reason=tool_denied",
                 flush=True,
             )

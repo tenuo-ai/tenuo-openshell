@@ -200,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
                     started = time.perf_counter()
                     meta = normalize_meta(params.get("_meta"))
                     result = self.verifier.verify(name, arguments, meta=meta)
-                    verify_us = int((time.perf_counter() - started) * 1_000_000)
+                    decision_us = int((time.perf_counter() - started) * 1_000_000)
                     if result.allowed:
                         outcome = "allow"
                         reason = "-"
@@ -208,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
                         outcome = "deny"
                         reason = result.error_type or "authorization_failed"
                     print(
-                        f"tenuo_decision request_id={request_id} verify_us={verify_us} "
+                        f"tenuo_decision request_id={request_id} decision_us={decision_us} "
                         f"outcome={outcome} reason={reason}",
                         flush=True,
                     )

@@ -59,7 +59,7 @@ struct Args {
     #[arg(long)]
     receipt_key: Option<PathBuf>,
 
-    /// Hex receipt log. A write failure does not change the authorization decision.
+    /// Hex receipt log. Best-effort write failures do not change the decision.
     #[arg(long)]
     receipt_log: Option<PathBuf>,
 
@@ -70,6 +70,10 @@ struct Args {
     /// Redis URL for durable, cross-replica approval replay protection.
     #[arg(long, env = "TENUO_REPLAY_REDIS_URL")]
     replay_redis_url: Option<String>,
+
+    /// Comma-separated Redis Cluster bootstrap URLs. Mutually exclusive with --replay-redis-url.
+    #[arg(long, env = "TENUO_REPLAY_REDIS_CLUSTER_URLS", value_delimiter = ',')]
+    replay_redis_cluster_urls: Vec<String>,
 
     /// Deployment-specific Redis key prefix for replay isolation.
     #[arg(long, default_value = "tenuo:openshell:approval")]
@@ -129,20 +133,39 @@ async fn main() -> ExitCode {
         Ok(security) => security,
         Err(error) => return usage_error(error),
     };
-    match args.replay_redis_url.as_deref() {
-        Some(url) => {
+    if args.replay_redis_url.is_some() && !args.replay_redis_cluster_urls.is_empty() {
+        return usage_error(
+            "--replay-redis-url and --replay-redis-cluster-urls are mutually exclusive".to_string(),
+        );
+    }
+    match (
+        args.replay_redis_url.as_deref(),
+        args.replay_redis_cluster_urls.as_slice(),
+    ) {
+        (Some(url), []) => {
             let store = match RedisReplayStore::connect(url, &args.replay_key_prefix).await {
                 Ok(store) => store,
                 Err(_) => return usage_error("Redis replay store is unavailable".to_string()),
             };
             policy = policy.with_replay_store(std::sync::Arc::new(store));
         }
-        None if security.is_some() && !args.allow_in_memory_replay => {
+        (None, []) if security.is_some() && !args.allow_in_memory_replay => {
             return usage_error(
-                "the production profile requires --replay-redis-url; use --allow-in-memory-replay only for a single-instance evaluation".to_string(),
+                "the production profile requires --replay-redis-url or --replay-redis-cluster-urls; use --allow-in-memory-replay only for a single-instance evaluation".to_string(),
             );
         }
-        None => {}
+        (None, []) => {}
+        (None, urls) => {
+            let store = match RedisReplayStore::connect_cluster(urls, &args.replay_key_prefix).await
+            {
+                Ok(store) => store,
+                Err(_) => {
+                    return usage_error("Redis Cluster replay store is unavailable".to_string());
+                }
+            };
+            policy = policy.with_replay_store(std::sync::Arc::new(store));
+        }
+        (Some(_), _) => unreachable!("conflicting replay options were rejected"),
     }
     let policy = std::sync::Arc::new(PolicyManager::new(
         args.policy.clone(),
