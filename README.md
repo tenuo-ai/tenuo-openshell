@@ -1,16 +1,21 @@
-# Tenuo for NVIDIA OpenShell
+# Safe delegation and task-level authorization for NVIDIA agents
 
 [![CI](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/ci.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/ci.yml)
 [![OpenShell E2E](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Task-scoped authorization for agents running in NVIDIA OpenShell and NVIDIA
-NeMo Agent Toolkit.
+**Portable, least-privilege authority for agents running in NVIDIA OpenShell
+and NVIDIA NeMo Agent Toolkit.**
 
 OpenShell controls which tools an agent can reach. Tenuo constrains what the
-agent may do with an allowed tool for its current task—including the argument
-values it may send—and verifies that authority outside the agent process before
+agent may do with an allowed tool for its current task, including the argument
+values it may send, and verifies that authority outside the agent process before
 OpenShell injects provider credentials.
+
+When work is delegated, each child receives signed authority that can only
+stay equal or become narrower: fewer tools, tighter arguments, shorter expiry,
+or additional approval requirements. A child cannot restore authority removed
+by its parent.
 
 ```text
 model or agent
@@ -24,6 +29,22 @@ Tenuo supervisor middleware ── signed task warrant, PoP, arguments
       ▼
 OpenShell credential injection ── remote MCP effect
 ```
+
+The same authority can cross runtime boundaries without being translated into
+framework-specific allowlists. A task can originate in LangGraph, delegate over
+A2A to an agent in OpenShell, invoke an Agent Toolkit function, and reach an MCP
+server while every boundary verifies the same chain independently.
+
+Tenuo has 10+ native integration surfaces across agent frameworks, protocols,
+and execution boundaries, including OpenAI Agents SDK, LangChain, LangGraph,
+CrewAI, AutoGen, Google ADK, MCP, FastMCP, A2A, FastAPI, and Temporal. See the
+[Tenuo integration overview](https://github.com/tenuo-ai/tenuo#integrate-at-the-boundary-you-control).
+
+Tenuo's delegation model is aligned with the
+[Attenuating Authorization Tokens for Agentic Delegation Chains](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
+work: an active individual Internet-Draft for task-scoped, attenuable authority.
+It is a developing standards proposal, not a finalized or IETF-endorsed
+standard, and Tenuo does not claim wire compatibility while the draft evolves.
 
 The integration is Apache-2.0. It consists of:
 
