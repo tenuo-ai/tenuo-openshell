@@ -30,7 +30,7 @@ chrono = "0.4"
 ciborium = "0.2"
 clap = { version = "4.5", features = ["derive", "env"] }
 hex = "0.4"
-jsonwebtoken = "9.3"
+jsonwebtoken = "11.1"
 opentelemetry = { version = "0.29", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.29", default-features = false, features = ["grpc-tonic", "trace", "tls-roots"] }
 opentelemetry_sdk = { version = "0.29", default-features = false, features = ["trace", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
