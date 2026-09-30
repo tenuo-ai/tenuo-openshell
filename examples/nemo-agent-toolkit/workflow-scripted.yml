@@ -1,0 +1,25 @@
+# The same agent with a scripted model, so the example runs without an API key.
+# scripted_llm.py serves an OpenAI-compatible endpoint that reads the logs,
+# asks for a restart, then answers.
+
+function_groups:
+  ops:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: http://127.0.0.1:7415/mcp
+
+llms:
+  scripted:
+    _type: openai
+    base_url: http://127.0.0.1:18080/v1
+    api_key: not-used
+    model_name: scripted
+    temperature: 0.0
+
+workflow:
+  _type: react_agent
+  tool_names: [ops]
+  llm_name: scripted
+  verbose: true
+  pass_tool_call_errors_to_agent: true

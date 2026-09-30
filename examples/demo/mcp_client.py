@@ -40,6 +40,7 @@ async def main(url: str) -> dict:
                         "code": error.error.code,
                         "reason": tenuo.get("code", ""),
                         "source": tenuo.get("source", ""),
+                        "request_hash": tenuo.get("request_hash", ""),
                     }
                     continue
                 text = " ".join(

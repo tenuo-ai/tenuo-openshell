@@ -6,6 +6,7 @@
 //! tenuo-openshell-agent proxy --upstream https://mcp.internal/mcp
 //! ```
 
+mod approvals;
 mod authority;
 mod proxy;
 mod sign;
@@ -43,6 +44,10 @@ struct WarrantArgs {
     /// Warrant file, re-read on every call.
     #[arg(long, env = "TENUO_WARRANT_FILE")]
     warrant_file: Option<PathBuf>,
+
+    /// Directory for signed approvals and pending approval requests.
+    #[arg(long, env = "TENUO_APPROVALS_DIR")]
+    approvals_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -66,6 +71,20 @@ enum Command {
         key: KeyArgs,
         #[command(flatten)]
         warrant: WarrantArgs,
+    },
+    /// List calls waiting for approval.
+    Pending {
+        #[arg(long, env = "TENUO_APPROVALS_DIR")]
+        approvals_dir: Option<PathBuf>,
+        /// One JSON array instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify and install a signed approval. `-` reads stdin.
+    InstallApproval {
+        #[arg(long, env = "TENUO_APPROVALS_DIR")]
+        approvals_dir: Option<PathBuf>,
+        approval: String,
     },
     /// Sign one JSON-RPC message from stdin and write it to stdout.
     Sign {
@@ -133,6 +152,42 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::Status { key, warrant } => status(&holder(&key, warrant)?),
+        Command::Pending {
+            approvals_dir,
+            json,
+        } => {
+            let pending =
+                approvals::ApprovalStore::new(approvals_path(approvals_dir)?).list_pending();
+            if json {
+                println!("{}", serde_json::Value::Array(pending));
+            } else {
+                for request in &pending {
+                    println!(
+                        "{}  {}  {}",
+                        request["request_hash"].as_str().unwrap_or_default(),
+                        request["tool"].as_str().unwrap_or_default(),
+                        request["arguments"]
+                    );
+                }
+            }
+            Ok(())
+        }
+        Command::InstallApproval {
+            approvals_dir,
+            approval,
+        } => {
+            let bytes = if approval == "-" {
+                let mut input = Vec::new();
+                std::io::stdin().read_to_end(&mut input)?;
+                input
+            } else {
+                approval.into_bytes()
+            };
+            let hash =
+                approvals::ApprovalStore::new(approvals_path(approvals_dir)?).install(&bytes)?;
+            println!("installed approval for request {}", hex::encode(hash));
+            Ok(())
+        }
         Command::Sign { key, warrant } => {
             let holder = holder(&key, warrant)?;
             let mut input = Vec::new();
@@ -142,7 +197,7 @@ fn run(cli: Cli) -> Result<()> {
                 sign::Signed::Body(body) => std::io::stdout().write_all(&body)?,
                 sign::Signed::Denied(body) => {
                     std::io::stdout().write_all(&body)?;
-                    return Err("the call is outside the installed warrant".into());
+                    return Err("the call was not signed; see the JSON-RPC error on stdout".into());
                 }
             }
             Ok(())
@@ -196,11 +251,19 @@ fn status(holder: &Holder) -> Result<()> {
 
 fn holder(key: &KeyArgs, warrant: WarrantArgs) -> Result<Holder> {
     let key = authority::load_key(&key_path(key)?)?;
+    let store = approvals::ApprovalStore::new(approvals_path(warrant.approvals_dir.clone())?);
     let source = match warrant.inline {
         Some(text) if !text.trim().is_empty() => WarrantSource::Inline(text),
         _ => WarrantSource::File(warrant_path(warrant.warrant_file)?),
     };
-    Ok(Holder::new(key, source))
+    Ok(Holder::new(key, source).with_approvals(store))
+}
+
+fn approvals_path(path: Option<PathBuf>) -> Result<PathBuf> {
+    match path {
+        Some(path) => Ok(path),
+        None => Ok(tenuo_dir()?.join("approvals")),
+    }
 }
 
 fn key_path(key: &KeyArgs) -> Result<PathBuf> {

@@ -63,6 +63,17 @@ jobs:
         run: uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test nat info components | grep -F tenuo
       - run: uv build --project python/nemo-agent-toolkit-tenuo
 
+  nemo-agent-toolkit-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: sudo apt-get update && sudo apt-get install -y jq netcat-openbsd
+      - name: ReAct agent through the signing proxy with a human approval
+        run: examples/nemo-agent-toolkit/run.sh
+
   demo-assets:
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +82,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y jq
       - run: bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh ci/check.sh
-      - run: python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py examples/interoperability/a2a_handoff.py
+      - run: python3 -m py_compile examples/nemo-agent-toolkit/scripted_llm.py examples/demo/mcp_client.py examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py examples/interoperability/a2a_handoff.py
       - run: cargo run --locked --bin tenuo-demo-fixture -- --output /tmp/tenuo-fixtures --sandbox-id ci-sandbox
       - run: jq -e '.sandboxes["ci-sandbox"]' /tmp/tenuo-fixtures/policy.json
       - run: jq -e '.params._meta.tenuo' /tmp/tenuo-fixtures/task-a-read.json

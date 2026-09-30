@@ -1,5 +1,6 @@
 //! Attach `params._meta.tenuo` to MCP `tools/call` requests.
 
+use crate::approvals;
 use crate::authority::{AuthorityError, Holder};
 use serde_json::{json, Map, Value};
 use tenuo::sdk::prelude::*;
@@ -89,6 +90,8 @@ pub fn sign_body(holder: &Holder, body: &[u8]) -> Signed {
 enum SignError {
     Authority(AuthorityError),
     Denied(tenuo::sdk::Denial),
+    /// Approval is required and none is installed; the request was recorded.
+    ApprovalPending([u8; 32]),
     Arguments,
     Encoding,
 }
@@ -106,6 +109,17 @@ impl SignError {
             Self::Denied(denied) => {
                 denial(id, denied.code(), denied.message(), denied.needs_approval())
             }
+            Self::ApprovalPending(hash) => {
+                let hash = hex::encode(hash);
+                let message = format!(
+                    "request {hash} is waiting for an approver (`tenuo-openshell approve --request {hash}`); retry the same call once it is approved"
+                );
+                let mut body: Value =
+                    serde_json::from_slice(&denial(id, "approval-required", &message, true))
+                        .unwrap_or_default();
+                body["error"]["data"]["tenuo"]["request_hash"] = Value::String(hash);
+                serde_json::to_vec(&body).unwrap_or_default()
+            }
             Self::Arguments => denial(
                 id,
                 "arguments-rejected",
@@ -120,11 +134,36 @@ impl SignError {
 fn authorize(holder: &Holder, name: &str, arguments: &Value) -> Result<Value, SignError> {
     let presented = holder.present().map_err(SignError::Authority)?;
     let call = Call::try_from_json(name, arguments).map_err(|_| SignError::Arguments)?;
+    let store = holder.approvals();
+    let leaf = presented.authority.leaf();
+    let hash = approvals::request_hash(leaf, &call);
+    let installed = store.map(|store| store.load(&hash)).unwrap_or_default();
+    let signed: Vec<_> = installed
+        .iter()
+        .map(|(_, approval)| approval.clone())
+        .collect();
+    let attempt = if signed.is_empty() {
+        AuthorizationAttempt::new(&call)
+    } else {
+        AuthorizationAttempt::with_approvals(&call, &signed)
+    };
     match presented
         .guard
-        .guard(&presented.authority, &call, encode_meta_from_authorized)
+        .guard_attempt(&presented.authority, attempt, encode_meta_from_authorized)
     {
-        Ok(guarded) => Ok(guarded.into_inner()),
+        Ok(guarded) => {
+            if let Some(store) = store {
+                let paths: Vec<_> = installed.into_iter().map(|(path, _)| path).collect();
+                store.consume(&hash, &paths);
+            }
+            Ok(guarded.into_inner())
+        }
+        Err(tenuo::sdk::GuardError::Denied(denied)) if denied.needs_approval() => match store {
+            Some(store) if store.record_pending(&hash, leaf, name, arguments).is_ok() => {
+                Err(SignError::ApprovalPending(hash))
+            }
+            _ => Err(SignError::Denied(denied)),
+        },
         Err(tenuo::sdk::GuardError::Denied(denied)) => Err(SignError::Denied(denied)),
         Err(_) => Err(SignError::Encoding),
     }
@@ -153,7 +192,8 @@ pub fn error_response(
         "id": id,
         "error": {
             "code": number,
-            "message": title,
+            // Many MCP clients surface only `message`, so it names the reason.
+            "message": format!("{title}: {message}"),
             "data": {"tenuo": {"code": code, "message": message, "source": source}}
         }
     }))
@@ -266,5 +306,84 @@ mod tests {
             panic!("unsigned call was forwarded");
         };
         assert_eq!(error_code(&body).1, "authority-missing");
+    }
+
+    #[test]
+    fn a_gated_call_waits_for_an_approval_then_uses_it_once() {
+        use crate::approvals::ApprovalStore;
+        let directory = tempfile::tempdir().unwrap();
+        let issuer = SigningKey::generate();
+        let key = SigningKey::generate();
+        let approver = SigningKey::generate();
+        let mut gates = tenuo::ApprovalGateMap::new();
+        gates.insert(
+            "restart_service".to_string(),
+            tenuo::ToolApprovalGate::whole_tool(),
+        );
+        let warrant = Warrant::builder()
+            .capability("restart_service", ConstraintSet::new())
+            .holder(key.public_key())
+            .required_approvers(vec![approver.public_key()])
+            .min_approvals(1)
+            .extension(
+                tenuo::APPROVAL_GATE_EXTENSION_KEY,
+                tenuo::encode_approval_gate_map(&gates).unwrap(),
+            )
+            .ttl(Duration::from_secs(300))
+            .build(&issuer)
+            .unwrap();
+        let store = ApprovalStore::new(directory.path());
+        let holder = Holder::new(
+            key,
+            WarrantSource::Inline(crate::authority::encode_chain(&[warrant]).unwrap()),
+        )
+        .with_approvals(store.clone());
+        let body = call("restart_service", json!({"service": "payments"}), None);
+
+        let Signed::Denied(first) = sign_body(&holder, &body) else {
+            panic!("gated call was signed without an approval");
+        };
+        let first: Value = serde_json::from_slice(&first).unwrap();
+        assert_eq!(first["error"]["code"], APPROVAL_REQUIRED);
+        let hash = first["error"]["data"]["tenuo"]["request_hash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let pending = store.list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["request_hash"], hash);
+        assert_eq!(pending[0]["arguments"], json!({"service": "payments"}));
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let signed = tenuo::approval::SignedApproval::create(
+            tenuo::approval::ApprovalPayload {
+                version: 1,
+                request_hash: hex::decode(&hash).unwrap().try_into().unwrap(),
+                nonce: [3; 16],
+                external_id: "test".to_string(),
+                approved_at: now,
+                expires_at: now + 300,
+                extensions: None,
+            },
+            &approver,
+        );
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&signed, &mut encoded).unwrap();
+        store.install(&encoded).unwrap();
+
+        let Signed::Body(forwarded) = sign_body(&holder, &body) else {
+            panic!("approved call was not signed");
+        };
+        let forwarded: Value = serde_json::from_slice(&forwarded).unwrap();
+        let meta =
+            tenuo::sdk::transport::mcp_meta::decode_meta(&forwarded["params"]["_meta"]["tenuo"])
+                .unwrap();
+        assert_eq!(meta.approvals().len(), 1);
+        assert!(store.list_pending().is_empty());
+
+        assert!(matches!(sign_body(&holder, &body), Signed::Denied(_)));
     }
 }

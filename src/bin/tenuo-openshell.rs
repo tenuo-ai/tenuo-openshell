@@ -44,6 +44,8 @@ enum Command {
     Warrant(WarrantCommand),
     /// Generate a holder key in a sandbox, issue a warrant to it, and install it.
     Provision(ProvisionArgs),
+    /// Review a pending approval request, sign it, and install it.
+    Approve(ApproveArgs),
 }
 
 #[derive(Subcommand)]
@@ -129,17 +131,52 @@ struct IssueArgs {
 
 #[derive(Args)]
 struct ProvisionArgs {
+    #[command(flatten)]
+    sandbox: SandboxArgs,
+    #[command(flatten)]
+    authority: AuthorityArgs,
+}
+
+#[derive(Args, Clone)]
+struct SandboxArgs {
     /// OpenShell sandbox name.
     #[arg(long)]
     sandbox: String,
-    #[command(flatten)]
-    authority: AuthorityArgs,
     /// OpenShell CLI to run.
     #[arg(long, default_value = "openshell")]
     openshell: String,
     /// Passed to the OpenShell CLI as `--gateway-endpoint`.
     #[arg(long)]
     gateway_endpoint: Option<String>,
+}
+
+#[derive(Args)]
+struct ApproveArgs {
+    /// Request hash from the agent's `-32002` error or `tenuo-openshell-agent
+    /// pending`. A unique prefix is enough.
+    #[arg(long)]
+    request: String,
+    /// Approver private key (32 raw bytes or 64 hex characters).
+    #[arg(long)]
+    approver_key: PathBuf,
+    /// Seconds the approval stays valid.
+    #[arg(long, default_value_t = 300)]
+    ttl: u64,
+    /// Approve without the interactive confirmation.
+    #[arg(long)]
+    yes: bool,
+    /// Read pending requests from this file (the output of
+    /// `tenuo-openshell-agent pending --json`) and print the approval instead
+    /// of installing it in a sandbox.
+    #[arg(long, conflicts_with = "sandbox")]
+    pending: Option<PathBuf>,
+    #[arg(long, requires = "sandbox")]
+    openshell: Option<String>,
+    #[arg(long, requires = "sandbox")]
+    gateway_endpoint: Option<String>,
+    /// OpenShell sandbox whose pending request to approve.
+    #[arg(long, required_unless_present = "pending")]
+    sandbox: Option<String>,
 }
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -168,6 +205,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::Provision(args) => provision(&args),
+        Command::Approve(args) => approve(&args),
     }
 }
 
@@ -377,20 +415,20 @@ fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
 }
 
 fn provision(args: &ProvisionArgs) -> Result<()> {
-    let public = openshell_exec(args, &[AGENT, "keygen"])?;
+    let public = openshell_exec(&args.sandbox, &[AGENT, "keygen"])?;
     let holder = read_public(public.lines().last().unwrap_or_default())?;
     let chain = issue(&args.authority, &holder)?;
     let encoded = encode_chain(&chain)?;
-    openshell_exec(args, &[AGENT, "install-warrant", &encoded])?;
+    openshell_exec(&args.sandbox, &[AGENT, "install-warrant", &encoded])?;
     let leaf = chain.last().ok_or("empty chain")?;
-    println!("sandbox {}", args.sandbox);
+    println!("sandbox {}", args.sandbox.sandbox);
     println!("holder  {}", hex::encode(holder.to_bytes()));
     println!("warrant {}", leaf.id());
     println!("tools   {}", leaf.tools().join(", "));
     Ok(())
 }
 
-fn openshell_exec(args: &ProvisionArgs, command: &[&str]) -> Result<String> {
+fn openshell_exec(args: &SandboxArgs, command: &[&str]) -> Result<String> {
     let mut process = Process::new(&args.openshell);
     if let Some(endpoint) = &args.gateway_endpoint {
         process.args(["--gateway-endpoint", endpoint]);
@@ -409,6 +447,142 @@ fn openshell_exec(args: &ProvisionArgs, command: &[&str]) -> Result<String> {
         .into());
     }
     Ok(String::from_utf8(output.stdout)?.replace('\r', ""))
+}
+
+fn approve(args: &ApproveArgs) -> Result<()> {
+    let sandbox = args.sandbox.as_ref().map(|name| SandboxArgs {
+        sandbox: name.clone(),
+        openshell: args
+            .openshell
+            .clone()
+            .unwrap_or_else(|| "openshell".to_string()),
+        gateway_endpoint: args.gateway_endpoint.clone(),
+    });
+    let listing = match (&sandbox, &args.pending) {
+        (Some(sandbox), _) => openshell_exec(sandbox, &[AGENT, "pending", "--json"])?,
+        (None, Some(path)) => fs::read_to_string(path)?,
+        (None, None) => return Err("pass --sandbox or --pending".into()),
+    };
+    let listing: Value = serde_json::from_str(listing.lines().last().unwrap_or("[]"))?;
+    let request = find_request(&listing, &args.request)?;
+    let approver = read_secret(&args.approver_key)?;
+    let hash = verified_request_hash(request, &approver.public_key())?;
+
+    eprintln!("tool      {}", request["tool"].as_str().unwrap_or_default());
+    eprintln!("arguments {}", request["arguments"]);
+    eprintln!(
+        "warrant   {}",
+        request["warrant_id"].as_str().unwrap_or_default()
+    );
+    eprintln!("request   {}", hex::encode(hash));
+    eprintln!("expires   in {} seconds", args.ttl);
+    if !args.yes && !confirm()? {
+        return Err("not approved".into());
+    }
+
+    let approval = sign_approval(&approver, hash, args.ttl)?;
+    match &sandbox {
+        Some(sandbox) => {
+            openshell_exec(sandbox, &[AGENT, "install-approval", &approval])?;
+            println!(
+                "approved {} in sandbox {}",
+                hex::encode(hash),
+                sandbox.sandbox
+            );
+        }
+        None => println!("{approval}"),
+    }
+    Ok(())
+}
+
+fn find_request<'a>(listing: &'a Value, wanted: &str) -> Result<&'a Value> {
+    let wanted = wanted.trim().to_ascii_lowercase();
+    if wanted.len() < 8 {
+        return Err("use at least 8 characters of the request hash".into());
+    }
+    let matches: Vec<&Value> = listing
+        .as_array()
+        .ok_or("pending listing is not a JSON array")?
+        .iter()
+        .filter(|request| {
+            request["request_hash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with(&wanted))
+        })
+        .collect();
+    match matches.as_slice() {
+        [request] => Ok(request),
+        [] => Err(format!("no pending request {wanted}").into()),
+        _ => Err(format!("{wanted} matches more than one pending request").into()),
+    }
+}
+
+/// Recompute the hash from what the approver is shown, so the signature
+/// covers exactly that tool, those arguments, that warrant, and that holder.
+fn verified_request_hash(request: &Value, approver: &PublicKey) -> Result<[u8; 32]> {
+    let tool = request["tool"]
+        .as_str()
+        .ok_or("pending request has no tool")?;
+    let warrant_id = request["warrant_id"]
+        .as_str()
+        .ok_or("pending request has no warrant")?;
+    let holder = read_public(
+        request["holder"]
+            .as_str()
+            .ok_or("pending request has no holder")?,
+    )?;
+    let arguments = &request["arguments"];
+    let call = tenuo::sdk::prelude::Call::try_from_json(tool, arguments)
+        .map_err(|_| "pending request arguments cannot be hashed")?;
+    let hash =
+        tenuo::approval::compute_request_hash(warrant_id, tool, call.pop_args(), Some(&holder));
+    if request["request_hash"].as_str() != Some(hex::encode(hash).as_str()) {
+        return Err("pending request hash does not match its tool and arguments".into());
+    }
+    let approvers = request["required_approvers"]
+        .as_array()
+        .map(|keys| keys.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if !approvers.is_empty() && !approvers.contains(&hex::encode(approver.to_bytes()).as_str()) {
+        return Err("this approver key is not one the warrant accepts".into());
+    }
+    Ok(hash)
+}
+
+fn sign_approval(approver: &SigningKey, hash: [u8; 32], ttl: u64) -> Result<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let mut nonce = [0u8; 16];
+    nonce.copy_from_slice(&SigningKey::generate().public_key().to_bytes()[..16]);
+    let who = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
+    let approval = tenuo::approval::SignedApproval::create(
+        tenuo::approval::ApprovalPayload {
+            version: 1,
+            request_hash: hash,
+            nonce,
+            external_id: format!("tenuo-openshell:{who}"),
+            approved_at: now,
+            expires_at: now + ttl.max(1),
+            extensions: None,
+        },
+        approver,
+    );
+    Ok(approval.to_cbor_b64()?)
+}
+
+fn confirm() -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err(
+            "confirmation needs a terminal; pass --yes to approve non-interactively".into(),
+        );
+    }
+    eprint!("approve this call? [y/N] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 /// Capabilities JSON: tool name to argument constraints.
@@ -710,6 +884,47 @@ mod tests {
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[1].tools(), vec!["read_logs".to_string()]);
         assert_eq!(chain[1].authorized_holder(), &child.public_key());
+    }
+
+    #[test]
+    fn approvals_cover_exactly_what_the_approver_sees() {
+        let holder = SigningKey::generate().public_key();
+        let approver = SigningKey::generate();
+        let arguments = json!({"service": "payments", "replicas": 3});
+        let call = tenuo::sdk::prelude::Call::try_from_json("restart_service", &arguments).unwrap();
+        let hash = tenuo::approval::compute_request_hash(
+            "tnu_wrt_1",
+            "restart_service",
+            call.pop_args(),
+            Some(&holder),
+        );
+        let request = json!({
+            "request_hash": hex::encode(hash),
+            "warrant_id": "tnu_wrt_1",
+            "holder": hex::encode(holder.to_bytes()),
+            "tool": "restart_service",
+            "arguments": arguments,
+            "required_approvers": [hex::encode(approver.public_key().to_bytes())],
+        });
+        assert_eq!(
+            verified_request_hash(&request, &approver.public_key()).unwrap(),
+            hash
+        );
+
+        let mut tampered = request.clone();
+        tampered["arguments"]["replicas"] = json!(5);
+        assert!(verified_request_hash(&tampered, &approver.public_key()).is_err());
+        let stranger = SigningKey::generate().public_key();
+        assert!(verified_request_hash(&request, &stranger).is_err());
+
+        let listing = json!([request, {"request_hash": "ffff0000aaaa"}]);
+        let prefix = &hex::encode(hash)[..10];
+        assert_eq!(
+            find_request(&listing, prefix).unwrap()["tool"],
+            "restart_service"
+        );
+        assert!(find_request(&listing, "ab").is_err());
+        assert!(find_request(&listing, "0000000000").is_err());
     }
 
     #[test]
