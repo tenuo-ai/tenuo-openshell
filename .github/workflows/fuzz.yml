@@ -31,11 +31,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: fuzz
-      - run: cargo install cargo-fuzz --locked --version 0.13.1
-      # -close_fd_mask=2 drops the target's stderr, where Tenuo prints one line
-      # per denial. libFuzzer and sanitizer reports still print. Reproduce a
-      # crash locally with `cargo fuzz run <target> <artifact>` to see the
-      # panic message.
+      # cargo-fuzz itself builds on stable; its pinned dependencies do not
+      # always compile on the newest nightly. The targets still use nightly.
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable install cargo-fuzz --locked --version 0.13.1
+      # -close_fd_mask=2 drops the target's stderr. libFuzzer and sanitizer
+      # reports still print. Reproduce a crash locally with
+      # `cargo fuzz run <target> <artifact>` to see the panic message.
       - name: Run ${{ matrix.target }} for 60 seconds
         working-directory: fuzz
         run: |
