@@ -90,7 +90,7 @@ choose_port_block() {
   for _ in {1..200}; do
     start=$((20000 + RANDOM % 20000))
     ok=1
-    for ((offset = 0; offset < 5; offset++)); do
+    for ((offset = 0; offset < 6; offset++)); do
       if ! port_is_free "$((start + offset))"; then
         ok=0
         break
@@ -101,7 +101,7 @@ choose_port_block() {
       return
     fi
   done
-  echo "failed to find five free ports" >&2
+  echo "failed to find six free ports" >&2
   exit 1
 }
 
@@ -127,6 +127,7 @@ GATEWAY_PORT="$((PORT_BASE + 1))"
 HEALTH_PORT="$((PORT_BASE + 2))"
 UPSTREAM_PORT="$((PORT_BASE + 3))"
 A2A_PORT="$((PORT_BASE + 4))"
+ADMIN_PORT="$((PORT_BASE + 5))"
 GATEWAY_ENDPOINT="http://127.0.0.1:$GATEWAY_PORT"
 GATEWAY_BIND_ADDRESS="127.0.0.1"
 SUPERVISOR_GRPC_ENDPOINT=""
@@ -324,6 +325,8 @@ start_middleware() {
     --openshell-jwt-key-id "$RUN_ID" \
     --allow-in-memory-replay \
     --audience "$AUDIENCE" \
+    --admin-listen "127.0.0.1:$ADMIN_PORT" \
+    --evaluate-results \
     --receipt-key "$RECEIPT_KEY" \
     --receipt-log "$RECEIPT_DIR/openshell.jsonl" >>"$MIDDLEWARE_LOG" 2>&1 &
   MIDDLEWARE_PID=$!
@@ -526,6 +529,54 @@ mcp_client_run() {
   fi
 }
 
+# Sign a staging payments read with JSON-RPC id $2 inside the sandbox, using
+# the holder key and warrant `mcp_client_run` provisioned, and send it with
+# curl. The explicit id keeps receipts matchable.
+sandbox_signed_call() {
+  local sandbox="$1" id="$2"
+  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+    set -e
+    work="$(mktemp -d)"
+    printf "%s" "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"read_logs\",\"arguments\":{\"service\":\"payments\",\"environment\":\"staging\"}}}" \
+      | tenuo-openshell-agent sign >"$work/body.json"
+    curl -sS -i --max-time 20 "http://host.openshell.internal:$2/mcp" \
+      --header "content-type: application/json" \
+      --header "accept: application/json, text/event-stream" \
+      --header "mcp-protocol-version: 2025-11-25" \
+      --data-binary @"$work/body.json"
+  ' sh "$id" "$UPSTREAM_PORT"
+}
+
+# A higher policy version limits results in the first sandbox to 64 bytes. The
+# sandbox signs a read whose result is larger. The read runs and OpenShell
+# withholds its result, because the upstream call happens before the response.
+result_size_limit() {
+  local id=17 output="$RUN_DIR/result-limit.out" version
+  jq --arg sandbox "$SANDBOX_ID" \
+    '.version = ((.version // 1) + 1) | .sandboxes[$sandbox].max_result_bytes = 64' \
+    "$FIXTURE_DIR/policy.json" >"$FIXTURE_DIR/policy.next.json"
+  mv "$FIXTURE_DIR/policy.next.json" "$FIXTURE_DIR/policy.json"
+  version="$(jq -r .version "$FIXTURE_DIR/policy.json")"
+  for _ in {1..30}; do
+    if curl -fsS "http://127.0.0.1:$ADMIN_PORT/metrics" 2>/dev/null \
+      | grep -Fxq "tenuo_openshell_policy_version $version"; then
+      break
+    fi
+    sleep 1
+  done
+  curl -fsS "http://127.0.0.1:$ADMIN_PORT/metrics" | grep -Fxq "tenuo_openshell_policy_version $version" \
+    || fail "the result limit policy was loaded"
+  sandbox_signed_call "$SANDBOX_NAME" "$id" \
+    >"$output" 2>>"$SETUP_LOG" || fail "oversized result returns a response"
+  grep -Fq '403 Forbidden' "$output" || fail "oversized result was withheld"
+  grep -Fq 'tenuo_result_too_large' "$output" || fail "oversized result reason is tenuo_result_too_large"
+  grep -Fq "read payments logs in staging" "$output" && fail "oversized result reached the sandbox"
+  jq -se 'length == 7 and (last | .tool == "read_logs")' "$EFFECT_LOG" >/dev/null \
+    || fail "the read behind the withheld result ran"
+  grep -Fq "tenuo_result request_id=$id " "$MIDDLEWARE_LOG" || fail "oversized result has a result decision"
+  printf 'PASS oversized result was withheld after the read ran\n'
+}
+
 record_widen() {
   local line decision_us
   line="$(grep -F "tenuo_decision request_id=widen " "$FIXTURE_LOG" | tail -1 || true)"
@@ -603,6 +654,7 @@ run_suite() {
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
   jq -se 'length == 6' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  result_size_limit
   local denial_out="$RUN_DIR/local-denial.out" denial_line denial_us
   "$DEMO_PYTHON" "$EXAMPLE_DIR/local_denial.py" \
     --policy "$FIXTURE_DIR/policy.json" \
@@ -617,7 +669,21 @@ run_suite() {
   "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
     --dir "$RECEIPT_DIR" \
     --policy "$FIXTURE_DIR/policy.json" \
+    --exporter "$MIDDLEWARE_BIN" \
     --demo | tee "$RESULTS_DIR/evidence/receipt-audit.txt" || fail "offline receipt verification"
+  "$MIDDLEWARE_BIN" receipts export \
+    --log "$RECEIPT_DIR/openshell.jsonl" \
+    --verify-with "$RECEIPT_DIR/openshell.pub" >"$RESULTS_DIR/evidence/openshell-receipts.json" \
+    || fail "authorization receipt export"
+  "$MIDDLEWARE_BIN" receipts export \
+    --log "$RECEIPT_DIR/openshell.results.jsonl" \
+    --verify-with "$RECEIPT_DIR/openshell.pub" >"$RESULTS_DIR/evidence/openshell-results.json" \
+    || fail "result receipt export"
+  jq -se '
+    ([.[] | select(.outcome == "delivered")] | length == 5)
+    and ([.[] | select(.outcome == "blocked" and .decision_code == "tenuo_result_too_large" and .request_id == "17")] | length == 1)
+  ' "$RESULTS_DIR/evidence/openshell-results.json" >/dev/null || fail "result receipts cover the allowed calls"
+  printf 'PASS receipts export as JSON lines for log pipelines\n'
   "$DEMO_PYTHON" "$ROOT/examples/interoperability/a2a_handoff.py" \
     --port "$A2A_PORT" \
     --output "$RESULTS_DIR/evidence/a2a-handoff.json" || fail "A2A authority handoff"

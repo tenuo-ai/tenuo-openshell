@@ -54,6 +54,20 @@
         "signingKeyKey": { "type": "string", "minLength": 1 }
       }
     },
+    "results": {
+      "type": "object",
+      "properties": { "evaluate": { "type": "boolean" } }
+    },
+    "otel": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "anyOf": [{ "const": "" }, { "pattern": "^https?://" }]
+        },
+        "serviceName": { "type": "string", "minLength": 1 }
+      }
+    },
     "networkPolicy": {
       "type": "object",
       "required": ["enabled", "callerNamespaceSelector", "adminNamespaceSelector", "adminPodSelector", "dnsNamespaceSelector", "dnsPodSelector", "dnsIpBlock", "dnsPort", "redisNamespaceSelector", "redisPodSelector"],
@@ -67,7 +81,10 @@
         "dnsIpBlock": { "type": "string" },
         "dnsPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "redisNamespaceSelector": { "type": "object", "minProperties": 1 },
-        "redisPodSelector": { "type": "object", "minProperties": 1 }
+        "redisPodSelector": { "type": "object", "minProperties": 1 },
+        "otelNamespaceSelector": { "type": "object", "minProperties": 1 },
+        "otelPodSelector": { "type": "object", "minProperties": 1 },
+        "otelPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }
     }
   }

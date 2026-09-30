@@ -2,6 +2,10 @@
 //!
 //! A receipt records the decision. It does not record that a tool ran.
 //! Persistence may be best-effort or required before an allowed decision.
+//!
+//! Result receipts go to a second chained log next to the first, named
+//! `<log stem>.results.jsonl`. They are always best-effort: see
+//! `crate::result`.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -11,17 +15,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use sha2::{Digest, Sha256};
+use crate::result_receipt::{line_digest, ResultPayload, ResultReceipt};
 use tenuo::sdk::prelude::Denial;
 use tenuo::wire::{encode_stack, WarrantStack};
 use tenuo::{ConstraintValue, ErrorCode, Receipt, ReceiptPayload, SigningKey, Warrant};
 
-const AUTHORIZER_ID: &str = "openshell";
+pub const AUTHORIZER_ID: &str = "openshell";
 
 pub struct ReceiptLog {
     signer: SigningKey,
     path: PathBuf,
     previous_hash: Mutex<Option<[u8; 32]>>,
+    results_path: PathBuf,
+    previous_result_hash: Mutex<Option<[u8; 32]>>,
     required: bool,
 }
 
@@ -64,12 +70,20 @@ impl ReceiptLog {
         )
         .map_err(|error| error.to_string())?;
         let previous_hash = previous_receipt_hash(log_path)?;
+        let results_path = result_log_path(log_path);
+        let previous_result_hash = previous_result_hash(&results_path)?;
         Ok(Self {
             signer,
             path: log_path.to_path_buf(),
             previous_hash: Mutex::new(previous_hash),
+            results_path,
+            previous_result_hash: Mutex::new(previous_result_hash),
             required: false,
         })
+    }
+
+    pub fn results_path(&self) -> &Path {
+        &self.results_path
     }
 
     pub fn require_delivery(mut self) -> Self {
@@ -91,13 +105,17 @@ impl ReceiptLog {
     }
 
     pub fn record(&self, decision: DecisionReceipt<'_>) -> bool {
+        self.record_digest(decision).is_some()
+    }
+
+    /// Store one receipt and return the SHA-256 of its encoded bytes, the
+    /// value the next receipt carries as `prev_receipt_hash`.
+    pub fn record_digest(&self, decision: DecisionReceipt<'_>) -> Option<[u8; 32]> {
         if decision.request_id.is_empty() || decision.chain.is_empty() {
             eprintln!("receipt was not stored");
-            return false;
+            return None;
         }
-        let Some(leaf) = decision.chain.last() else {
-            return false;
-        };
+        let leaf = decision.chain.last()?;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs() as i64)
@@ -107,7 +125,7 @@ impl ReceiptLog {
             Ok(stack) => stack,
             Err(_) => {
                 eprintln!("receipt was not stored");
-                return false;
+                return None;
             }
         };
         let mut payload = match decision.denial {
@@ -155,36 +173,73 @@ impl ReceiptLog {
             Ok(receipt) => receipt,
             Err(_) => {
                 eprintln!("receipt was not stored");
-                return false;
+                return None;
             }
         };
         let mut bytes = Vec::new();
         if ciborium::into_writer(&receipt, &mut bytes).is_err() {
             eprintln!("receipt was not stored");
-            return false;
+            return None;
         }
-        let line = format!("{}\n", hex::encode(&bytes));
-        let mut file = match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
+        if !append_line(&self.path, &bytes) {
+            eprintln!("receipt was not stored");
+            return None;
+        }
+        let digest = line_digest(&bytes);
+        *previous_hash = Some(digest);
+        Some(digest)
+    }
+
+    /// Store one result receipt. The caller fills every field except the
+    /// chain link, authorizer, and version.
+    pub fn record_result(&self, mut payload: ResultPayload) -> bool {
+        let mut previous_hash = self
+            .previous_result_hash
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        payload.version = crate::result_receipt::RESULT_PAYLOAD_VERSION;
+        payload.authorizer_id = AUTHORIZER_ID.to_string();
+        payload.prev_receipt_hash = *previous_hash;
+        let bytes = match ResultReceipt::create(&payload, &self.signer)
+            .and_then(|receipt| receipt.to_bytes())
         {
-            Ok(file) => file,
+            Ok(bytes) => bytes,
             Err(_) => {
-                eprintln!("receipt was not stored");
+                eprintln!("result receipt was not stored");
                 return false;
             }
         };
-        if file.write_all(line.as_bytes()).is_err() {
-            eprintln!("receipt was not stored");
+        if !append_line(&self.results_path, &bytes) {
+            eprintln!("result receipt was not stored");
             return false;
         }
-        *previous_hash = Some(Sha256::digest(&bytes).into());
+        *previous_hash = Some(line_digest(&bytes));
         true
     }
 }
 
-fn previous_receipt_hash(path: &Path) -> Result<Option<[u8; 32]>, String> {
+/// `receipts.jsonl` becomes `receipts.results.jsonl`.
+pub fn result_log_path(log_path: &Path) -> PathBuf {
+    log_path.with_extension("results.jsonl")
+}
+
+fn append_line(path: &Path, bytes: &[u8]) -> bool {
+    let line = format!("{}\n", hex::encode(bytes));
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return false;
+    };
+    file.write_all(line.as_bytes()).is_ok()
+}
+
+fn previous_result_hash(path: &Path) -> Result<Option<[u8; 32]>, String> {
+    let Some(bytes) = last_line(path)? else {
+        return Ok(None);
+    };
+    ResultReceipt::from_bytes(&bytes)?;
+    Ok(Some(line_digest(&bytes)))
+}
+
+fn last_line(path: &Path) -> Result<Option<Vec<u8>>, String> {
     if !path.exists() {
         return Ok(None);
     }
@@ -192,9 +247,17 @@ fn previous_receipt_hash(path: &Path) -> Result<Option<[u8; 32]>, String> {
     let Some(last) = contents.lines().rev().find(|line| !line.trim().is_empty()) else {
         return Ok(None);
     };
-    let bytes = hex::decode(last.trim()).map_err(|error| error.to_string())?;
+    hex::decode(last.trim())
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn previous_receipt_hash(path: &Path) -> Result<Option<[u8; 32]>, String> {
+    let Some(bytes) = last_line(path)? else {
+        return Ok(None);
+    };
     let _: Receipt = ciborium::from_reader(bytes.as_slice()).map_err(|error| error.to_string())?;
-    Ok(Some(Sha256::digest(&bytes).into()))
+    Ok(Some(line_digest(&bytes)))
 }
 
 fn load_key(path: &Path) -> Result<SigningKey, String> {

@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Verify authorization receipts with public keys only.
+"""Verify authorization and result receipts with public keys only.
 
 A receipt records the authorization decision. It does not show that a tool ran.
+A result receipt records the bytes OpenShell returned for an allowed call.
+
+Result logs (``*.results.jsonl``) are verified by the middleware's own
+``receipts export`` command, then linked here to the allow receipt they name.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+RESULT_SUFFIX = ".results.jsonl"
 
 
 def load_roots(path: Path) -> list[str]:
@@ -47,6 +55,8 @@ def load_signers(directory: Path) -> dict[str, str]:
 def load_wires(directory: Path) -> list[str]:
     wires: list[str] = []
     for path in sorted(directory.glob("*.jsonl")):
+        if path.name.endswith(RESULT_SUFFIX):
+            continue
         for line in path.read_text(encoding="ascii").splitlines():
             text = line.strip()
             if not text:
@@ -113,9 +123,86 @@ def verify_all(directory: Path, roots: list[str]) -> list[dict[str, object]]:
                 "action": str(call(payload, "action")),
                 "signer": signer,
                 "chain": chain_label(payload),
+                "receipt_hash": wire_hash(wire),
             }
         )
     return records
+
+
+def wire_hash(wire: str) -> str | None:
+    """SHA-256 of a hex receipt line, the value a result receipt links to."""
+    try:
+        return hashlib.sha256(bytes.fromhex(wire)).hexdigest()
+    except ValueError:
+        return None
+
+
+def verify_results(
+    directory: Path, exporter: Path | None, records: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Verify each result log and link every result to its allow receipt."""
+    paths = sorted(directory.glob(f"*{RESULT_SUFFIX}"))
+    if not paths:
+        return []
+    if exporter is None:
+        raise SystemExit("result receipts need --exporter to verify their signatures")
+    by_hash = {record["receipt_hash"]: record for record in records if record["receipt_hash"]}
+    results = []
+    for path in paths:
+        point = path.name.removesuffix(RESULT_SUFFIX)
+        key = directory / f"{point}.pub"
+        exported = subprocess.run(
+            [str(exporter), "receipts", "export", "--log", str(path), "--verify-with", str(key)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if exported.returncode != 0:
+            raise SystemExit(f"{path.name} does not verify: {exported.stderr.strip()}")
+        for line in exported.stdout.splitlines():
+            row = json.loads(line)
+            linked = by_hash.get(row["request_receipt_hash"])
+            if linked is None or linked["point"] != point or linked["outcome"] != "allow":
+                raise SystemExit(f"result for request {row['request_id']} names no allow receipt")
+            if linked["request_id"] != row["request_id"] or linked["action"] != f"tool:{row['tool']}":
+                raise SystemExit(f"result for request {row['request_id']} does not match its allow receipt")
+            results.append(
+                {
+                    "request_id": row["request_id"],
+                    "point": point,
+                    "outcome": row["outcome"],
+                    "decision_code": row["decision_code"],
+                    "bytes": row["result_bytes"],
+                    "sha256": row["result_sha256"],
+                }
+            )
+    return results
+
+
+def print_results(results: list[dict[str, object]]) -> None:
+    if not results:
+        return
+    print("A result receipt records the bytes returned for an allowed call.")
+    for row in sorted(results, key=lambda item: (len(str(item["request_id"])), str(item["request_id"]))):
+        detail = f"sha256={str(row['sha256'])[:16]}" if row["sha256"] else str(row["decision_code"] or "")
+        print(
+            f"result {row['request_id']} {row['point']} {row['outcome']} "
+            f"{row['bytes']} bytes {detail}".rstrip()
+        )
+
+
+def require_demo_results(results: list[dict[str, object]]) -> None:
+    # JSON-RPC id 2 appears twice: the approved restart and the MCP client's
+    # read. Each result links to its own allow receipt by hash.
+    outcomes = sorted(
+        (str(row["request_id"]), str(row["outcome"]), str(row["decision_code"])) for row in results
+    )
+    expected = sorted(
+        [(request_id, "delivered", "None") for request_id in ("1", "2", "2", "5", "9")]
+        + [("17", "blocked", "tenuo_result_too_large")]
+    )
+    if outcomes != expected:
+        raise SystemExit("result receipts do not match the demo calls")
 
 
 def print_report(records: list[dict[str, object]]) -> None:
@@ -186,15 +273,23 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
+    parser.add_argument(
+        "--exporter",
+        type=Path,
+        help="tenuo-openshell-middleware binary, used to verify result logs",
+    )
     parser.add_argument("--demo", action="store_true")
     args = parser.parse_args()
     records = verify_all(args.dir, load_roots(args.policy))
     if not records:
         raise SystemExit("no receipts")
+    results = verify_results(args.dir, args.exporter, records)
     print_report(records)
+    print_results(results)
     if args.demo:
         require_demo(records)
-    print(f"PASS {len(records)} receipts verified offline")
+        require_demo_results(results)
+    print(f"PASS {len(records)} receipts and {len(results)} result receipts verified offline")
 
 
 if __name__ == "__main__":
