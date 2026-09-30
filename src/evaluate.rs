@@ -202,6 +202,22 @@ mod tests {
         encode_meta(std::slice::from_ref(warrant), &signature, &[]).expect("meta")
     }
 
+    fn sign_chain(chain: &[Warrant], holder: &SigningKey, name: &str, arguments: &Value) -> Value {
+        let warrant = chain.last().expect("leaf");
+        let call = Call::try_from_json(name, arguments).expect("call");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs() as i64;
+        let preimage = warrant
+            .pop_preimage(call.capability(), call.pop_args(), now, 30)
+            .expect("preimage");
+        let mut message = SIGNATURE_CONTEXT.to_vec();
+        message.extend(preimage);
+        let signature = holder.sign_raw(&message);
+        encode_meta(chain, &signature, &[]).expect("meta")
+    }
+
     fn tools_call(name: &str, arguments: Value, tenuo: Option<Value>) -> Vec<u8> {
         let mut params = serde_json::Map::new();
         params.insert("name".into(), Value::String(name.to_string()));
@@ -359,6 +375,76 @@ mod tests {
         );
         let outcome = evaluate(&policy, "sbx", true, &over_limit, MetaMode::Preserve, None);
         assert_eq!(outcome.reason_code, reason::CONSTRAINT_DENIED);
+    }
+
+    #[test]
+    fn a_narrowed_child_can_read_but_cannot_restart_or_widen() {
+        let issuer = SigningKey::generate();
+        let parent_holder = SigningKey::generate();
+        let child_holder = SigningKey::generate();
+        let policy = policy_for(&issuer);
+        let parent = scoped_warrant(&issuer, &parent_holder, true);
+        let mut read = ConstraintSet::new();
+        read.insert("service", Exact::new("payments"));
+        read.insert("environment", Exact::new("staging"));
+        let child = parent
+            .attenuate()
+            .holder(child_holder.public_key())
+            .tool("read_logs", read.clone())
+            .ttl(std::time::Duration::from_secs(120))
+            .build(&parent_holder)
+            .expect("narrowed child");
+        let chain = [parent, child.clone()];
+        let arguments = json!({"service": "payments", "environment": "staging"});
+        let read_body = tools_call(
+            "read_logs",
+            arguments.clone(),
+            Some(sign_chain(&chain, &child_holder, "read_logs", &arguments)),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &read_body, MetaMode::Preserve, None);
+        assert!(outcome.allow);
+
+        let restart = json!({"service": "payments", "environment": "staging", "replicas": 3});
+        let restart_body = tools_call(
+            "restart_service",
+            restart.clone(),
+            Some(sign_chain(
+                &chain,
+                &child_holder,
+                "restart_service",
+                &restart,
+            )),
+        );
+        let outcome = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &restart_body,
+            MetaMode::Preserve,
+            None,
+        );
+        assert_eq!(outcome.reason_code, reason::TOOL_DENIED);
+
+        let mut restart_constraints = read;
+        restart_constraints.insert("replicas", Range::max(5.0).expect("range"));
+        let widened = child
+            .attenuate()
+            .holder(SigningKey::generate().public_key())
+            .tool("read_logs", {
+                let mut allowed = ConstraintSet::new();
+                allowed.insert("service", Exact::new("payments"));
+                allowed.insert("environment", Exact::new("staging"));
+                allowed
+            })
+            .tool("restart_service", restart_constraints)
+            .ttl(std::time::Duration::from_secs(60))
+            .build(&child_holder);
+        match widened {
+            Err(tenuo::Error::MonotonicityViolation(message)) => {
+                assert!(message.contains("restart_service"), "{message}");
+            }
+            other => panic!("wider child was not refused: {other:?}"),
+        }
     }
 
     #[test]

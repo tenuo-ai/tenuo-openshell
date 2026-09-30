@@ -34,7 +34,8 @@ The integration is Apache-2.0. It consists of:
 
 Two tasks share one sandbox. OpenShell admits both `read_logs` and
 `restart_service`. Each task has its own holder key, created in a separate
-process and not copied into the sandbox.
+process and not copied into the sandbox. Task A attenuates its warrant to a
+read-only child for a third holder in a second sandbox.
 
 ```text
 Task A  read_logs(payments, staging)                  → effect executed
@@ -45,6 +46,9 @@ Task B signing Task A's warrant                       → tenuo_invalid_authorit
 Task A  read_logs(identity, production)               → tenuo_constraint_denied
 Task A  restart_service(..., replicas=8)              → tenuo_constraint_denied
 restart without a warrant                             → tenuo_missing_warrant
+child   read_logs(payments, staging)                  → effect executed
+child   restart_service(...)                          → tenuo_tool_denied
+child adding restart_service back                     → attenuation refused
 ```
 
 Run the calls through a real OpenShell gateway and sandbox:
@@ -56,7 +60,7 @@ make demo
 The launcher downloads the pinned OpenShell source when needed, builds its
 gateway and supervisor image, creates an authenticated HTTPS middleware
 registration, runs the requests, verifies that the effect server observed only
-the three allowed sandbox calls, then checks that the effect server still
+the four allowed sandbox calls, then checks that the effect server still
 denies a direct call that did not pass through OpenShell. It then verifies
 the signed authorization receipts offline with the issuer and receipt-signer
 public keys. A receipt records the decision; it does not show that a tool

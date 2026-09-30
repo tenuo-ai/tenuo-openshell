@@ -1,14 +1,18 @@
 # Authenticated OpenShell demo
 
-The demo sends two tasks through one OpenShell sandbox and the Tenuo
-`HTTP_REQUEST/PRE_CREDENTIALS` middleware. The sandbox policy admits both
+The demo sends two tasks through one OpenShell sandbox and a narrowed child
+warrant through a second sandbox. Both use the Tenuo
+`HTTP_REQUEST/PRE_CREDENTIALS` middleware. Each sandbox policy admits both
 `read_logs` and `restart_service`. Task A's warrant grants those tools for
 `payments` in `staging`, and limits `restart_service` to `replicas` of at most
-5. Task B's warrant grants only the staging payments read.
+5. Task B's warrant grants only the staging payments read. Task A then
+attenuates that warrant to a read-only child, with a 120 second lifetime, for
+a third holder.
 
 Each holder key is created by its own process and stored in its own file. The
-sandbox command receives the signed request body only. Neither holder key is
-copied into the sandbox. The issuer secret is not written.
+sandbox command receives the signed request body only. No holder key is copied
+into a sandbox. The issuer secret is not written. The attenuation process
+reads Task A's key and the child public key. It does not read the child secret.
 
 1. Task A reads staging payments logs. Allowed.
 2. Task B reads staging payments logs with its own warrant. Allowed.
@@ -21,20 +25,27 @@ copied into the sandbox. The issuer secret is not written.
    `tenuo_constraint_denied`.
 7. Task A restarts with `replicas` 8. Denied `tenuo_constraint_denied`.
 8. A restart without a warrant is denied `tenuo_missing_warrant`.
+9. The third holder, in the second sandbox, reads staging payments logs with
+   the narrowed warrant. Allowed.
+10. That holder requests a restart with the same warrant. Denied
+    `tenuo_tool_denied`.
+11. That holder tries to mint a further warrant that adds `restart_service`
+    back. Attenuation refuses the wider warrant.
 
 The effect server verifies the preserved warrant with `MCPVerifier` before it
-runs a tool. After the sandbox calls, the suite sends two requests directly to
-that server, bypassing OpenShell: Task B's restart and a restart with no
-warrant. Both are JSON-RPC `-32001` and neither is executed. One direct read
-with Task A's warrant is executed, which shows the destination check does not
-depend on OpenShell being in front.
+runs a tool. After the sandbox calls, the suite sends three requests directly to
+that server, bypassing OpenShell: Task B's restart, a restart with no warrant,
+and the narrowed warrant's restart. All three are JSON-RPC `-32001` and none
+are executed. One direct read with Task A's warrant is executed, which shows
+the destination check does not depend on OpenShell being in front.
 
 Each enforcement point signs its own receipt. The OpenShell middleware and
 the effect server use different receipt keys, and both put the JSON-RPC id
 in `request_id`. `examples/demo/audit_receipts.py` checks those receipts
 with the issuer public keys and the two receipt-signer public keys. It does
 not use the network. A missing warrant has no chain to commit to, so that
-denial has no receipt. A receipt does not show that the tool ran.
+denial has no receipt. The narrowed calls record both the parent warrant and
+the child. A receipt does not show that the tool ran.
 
 The launcher installs Python package `tenuo` 0.3.1 into a temporary environment
 for that server. Set `TENUO_DEMO_PYTHON` to an existing interpreter when that

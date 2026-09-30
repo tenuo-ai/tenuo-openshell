@@ -1,8 +1,10 @@
-//! Build the two-task OpenShell demo requests.
+//! Build the OpenShell demo requests.
 //!
 //! `prepare` never loads a holder key. It runs one process per holder. The
 //! issuer process writes warrants and the trust policy, then discards the
 //! issuer secret. Each signing process reads only the holder key it is given.
+//! Task A attenuates its warrant for a third holder. That process receives the
+//! parent warrant and the child public key, not the child secret.
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Map, Value};
@@ -53,6 +55,26 @@ enum CommandKind {
         #[arg(long)]
         task_b_pub: PathBuf,
     },
+    /// Attenuate Task A's warrant to a read-only child for another holder.
+    Delegate {
+        #[arg(long)]
+        parent_key: PathBuf,
+        #[arg(long)]
+        parent_warrant: PathBuf,
+        #[arg(long)]
+        child_pub: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// The child holder tries to add `restart_service` back. That must fail.
+    Widen {
+        #[arg(long)]
+        holder_key: PathBuf,
+        #[arg(long)]
+        chain: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Sign one `tools/call` with one holder key.
     Sign {
         #[arg(long)]
@@ -67,6 +89,9 @@ enum CommandKind {
         tool: String,
         #[arg(long)]
         arguments: String,
+        /// `warrant` is a CBOR stack. The proof is over the leaf.
+        #[arg(long)]
+        chain: bool,
     },
 }
 
@@ -80,6 +105,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             task_a_pub,
             task_b_pub,
         }) => issue(&output, &sandbox_id, &task_a_pub, &task_b_pub),
+        Some(CommandKind::Delegate {
+            parent_key,
+            parent_warrant,
+            child_pub,
+            output,
+        }) => delegate_chain(&parent_key, &parent_warrant, &child_pub, &output),
+        Some(CommandKind::Widen {
+            holder_key,
+            chain,
+            output,
+        }) => refuse_widen(&holder_key, &chain, &output),
         Some(CommandKind::Sign {
             holder_key,
             warrant,
@@ -87,7 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             id,
             tool,
             arguments,
-        }) => sign_request(&holder_key, &warrant, &output, id, &tool, &arguments),
+            chain,
+        }) => sign_request(&holder_key, &warrant, &output, id, &tool, &arguments, chain),
         None => {
             let Some(output) = args.output.as_deref() else {
                 return Err("--output is required".into());
@@ -153,6 +190,7 @@ fn prepare(
         1,
         "read_logs",
         payments,
+        false,
     )?;
     sign_with(
         &exe,
@@ -162,6 +200,7 @@ fn prepare(
         2,
         "restart_service",
         restart,
+        false,
     )?;
     sign_with(
         &exe,
@@ -171,6 +210,7 @@ fn prepare(
         3,
         "read_logs",
         r#"{"service":"identity","environment":"production"}"#,
+        false,
     )?;
     sign_with(
         &exe,
@@ -180,6 +220,7 @@ fn prepare(
         4,
         "restart_service",
         r#"{"service":"payments","environment":"staging","replicas":8}"#,
+        false,
     )?;
     sign_with(
         &exe,
@@ -189,6 +230,7 @@ fn prepare(
         5,
         "read_logs",
         payments,
+        false,
     )?;
     sign_with(
         &exe,
@@ -198,6 +240,7 @@ fn prepare(
         6,
         "restart_service",
         restart,
+        false,
     )?;
     sign_with(
         &exe,
@@ -207,14 +250,73 @@ fn prepare(
         7,
         "restart_service",
         restart,
+        false,
     )?;
     write_json(
         &output.join("missing-warrant.json"),
         &tools_call(8, "restart_service", serde_json::from_str(restart)?, None),
     )?;
+
+    let subagent = output.join("signers/subagent");
+    let chain = output.join("warrants/task-a-read-only.cbor");
+    spawn(
+        &exe,
+        &[
+            "keygen".to_string(),
+            "--dir".to_string(),
+            path_arg(&subagent),
+        ],
+    )?;
+    spawn(
+        &exe,
+        &[
+            "delegate".to_string(),
+            "--parent-key".to_string(),
+            path_arg(&key_a),
+            "--parent-warrant".to_string(),
+            path_arg(&warrant_a),
+            "--child-pub".to_string(),
+            path_arg(&subagent.join("public")),
+            "--output".to_string(),
+            path_arg(&chain),
+        ],
+    )?;
+    sign_with(
+        &exe,
+        &subagent.join("key"),
+        &chain,
+        &output.join("delegated-read.json"),
+        9,
+        "read_logs",
+        payments,
+        true,
+    )?;
+    sign_with(
+        &exe,
+        &subagent.join("key"),
+        &chain,
+        &output.join("delegated-restart.json"),
+        10,
+        "restart_service",
+        restart,
+        true,
+    )?;
+    spawn(
+        &exe,
+        &[
+            "widen".to_string(),
+            "--holder-key".to_string(),
+            path_arg(&subagent.join("key")),
+            "--chain".to_string(),
+            path_arg(&chain),
+            "--output".to_string(),
+            path_arg(&output.join("widen-refused.txt")),
+        ],
+    )?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sign_with(
     exe: &Path,
     holder_key: &Path,
@@ -223,25 +325,27 @@ fn sign_with(
     id: u64,
     tool: &str,
     arguments: &str,
+    chain: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    spawn(
-        exe,
-        &[
-            "sign".to_string(),
-            "--holder-key".to_string(),
-            path_arg(holder_key),
-            "--warrant".to_string(),
-            path_arg(warrant),
-            "--output".to_string(),
-            path_arg(output),
-            "--id".to_string(),
-            id.to_string(),
-            "--tool".to_string(),
-            tool.to_string(),
-            "--arguments".to_string(),
-            arguments.to_string(),
-        ],
-    )
+    let mut args = vec![
+        "sign".to_string(),
+        "--holder-key".to_string(),
+        path_arg(holder_key),
+        "--warrant".to_string(),
+        path_arg(warrant),
+        "--output".to_string(),
+        path_arg(output),
+        "--id".to_string(),
+        id.to_string(),
+        "--tool".to_string(),
+        tool.to_string(),
+        "--arguments".to_string(),
+        arguments.to_string(),
+    ];
+    if chain {
+        args.push("--chain".to_string());
+    }
+    spawn(exe, &args)
 }
 
 fn spawn(exe: &Path, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -315,10 +419,9 @@ fn issue(
     )?;
 
     let mut sandboxes = Map::new();
-    sandboxes.insert(
-        sandbox_id.to_string(),
-        json!({"trusted_roots": [hex::encode(issuer.public_key().to_bytes())]}),
-    );
+    let roots = json!({"trusted_roots": [hex::encode(issuer.public_key().to_bytes())]});
+    sandboxes.insert(sandbox_id.to_string(), roots.clone());
+    sandboxes.insert("bootstrap-delegate".to_string(), roots);
     write_json(
         &output.join("policy.json"),
         &json!({
@@ -351,6 +454,64 @@ fn read_public(path: &Path) -> Result<PublicKey, Box<dyn std::error::Error>> {
     Ok(PublicKey::from_bytes(&bytes)?)
 }
 
+fn read_secret(path: &Path) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let secret = fs::read(path)?;
+    secret
+        .try_into()
+        .map_err(|_| "holder key must be 32 bytes".into())
+}
+
+fn delegate_chain(
+    parent_key: &Path,
+    parent_warrant: &Path,
+    child_pub: &Path,
+    output: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let parent_holder = SigningKey::from_bytes(&read_secret(parent_key)?);
+    let parent = tenuo::wire::decode(&fs::read(parent_warrant)?)?;
+    let child = read_public(child_pub)?;
+    let narrowed = parent
+        .attenuate()
+        .holder(child)
+        .tool("read_logs", read_constraints()?)
+        .ttl(Duration::from_secs(120))
+        .build(&parent_holder)?;
+    let stack = tenuo::wire::WarrantStack::new(vec![parent, narrowed]);
+    if let Some(parent_dir) = output.parent() {
+        fs::create_dir_all(parent_dir)?;
+    }
+    fs::write(output, tenuo::wire::encode_stack(&stack)?)?;
+    Ok(())
+}
+
+fn refuse_widen(
+    holder_key: &Path,
+    chain_path: &Path,
+    output: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let holder = SigningKey::from_bytes(&read_secret(holder_key)?);
+    let stack = tenuo::wire::decode_stack(&fs::read(chain_path)?)?;
+    let leaf = stack.leaf().ok_or("warrant chain is empty")?.clone();
+    let grandchild = SigningKey::generate().public_key();
+    let widened = leaf
+        .attenuate()
+        .holder(grandchild)
+        .tool("read_logs", read_constraints()?)
+        .tool("restart_service", restart_constraints()?)
+        .ttl(Duration::from_secs(60))
+        .build(&holder);
+    match widened {
+        Err(tenuo::Error::MonotonicityViolation(message))
+            if message.contains("restart_service") =>
+        {
+            fs::write(output, "attenuation refused\n")?;
+            Ok(())
+        }
+        Ok(_) => Err("a wider warrant was minted".into()),
+        Err(other) => Err(format!("narrowing was not what failed: {other}").into()),
+    }
+}
+
 fn sign_request(
     holder_key: &Path,
     warrant_path: &Path,
@@ -358,15 +519,16 @@ fn sign_request(
     id: u64,
     tool: &str,
     arguments: &str,
+    chain: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let secret = fs::read(holder_key)?;
-    let secret: [u8; 32] = secret
-        .try_into()
-        .map_err(|_| "holder key must be 32 bytes")?;
-    let holder = SigningKey::from_bytes(&secret);
-    let warrant = tenuo::wire::decode(&fs::read(warrant_path)?)?;
+    let holder = SigningKey::from_bytes(&read_secret(holder_key)?);
     let arguments: Value = serde_json::from_str(arguments)?;
-    let meta = sign(&warrant, &holder, tool, &arguments)?;
+    let warrants = if chain {
+        tenuo::wire::decode_stack(&fs::read(warrant_path)?)?.0
+    } else {
+        vec![tenuo::wire::decode(&fs::read(warrant_path)?)?]
+    };
+    let meta = sign_chain(&warrants, &holder, tool, &arguments)?;
     write_json(output, &tools_call(id, tool, arguments, Some(meta)))?;
     Ok(())
 }
@@ -385,19 +547,20 @@ fn write_openshell_jwt_material(
     Ok(())
 }
 
-fn sign(
-    warrant: &Warrant,
+fn sign_chain(
+    warrants: &[Warrant],
     holder: &SigningKey,
     name: &str,
     arguments: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    let warrant = warrants.last().ok_or("warrant chain is empty")?;
     let call = Call::try_from_json(name, arguments)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     let preimage = warrant.pop_preimage(call.capability(), call.pop_args(), now, 30)?;
     let mut message = SIGNATURE_CONTEXT.to_vec();
     message.extend(preimage);
     let signature = holder.sign_raw(&message);
-    Ok(encode_meta(std::slice::from_ref(warrant), &signature, &[])?)
+    Ok(encode_meta(warrants, &signature, &[])?)
 }
 
 fn tools_call(id: u64, name: &str, arguments: Value, tenuo: Option<Value>) -> Value {

@@ -172,6 +172,9 @@ cleanup() {
   trap - EXIT
   if [[ "$SANDBOX_CREATED" == 1 && -n "${CLI+x}" ]]; then
     "${CLI[@]}" sandbox delete "$SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
+    if [[ -n "${CHILD_SANDBOX_NAME:-}" ]]; then
+      "${CLI[@]}" sandbox delete "$CHILD_SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
+    fi
   fi
   for pid_name in GATEWAY_PID MIDDLEWARE_PID UPSTREAM_PID; do
     local pid="${!pid_name:-}"
@@ -364,9 +367,10 @@ wait_for_gateway() {
 
 send_request() {
   local fixture="$1"
+  local sandbox="${2:-$SANDBOX_NAME}"
   local body
   body="$(jq -c . "$fixture")"
-  "${CLI[@]}" sandbox exec --name "$SANDBOX_NAME" --no-tty -- \
+  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- \
     curl -sS -i --max-time 20 "http://host.openshell.internal:$UPSTREAM_PORT/mcp" \
       --header 'content-type: application/json' \
       --header 'accept: application/json, text/event-stream' \
@@ -378,8 +382,9 @@ expect_allow() {
   local fixture="$1"
   local marker="$2"
   local label="$3"
+  local sandbox="${4:-$SANDBOX_NAME}"
   local output="$RUN_DIR/$(basename "$fixture").out"
-  send_request "$fixture" >"$output" 2>>"$SETUP_LOG" || fail "$label completes"
+  send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "$label completes"
   grep -Fq '200 OK' "$output" || fail "$label returns 200"
   grep -Fq "$marker" "$output" || fail "$label effect response is returned"
   printf 'PASS %s\n' "$label"
@@ -389,8 +394,9 @@ expect_deny() {
   local fixture="$1"
   local reason="$2"
   local label="$3"
+  local sandbox="${4:-$SANDBOX_NAME}"
   local output="$RUN_DIR/$(basename "$fixture").out"
-  send_request "$fixture" >"$output" 2>>"$SETUP_LOG" || fail "$label returns a response"
+  send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "$label returns a response"
   grep -Fq '403 Forbidden' "$output" || fail "$label is denied"
   grep -Fq "$reason" "$output" || fail "$label reason is $reason"
   printf 'PASS %s\n' "$label"
@@ -413,23 +419,30 @@ run_suite() {
     "task A replicas=8 restart was denied"
   expect_deny "$FIXTURE_DIR/missing-warrant.json" "tenuo_missing_warrant" \
     "missing authority was denied"
+  expect_allow "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" \
+    "narrowed warrant read reached the effect" "$CHILD_SANDBOX_NAME"
+  expect_deny "$FIXTURE_DIR/delegated-restart.json" "tenuo_tool_denied" \
+    "narrowed warrant restart was denied" "$CHILD_SANDBOX_NAME"
+  grep -Fxq 'attenuation refused' "$FIXTURE_DIR/widen-refused.txt" \
+    || fail "the narrowed warrant could be widened"
 
   jq -se '
-    length == 3
-    and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 2)
+    length == 4
+    and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 3)
     and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
     and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8)] | length == 0)
-  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the three authorized calls"
+  ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the four authorized calls"
 
   expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart"
   expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant"
-  jq -se 'length == 3' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
+  expect_destination_deny "$FIXTURE_DIR/delegated-restart.json" "direct narrowed restart"
+  jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
   direct_allow="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
     --data-binary @"$FIXTURE_DIR/task-a-read.json")"
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
-  jq -se 'length == 4' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
   "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
     --dir "$RECEIPT_DIR" \
     --policy "$FIXTURE_DIR/policy.json" \
@@ -488,11 +501,15 @@ wait_for_gateway
 
 CLI=(env -u OPENSHELL_SANDBOX_POLICY "$CLI_BIN" --gateway-endpoint "$GATEWAY_ENDPOINT")
 SANDBOX_CREATED=1
-printf 'INFO creating OpenShell sandbox\n'
+printf 'INFO creating OpenShell sandboxes\n'
 SANDBOX_JSON="$("${CLI[@]}" sandbox create --name "$SANDBOX_NAME" --policy "$SANDBOX_POLICY" --output json --no-tty --detach -- sleep infinity 2>>"$SETUP_LOG")" || fail "sandbox creation"
 SANDBOX_ID="$(jq -er '.id' <<<"$SANDBOX_JSON")" || fail "sandbox id extraction"
+CHILD_SANDBOX_NAME="c-$$-$RANDOM"
+CHILD_SANDBOX_JSON="$("${CLI[@]}" sandbox create --name "$CHILD_SANDBOX_NAME" --policy "$SANDBOX_POLICY" --output json --no-tty --detach -- sleep infinity 2>>"$SETUP_LOG")" || fail "second sandbox creation"
+CHILD_SANDBOX_ID="$(jq -er '.id' <<<"$CHILD_SANDBOX_JSON")" || fail "second sandbox id extraction"
 
-jq --arg id "$SANDBOX_ID" '.sandboxes = {($id): .sandboxes.bootstrap}' \
+jq --arg parent "$SANDBOX_ID" --arg child "$CHILD_SANDBOX_ID" \
+  '.sandboxes = {($parent): .sandboxes.bootstrap, ($child): .sandboxes["bootstrap-delegate"]}' \
   "$FIXTURE_DIR/policy.json" >"$FIXTURE_DIR/policy.next.json"
 mv "$FIXTURE_DIR/policy.next.json" "$FIXTURE_DIR/policy.json"
 kill "$MIDDLEWARE_PID"

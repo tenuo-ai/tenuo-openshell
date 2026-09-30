@@ -149,6 +149,10 @@ def require_demo(records: list[dict[str, object]]) -> None:
     def absent(request_id: str, point: str) -> bool:
         return not any(record["point"] == point for record in by_request.get(request_id, []))
 
+    def shows_parent(request_id: str) -> bool:
+        records = by_request.get(request_id, [])
+        return bool(records) and all("->" in record["chain"] for record in records)
+
     checks = [
         has("1", "openshell", "allow") and has("1", "destination", "allow"),
         has("2", "openshell", "allow") and has("2", "destination", "allow"),
@@ -159,6 +163,10 @@ def require_demo(records: list[dict[str, object]]) -> None:
         has("4", "openshell", "deny", "constraint-violation") and absent("4", "destination"),
         has("7", "openshell", "deny", "signature-invalid") and absent("7", "destination"),
         "8" not in by_request,
+        has("9", "openshell", "allow") and has("9", "destination", "allow"),
+        has("10", "openshell", "deny", "tool-not-authorized")
+        and has("10", "destination", "deny", "tool-not-authorized"),
+        shows_parent("9") and shows_parent("10"),
     ]
     if not all(checks):
         raise SystemExit("receipt report does not match the demo decisions")
