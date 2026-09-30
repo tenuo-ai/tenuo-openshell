@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import NoneType
 
@@ -78,7 +79,7 @@ def install_receipts(directory: Path, roots: list[PublicKey], request_id: str):
     return runtime
 
 
-async def deny_restart(middleware: TenuoFunctionMiddleware, bound) -> None:
+async def deny_restart(middleware: TenuoFunctionMiddleware, bound, request_id: str) -> None:
     async def call_next(*_args, **_kwargs):
         raise SystemExit("the function ran")
 
@@ -92,6 +93,7 @@ async def deny_restart(middleware: TenuoFunctionMiddleware, bound) -> None:
         stream_output_schema=NoneType,
     )
     with authority(bound):
+        started = time.perf_counter()
         try:
             await middleware.function_middleware_invoke(
                 arguments,
@@ -99,8 +101,14 @@ async def deny_restart(middleware: TenuoFunctionMiddleware, bound) -> None:
                 context=context,
             )
         except AuthorizationDenied as exc:
+            verify_us = int((time.perf_counter() - started) * 1_000_000)
             if exc.category != "tool_denied":
                 raise SystemExit(f"unexpected denial category {exc.category}") from exc
+            print(
+                f"tenuo_decision request_id={request_id} verify_us={verify_us} "
+                "outcome=deny reason=tool_denied",
+                flush=True,
+            )
             return
     raise SystemExit("the restart was allowed")
 
@@ -122,7 +130,7 @@ def main() -> None:
     warrant = Warrant.from_bytes(args.warrant.read_bytes())
     runtime = install_receipts(args.receipt_dir, roots, args.request_id)
     middleware = TenuoFunctionMiddleware(trusted_roots=roots)
-    asyncio.run(deny_restart(middleware, warrant.bind(holder)))
+    asyncio.run(deny_restart(middleware, warrant.bind(holder), args.request_id))
     wires = runtime.drain_receipts()
     if not wires:
         raise SystemExit("in-process denial produced no receipt")

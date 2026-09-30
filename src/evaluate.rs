@@ -15,9 +15,51 @@ pub struct Outcome {
     pub reason_code: &'static str,
     /// Set when the forwarded body must replace the admitted body.
     pub replacement: Option<Vec<u8>>,
+    pub request_id: String,
+    /// Time inside this check, excluding network transit.
+    pub verify_us: u64,
 }
 
+/// Check one admitted MCP body.
+///
+/// `verify_us` is the time spent in this check. When `TENUO_DECISION_LOG` is
+/// set and the JSON-RPC id is present, one `tenuo_decision` line is written
+/// to stderr. The line carries the request id, duration, outcome, and reason
+/// code.
 pub fn evaluate(
+    policy: &PolicySet,
+    sandbox_id: &str,
+    pre_credentials: bool,
+    body: &[u8],
+    meta_mode: MetaMode,
+    receipts: Option<&ReceiptLog>,
+) -> Outcome {
+    let started = std::time::Instant::now();
+    let mut outcome = decide(
+        policy,
+        sandbox_id,
+        pre_credentials,
+        body,
+        meta_mode,
+        receipts,
+    );
+    outcome.verify_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    if std::env::var_os("TENUO_DECISION_LOG").is_some() && !outcome.request_id.is_empty() {
+        let name = if outcome.allow { "allow" } else { "deny" };
+        let reason = if outcome.reason_code.is_empty() {
+            "-"
+        } else {
+            outcome.reason_code
+        };
+        eprintln!(
+            "tenuo_decision request_id={} verify_us={} outcome={} reason={}",
+            outcome.request_id, outcome.verify_us, name, reason
+        );
+    }
+    outcome
+}
+
+fn decide(
     policy: &PolicySet,
     sandbox_id: &str,
     pre_credentials: bool,
@@ -87,19 +129,19 @@ fn authorize_tool(
     receipts: ReceiptContext<'_>,
 ) -> Outcome {
     let Some(tenuo) = tenuo else {
-        return deny(reason::MISSING_WARRANT);
+        return identified(deny(reason::MISSING_WARRANT), receipts.request_id);
     };
     let owned = match decode_meta(tenuo) {
         Ok(owned) => owned,
-        Err(_) => return deny(reason::INVALID_REQUEST),
+        Err(_) => return identified(deny(reason::INVALID_REQUEST), receipts.request_id),
     };
     let received = match owned.as_received() {
         Ok(received) => received,
-        Err(_) => return deny(reason::MISSING_WARRANT),
+        Err(_) => return identified(deny(reason::MISSING_WARRANT), receipts.request_id),
     };
     let call = match Call::try_from_json(name, arguments) {
         Ok(call) => call,
-        Err(_) => return deny(reason::INVALID_REQUEST),
+        Err(_) => return identified(deny(reason::INVALID_REQUEST), receipts.request_id),
     };
     if let Err(denial) = guard.check_received(&received, &call) {
         record(
@@ -114,7 +156,10 @@ fn authorize_tool(
                 denial: Some(&denial),
             },
         );
-        return deny(reason::from_denial_code(denial.code()));
+        return identified(
+            deny(reason::from_denial_code(denial.code())),
+            receipts.request_id,
+        );
     }
     let allowed = DecisionReceipt {
         request_id: receipts.request_id,
@@ -128,18 +173,23 @@ fn authorize_tool(
     match meta_mode {
         MetaMode::Preserve => {
             record(&receipts, allowed);
-            allow_unchanged()
+            identified(allow_unchanged(), receipts.request_id)
         }
         MetaMode::Strip => match mcp::strip_tenuo(document) {
             Ok(body) => {
                 record(&receipts, allowed);
-                Outcome {
-                    allow: true,
-                    reason_code: "",
-                    replacement: Some(body),
-                }
+                identified(
+                    Outcome {
+                        allow: true,
+                        reason_code: "",
+                        replacement: Some(body),
+                        request_id: String::new(),
+                        verify_us: 0,
+                    },
+                    receipts.request_id,
+                )
             }
-            Err(_) => deny(reason::VERIFIER_FAILED),
+            Err(_) => identified(deny(reason::VERIFIER_FAILED), receipts.request_id),
         },
     }
 }
@@ -157,6 +207,8 @@ fn allow_unchanged() -> Outcome {
         allow: true,
         reason_code: "",
         replacement: None,
+        request_id: String::new(),
+        verify_us: 0,
     }
 }
 
@@ -165,7 +217,14 @@ fn deny(reason_code: &'static str) -> Outcome {
         allow: false,
         reason_code,
         replacement: None,
+        request_id: String::new(),
+        verify_us: 0,
     }
+}
+
+fn identified(mut outcome: Outcome, request_id: &str) -> Outcome {
+    outcome.request_id = request_id.to_string();
+    outcome
 }
 
 #[cfg(test)]

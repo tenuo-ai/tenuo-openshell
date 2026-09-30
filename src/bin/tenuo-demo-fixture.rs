@@ -81,6 +81,17 @@ enum CommandKind {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Time repeated warrant checks. Prints one JSON object.
+    Bench {
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        sandbox_id: String,
+        #[arg(long, default_value_t = 1000)]
+        iterations: u32,
+        #[arg(long)]
+        request: Vec<PathBuf>,
+    },
     /// The child holder tries to add `restart_service` back. That must fail.
     Widen {
         #[arg(long)]
@@ -143,6 +154,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             child_pub,
             output,
         }) => delegate_chain(&parent_key, &parent_warrant, &child_pub, &output),
+        Some(CommandKind::Bench {
+            policy,
+            sandbox_id,
+            iterations,
+            request,
+        }) => bench(&policy, &sandbox_id, iterations, &request),
         Some(CommandKind::Widen {
             holder_key,
             chain,
@@ -179,6 +196,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         }
     }
+}
+
+fn bench(
+    policy_path: &Path,
+    sandbox_id: &str,
+    iterations: u32,
+    requests: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if iterations == 0 || requests.is_empty() {
+        return Err("bench needs iterations and at least one request".into());
+    }
+    let policy = tenuo_openshell_middleware::PolicySet::from_json(&fs::read(policy_path)?)
+        .map_err(|err| format!("policy: {err}"))?;
+    let mut bodies = Vec::with_capacity(requests.len());
+    for path in requests {
+        bodies.push(fs::read(path)?);
+    }
+    let mut samples = Vec::with_capacity(iterations as usize);
+    for index in 0..iterations {
+        let body = &bodies[index as usize % bodies.len()];
+        let outcome = tenuo_openshell_middleware::evaluate(
+            &policy,
+            sandbox_id,
+            true,
+            body,
+            tenuo_openshell_middleware::MetaMode::Preserve,
+            None,
+        );
+        samples.push(outcome.verify_us);
+    }
+    samples.sort_unstable();
+    let p50 = percentile(&samples, 0.50);
+    let p99 = percentile(&samples, 0.99);
+    println!(
+        "{{\"point\":\"openshell\",\"samples\":{},\"p50_us\":{},\"p99_us\":{}}}",
+        samples.len(),
+        p50,
+        p99
+    );
+    Ok(())
+}
+
+fn percentile(sorted: &[u64], quantile: f64) -> u64 {
+    let index = ((sorted.len() - 1) as f64 * quantile).round() as usize;
+    sorted[index]
 }
 
 fn prepare(
@@ -624,6 +686,7 @@ fn refuse_widen(
     let stack = tenuo::wire::decode_stack(&fs::read(chain_path)?)?;
     let leaf = stack.leaf().ok_or("warrant chain is empty")?.clone();
     let grandchild = SigningKey::generate().public_key();
+    let started = std::time::Instant::now();
     let widened = leaf
         .attenuate()
         .holder(grandchild)
@@ -631,10 +694,14 @@ fn refuse_widen(
         .tool("restart_service", restart_constraints()?)
         .ttl(Duration::from_secs(60))
         .build(&holder);
+    let verify_us = started.elapsed().as_micros();
     match widened {
         Err(tenuo::Error::MonotonicityViolation(message))
             if message.contains("restart_service") =>
         {
+            eprintln!(
+                "tenuo_decision request_id=widen verify_us={verify_us} outcome=deny reason=attenuation-refused"
+            );
             fs::write(output, "attenuation refused\n")?;
             Ok(())
         }

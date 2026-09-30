@@ -67,14 +67,26 @@ make demo
 ```
 
 The launcher downloads the pinned OpenShell source when needed, builds its
-gateway and supervisor image, creates an authenticated HTTPS middleware
-registration, runs the requests, verifies that the effect server observed only
-the five allowed sandbox calls, then checks that the effect server still
-denies a direct call that did not pass through OpenShell. It then verifies
-the signed authorization receipts offline with the issuer and receipt-signer
-public keys. A receipt records the decision; it does not show that a tool
-ran. The launcher cleans up afterward. See [the demo guide](examples/demo/README.md)
-for prerequisites and overrides.
+gateway and supervisor image, and creates an authenticated HTTPS middleware
+registration. It runs the calls with the warrant check, then again through a
+second gateway that does not register the middleware. That sandbox policy
+keeps the same tool admission rules and omits the middleware block. OpenShell
+rejects a sandbox policy that names a middleware the gateway does not
+provide.
+
+Calls whose outcomes match are baseline, and the report records why. The
+launcher writes `results/outcome-matrix.md` and prints it. Verification
+latency is the time inside the warrant check. The report places the p50 and
+p99 of 1,000 checks at each enforcement point next to the configured
+middleware timeout, and the median end-to-end time of the sandbox calls from
+the first run.
+
+The effect server must observe only the five allowed sandbox calls in the
+first run. It still denies a direct call that did not pass through OpenShell.
+The launcher then verifies the signed authorization receipts offline with the
+issuer and receipt-signer public keys. A receipt records the decision; it
+does not show that a tool ran. The launcher cleans up afterward. See
+[the demo guide](examples/demo/README.md) for prerequisites and overrides.
 
 ## OpenShell middleware
 

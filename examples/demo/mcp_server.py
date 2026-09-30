@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "tenuo-demo-mcp/1"
     verifier: Any = None
     effect_log: Path | None = None
+    accept_all: bool = False
     runtime: Any = None
     receipt_log: Path | None = None
     request_ids: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -173,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(400, {"error": "unsupported_method"})
 
     def _tool_call(self, request_id: object, params: object) -> None:
-        if self.verifier is None or self.effect_log is None:
+        if self.effect_log is None or (self.verifier is None and not self.accept_all):
             self._denied(request_id, -32001)
             return
         if not isinstance(params, dict):
@@ -186,14 +188,30 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(name, str) or not name or not isinstance(arguments, dict):
             self._denied(request_id, -32001)
             return
+        if self.accept_all:
+            self._execute(request_id, name, arguments)
+            return
         token = None
         if request_id is not None:
             token = self.request_ids.set(str(request_id))
         try:
             with self.receipt_lock:
                 try:
+                    started = time.perf_counter()
                     meta = normalize_meta(params.get("_meta"))
                     result = self.verifier.verify(name, arguments, meta=meta)
+                    verify_us = int((time.perf_counter() - started) * 1_000_000)
+                    if result.allowed:
+                        outcome = "allow"
+                        reason = "-"
+                    else:
+                        outcome = "deny"
+                        reason = result.error_type or "authorization_failed"
+                    print(
+                        f"tenuo_decision request_id={request_id} verify_us={verify_us} "
+                        f"outcome={outcome} reason={reason}",
+                        flush=True,
+                    )
                 except Exception:
                     print(f"destination verifier failed for {name}", flush=True)
                     self._denied(request_id, -32001)
@@ -208,6 +226,12 @@ class Handler(BaseHTTPRequestHandler):
             self._denied(request_id, code)
             return
 
+        self._execute(request_id, name, arguments)
+
+    def _execute(self, request_id: object, name: str, arguments: dict[str, Any]) -> None:
+        if self.effect_log is None:
+            self._denied(request_id, -32001)
+            return
         effect = {"tool": name, "arguments": arguments}
         with self.effect_log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(effect, sort_keys=True) + "\n")
@@ -306,10 +330,21 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--policy", type=Path, required=True)
+    parser.add_argument(
+        "--accept-all",
+        action="store_true",
+        help="Run every tools/call. Used only for the OpenShell-only comparison.",
+    )
     args = parser.parse_args()
     effect_log = os.environ.get("TENUO_DEMO_EFFECT_LOG")
     if not effect_log:
         raise SystemExit("TENUO_DEMO_EFFECT_LOG is required")
+    if args.accept_all:
+        Handler.accept_all = True
+        Handler.effect_log = Path(effect_log)
+        print("accept-all: warrant checks are off", flush=True)
+        ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+        return
     roots = load_roots(args.policy)
     runtime = None
     receipt_dir = os.environ.get("TENUO_DEMO_RECEIPT_DIR")

@@ -138,6 +138,8 @@ impl SupervisorMiddleware for MiddlewareService {
                 allow: false,
                 reason_code: reason::INVALID_REQUEST,
                 replacement: None,
+                request_id: String::new(),
+                verify_us: 0,
             })));
         }
         let config = request.config.unwrap_or_default();
@@ -148,6 +150,8 @@ impl SupervisorMiddleware for MiddlewareService {
                     allow: false,
                     reason_code: reason::INVALID_REQUEST,
                     replacement: None,
+                    request_id: String::new(),
+                    verify_us: 0,
                 })));
             }
         };

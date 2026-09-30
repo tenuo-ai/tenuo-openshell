@@ -71,6 +71,13 @@ From the repository root:
 make demo
 ```
 
+The same launcher then repeats the calls through a second gateway that does
+not register the middleware. That sandbox policy keeps the same tool
+admission rules and omits the middleware block. `results/outcome-matrix.md`
+is the live comparison, including verification time next to the middleware
+timeout. Matching outcomes are marked baseline with the reason. `results/`
+is local output and is not part of the source tree.
+
 The launcher pins NVIDIA OpenShell v0.1.2 at commit
 `6648bd0c290efbc41ba131ee9831ee45cd431f94`, builds its gateway and CLI, pulls
 NVIDIA's v0.1.2 multi-architecture supervisor and sandbox-runtime images by

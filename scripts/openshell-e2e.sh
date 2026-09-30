@@ -138,10 +138,13 @@ FIXTURE_DIR="$RUN_DIR/fixtures"
 GATEWAY_CONFIG="$RUN_DIR/gateway.toml"
 SANDBOX_POLICY="$RUN_DIR/openshell-policy.yaml"
 EFFECT_LOG="$RUN_DIR/effects.jsonl"
+OBS="$RUN_DIR/observations.jsonl"
+GATEWAY_DB="$RUN_DIR/gateway.db"
 SETUP_LOG="$LOG_DIR/setup.log"
 GATEWAY_LOG="$LOG_DIR/gateway.log"
 MIDDLEWARE_LOG="$LOG_DIR/middleware.log"
 UPSTREAM_LOG="$LOG_DIR/upstream.log"
+FIXTURE_LOG="$LOG_DIR/fixture.log"
 RUN_ID="tenuo-demo-$$-$RANDOM"
 SANDBOX_NAME="tn-$$-$RANDOM"
 SUPERVISOR_IMAGE="${TENUO_DEMO_SUPERVISOR_IMAGE:-$PINNED_SUPERVISOR_IMAGE}"
@@ -152,15 +155,18 @@ RECEIPT_DIR="$RUN_DIR/receipts"
 RECEIPT_KEY="$RUN_DIR/secrets/openshell-receipt.key"
 mkdir -p "$LOG_DIR" "$JWT_DIR" "$TLS_DIR" "$FIXTURE_DIR" "$RECEIPT_DIR" "$RUN_DIR/secrets"
 : >"$EFFECT_LOG"
+: >"$OBS"
+: >"$GATEWAY_LOG"
 
 dump_logs() {
   local label log_file
-  for label in setup gateway middleware upstream; do
+  for label in setup gateway middleware upstream fixture; do
     case "$label" in
       setup) log_file="$SETUP_LOG" ;;
       gateway) log_file="$GATEWAY_LOG" ;;
       middleware) log_file="$MIDDLEWARE_LOG" ;;
       upstream) log_file="$UPSTREAM_LOG" ;;
+      fixture) log_file="$FIXTURE_LOG" ;;
     esac
     printf '\n--- %s: %s ---\n' "$label" "$log_file" >&2
     [[ -f "$log_file" ]] && tail -200 "$log_file" >&2
@@ -243,6 +249,7 @@ EOF
 }
 
 write_gateway_config() {
+  local with_middleware="${1:-1}"
   cat >"$GATEWAY_CONFIG" <<EOF
 [openshell]
 version = 2
@@ -256,6 +263,9 @@ public_key_path = "$JWT_DIR/public.pem"
 kid_path = "$JWT_DIR/kid"
 gateway_id = "$RUN_ID"
 ttl_secs = 300
+EOF
+  if [[ "$with_middleware" == 1 ]]; then
+    cat >>"$GATEWAY_CONFIG" <<EOF
 
 [[openshell.supervisor.middleware]]
 name = "tenuo/authorization"
@@ -264,6 +274,9 @@ tls_ca_cert_path = "$TLS_DIR/ca.pem"
 audience = "$AUDIENCE"
 max_payload_bytes = 262144
 timeout = "2s"
+EOF
+  fi
+  cat >>"$GATEWAY_CONFIG" <<EOF
 
 [openshell.drivers.$COMPUTE_DRIVER]
 supervisor_image = "$SUPERVISOR_IMAGE"
@@ -293,7 +306,7 @@ configure_supervisor_reachability() {
 }
 
 start_middleware() {
-  "$MIDDLEWARE_BIN" \
+  TENUO_DECISION_LOG=1 "$MIDDLEWARE_BIN" \
     --policy "$FIXTURE_DIR/policy.json" \
     --listen "0.0.0.0:$MIDDLEWARE_PORT" \
     --tls-cert "$TLS_DIR/server.pem" \
@@ -350,7 +363,7 @@ start_gateway() {
     --metrics-port 0 \
     --log-level info \
     --disable-tls \
-    --db-url "sqlite://$RUN_DIR/gateway.db" >"$GATEWAY_LOG" 2>&1 &
+    --db-url "sqlite://$GATEWAY_DB" >>"$GATEWAY_LOG" 2>&1 &
   GATEWAY_PID=$!
 }
 
@@ -366,17 +379,43 @@ wait_for_gateway() {
   fail "OpenShell gateway is not ready"
 }
 
+now_us() {
+  python3 -c 'import time; print(int(time.time() * 1000000))'
+}
+
+verify_us_for() {
+  local id="$1" log="$2" line
+  line="$(grep -F "tenuo_decision request_id=${id} " "$log" 2>/dev/null | tail -1 || true)"
+  [[ -n "$line" ]] || return 1
+  sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$line"
+}
+
+record_obs() {
+  jq -nc \
+    --arg scenario "$1" \
+    --arg run "$2" \
+    --arg outcome "$3" \
+    --arg point "$4" \
+    --arg reason "$5" \
+    --argjson verify_us "$6" \
+    --argjson e2e_us "$7" \
+    '{scenario:$scenario,run:$run,outcome:$outcome,point:$point,reason:$reason,verify_us:$verify_us,e2e_us:$e2e_us}' >>"$OBS"
+}
+
 send_request() {
   local fixture="$1"
   local sandbox="${2:-$SANDBOX_NAME}"
-  local body
+  local body start end
   body="$(jq -c . "$fixture")"
+  start="$(now_us)"
   "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- \
     curl -sS -i --max-time 20 "http://host.openshell.internal:$UPSTREAM_PORT/mcp" \
       --header 'content-type: application/json' \
       --header 'accept: application/json, text/event-stream' \
       --header 'mcp-protocol-version: 2025-11-25' \
       --data-binary "$body"
+  end="$(now_us)"
+  LAST_E2E_US=$((end - start))
 }
 
 expect_allow() {
@@ -384,11 +423,18 @@ expect_allow() {
   local marker="$2"
   local label="$3"
   local sandbox="${4:-$SANDBOX_NAME}"
+  local scenario="${5:-}"
   local output="$RUN_DIR/$(basename "$fixture").out"
+  local id verify_us
   send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "$label completes"
   grep -Fq '200 OK' "$output" || fail "$label returns 200"
   grep -Fq "$marker" "$output" || fail "$label effect response is returned"
   printf 'PASS %s\n' "$label"
+  if [[ -n "$scenario" ]]; then
+    id="$(jq -r .id "$fixture")"
+    verify_us="$(verify_us_for "$id" "$MIDDLEWARE_LOG")" || fail "$scenario has no verification timing"
+    record_obs "$scenario" "openshell+tenuo" "allow" "openshell" "" "$verify_us" "$LAST_E2E_US"
+  fi
 }
 
 expect_deny() {
@@ -396,40 +442,76 @@ expect_deny() {
   local reason="$2"
   local label="$3"
   local sandbox="${4:-$SANDBOX_NAME}"
+  local scenario="${5:-}"
   local output="$RUN_DIR/$(basename "$fixture").out"
+  local id verify_us
   send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "$label returns a response"
   grep -Fq '403 Forbidden' "$output" || fail "$label is denied"
   grep -Fq "$reason" "$output" || fail "$label reason is $reason"
   printf 'PASS %s\n' "$label"
+  if [[ -n "$scenario" ]]; then
+    id="$(jq -r .id "$fixture")"
+    verify_us="$(verify_us_for "$id" "$MIDDLEWARE_LOG")" || fail "$scenario has no verification timing"
+    record_obs "$scenario" "openshell+tenuo" "deny" "openshell" "$reason" "$verify_us" "$LAST_E2E_US"
+  fi
+}
+
+record_widen() {
+  local line verify_us
+  line="$(grep -F "tenuo_decision request_id=widen " "$FIXTURE_LOG" | tail -1 || true)"
+  [[ -n "$line" ]] || fail "attenuation has no verification timing"
+  verify_us="$(sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
+  record_obs "wider child" "openshell+tenuo" "refused" "attenuation" "attenuation-refused" "$verify_us" 0
+}
+
+stop_one() {
+  local name="$1"
+  local pid="${!name:-}"
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    unset "$name"
+  fi
+}
+
+start_accept_all() {
+  env TENUO_DEMO_EFFECT_LOG="$CONTROL_EFFECT" \
+    "$DEMO_PYTHON" "$EXAMPLE_DIR/mcp_server.py" \
+    --accept-all \
+    --port "$UPSTREAM_PORT" \
+    --policy "$FIXTURE_DIR/policy.json" >"$LOG_DIR/upstream-control.log" 2>&1 &
+  UPSTREAM_PID=$!
 }
 
 run_suite() {
+  # Scenario names match examples/demo/outcome_matrix.py.
+  record_widen
   expect_allow "$FIXTURE_DIR/task-a-read.json" "read payments logs in staging" \
-    "task A read reached the effect"
+    "task A read reached the effect" "" "task A read"
   expect_allow "$FIXTURE_DIR/task-b-read.json" "read payments logs in staging" \
-    "task B read reached the effect"
+    "task B read reached the effect" "" "task B read"
   expect_allow "$FIXTURE_DIR/task-a-restart.json" "restarted payments in staging" \
-    "task A approved restart reached the effect"
+    "task A approved restart reached the effect" "" "approved restart"
   expect_allow "$FIXTURE_DIR/task-a-restart-repeat.json" "restarted payments in staging" \
-    "repeated approved restart stayed allowed"
+    "repeated approved restart stayed allowed" "" "repeated approved restart"
   expect_deny "$FIXTURE_DIR/task-a-unapproved.json" "tenuo_approval_required" \
-    "restart without its approval was denied"
+    "restart without its approval was denied" "" "restart without approval"
   expect_deny "$FIXTURE_DIR/task-a-approval-mismatch.json" "tenuo_invalid_authority" \
-    "approval for replicas=3 did not cover replicas=5"
+    "approval for replicas=3 did not cover replicas=5" "" "approval does not cover replicas 5"
   expect_deny "$FIXTURE_DIR/task-b-restart.json" "tenuo_tool_denied" \
-    "task B restart was denied"
+    "task B restart was denied" "" "task B restart"
   expect_deny "$FIXTURE_DIR/copied-warrant.json" "tenuo_invalid_authority" \
-    "task A's warrant signed by task B was denied"
+    "task A's warrant signed by task B was denied" "" "copied warrant"
   expect_deny "$FIXTURE_DIR/task-a-constraint.json" "tenuo_constraint_denied" \
-    "task A production read was denied"
+    "task A production read was denied" "" "production read"
   expect_deny "$FIXTURE_DIR/task-a-replicas.json" "tenuo_constraint_denied" \
-    "task A replicas=8 restart was denied"
+    "task A replicas=8 restart was denied" "" "replicas 8"
   expect_deny "$FIXTURE_DIR/missing-warrant.json" "tenuo_missing_warrant" \
-    "missing authority was denied"
+    "missing authority was denied" "" "missing warrant"
   expect_allow "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" \
-    "narrowed warrant read reached the effect" "$CHILD_SANDBOX_NAME"
+    "narrowed warrant read reached the effect" "$CHILD_SANDBOX_NAME" "narrowed read"
   expect_deny "$FIXTURE_DIR/delegated-restart.json" "tenuo_tool_denied" \
-    "narrowed warrant restart was denied" "$CHILD_SANDBOX_NAME"
+    "narrowed warrant restart was denied" "$CHILD_SANDBOX_NAME" "narrowed restart"
   grep -Fxq 'attenuation refused' "$FIXTURE_DIR/widen-refused.txt" \
     || fail "the narrowed warrant could be widened"
 
@@ -440,9 +522,9 @@ run_suite() {
     and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8 or .arguments.replicas == 5)] | length == 0)
   ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the five authorized calls"
 
-  expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart"
-  expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant"
-  expect_destination_deny "$FIXTURE_DIR/delegated-restart.json" "direct narrowed restart"
+  expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart" "direct task B restart"
+  expect_destination_deny "$FIXTURE_DIR/missing-warrant.json" "direct missing warrant" "direct missing warrant"
+  expect_destination_deny "$FIXTURE_DIR/delegated-restart.json" "direct narrowed restart" "direct narrowed restart"
   jq -se 'length == 5' "$EFFECT_LOG" >/dev/null || fail "direct denials must not reach the effect"
   direct_allow="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
@@ -450,29 +532,177 @@ run_suite() {
   jq -e '.result.content[0].text == "read payments logs in staging"' <<<"$direct_allow" >/dev/null \
     || fail "direct task A read is authorized by the destination"
   jq -se 'length == 6' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
+  local denial_out="$RUN_DIR/local-denial.out" denial_line denial_us
   "$DEMO_PYTHON" "$EXAMPLE_DIR/local_denial.py" \
     --policy "$FIXTURE_DIR/policy.json" \
     --warrant "$FIXTURE_DIR/warrants/task-b.cbor" \
     --holder-key "$FIXTURE_DIR/signers/task-b/key" \
     --receipt-dir "$RECEIPT_DIR" \
-    --request-id 14 || fail "in-process denial"
+    --request-id 14 | tee "$denial_out" || fail "in-process denial"
+  denial_line="$(grep -F "tenuo_decision request_id=14 " "$denial_out" | tail -1)"
+  [[ -n "$denial_line" ]] || fail "in-process denial has no verification timing"
+  denial_us="$(sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$denial_line")"
+  record_obs "in-process task B restart" "openshell+tenuo" "deny" "agent-toolkit" "tool_denied" "$denial_us" 0
   "$DEMO_PYTHON" "$EXAMPLE_DIR/audit_receipts.py" \
     --dir "$RECEIPT_DIR" \
     --policy "$FIXTURE_DIR/policy.json" \
     --demo || fail "offline receipt verification"
-  printf 'ALL PASS the destination verified the warrant with and without OpenShell, and the receipts verify offline\n'
+  run_control
+  run_timing
+  printf 'ALL PASS both runs were recorded and the receipts verify offline\n'
 }
 
 expect_destination_deny() {
   local fixture="$1"
   local label="$2"
-  local body
+  local scenario="${3:-}"
+  local start end body id line verify_us reason
+  start="$(now_us)"
   body="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
     --header 'content-type: application/json' \
     --data-binary @"$fixture")"
+  end="$(now_us)"
+  LAST_E2E_US=$((end - start))
   jq -e '.error.code == -32001 and .error.message == "Authorization denied" and (.error | keys | length == 2)' <<<"$body" >/dev/null \
     || fail "$label is denied by the destination"
   printf 'PASS %s\n' "$label"
+  if [[ -n "$scenario" ]]; then
+    id="$(jq -r .id "$fixture")"
+    line="$(grep -F "tenuo_decision request_id=${id} " "$UPSTREAM_LOG" | tail -1 || true)"
+    [[ -n "$line" ]] || fail "$scenario has no destination timing"
+    verify_us="$(sed -n 's/.*verify_us=\([0-9][0-9]*\).*/\1/p' <<<"$line")"
+    reason="$(sed -n 's/.*reason=\([^ ]*\).*/\1/p' <<<"$line")"
+    record_obs "$scenario" "openshell+tenuo" "deny" "destination" "$reason" "$verify_us" "$LAST_E2E_US"
+  fi
+}
+
+control_allow() {
+  local scenario="$1"
+  local fixture="$2"
+  local marker="$3"
+  local sandbox="${4:-$SANDBOX_NAME}"
+  local point="${5:-openshell}"
+  local output="$RUN_DIR/control-$(basename "$fixture").out"
+  send_request "$fixture" "$sandbox" >"$output" 2>>"$SETUP_LOG" || fail "control $scenario completes"
+  grep -Fq '200 OK' "$output" || fail "control $scenario returns 200"
+  grep -Fq "$marker" "$output" || fail "control $scenario reaches the effect"
+  record_obs "$scenario" "openshell-only" "allow" "$point" "" 0 "$LAST_E2E_US"
+  printf 'PASS openshell-only %s\n' "$scenario"
+}
+
+control_direct() {
+  local scenario="$1"
+  local fixture="$2"
+  local start end body
+  start="$(now_us)"
+  body="$(curl -sS --max-time 20 "http://127.0.0.1:$UPSTREAM_PORT/mcp" \
+    --header 'content-type: application/json' \
+    --data-binary @"$fixture")"
+  end="$(now_us)"
+  jq -e '.result.content[0].text != null' <<<"$body" >/dev/null \
+    || fail "control $scenario reaches the effect"
+  record_obs "$scenario" "openshell-only" "allow" "destination" "" 0 "$((end - start))"
+  printf 'PASS openshell-only %s\n' "$scenario"
+}
+
+run_control() {
+  printf 'INFO repeating the calls with warrant checks removed\n'
+  "${CLI[@]}" sandbox delete "$SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || fail "delete the first sandbox"
+  "${CLI[@]}" sandbox delete "$CHILD_SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || fail "delete the second sandbox"
+  stop_one GATEWAY_PID
+  stop_one MIDDLEWARE_PID
+  stop_one UPSTREAM_PID
+
+  CONTROL_EFFECT="$RUN_DIR/control-effects.jsonl"
+  : >"$CONTROL_EFFECT"
+  start_accept_all
+  wait_for_port "$UPSTREAM_PID" "$SERVICE_HOST" "$UPSTREAM_PORT" "accept-all effect server"
+  write_gateway_config 0
+  GATEWAY_DB="$RUN_DIR/gateway-control.db"
+  start_gateway
+  wait_for_gateway
+  if grep -Fq 'tenuo/authorization' "$GATEWAY_CONFIG"; then
+    fail "the comparison gateway still registers Tenuo"
+  fi
+  # The tool rules stay. The middleware block has to go with the registration:
+  # OpenShell rejects a sandbox policy that names an unregistered middleware.
+  python3 - "$EXAMPLE_DIR/openshell-policy.yaml" "$RUN_DIR/openshell-only-policy.yaml" "$UPSTREAM_PORT" <<'PY'
+import sys
+from pathlib import Path
+source, dest, port = sys.argv[1:]
+lines = Path(source).read_text(encoding="utf-8").splitlines()
+kept = []
+skip = False
+for line in lines:
+    if line.startswith("network_middlewares:"):
+        skip = True
+        continue
+    if skip and line and not line.startswith(" "):
+        skip = False
+    if not skip:
+        kept.append(line.replace("__UPSTREAM_PORT__", port))
+Path(dest).write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
+PY
+  if grep -Fq 'tenuo/authorization' "$RUN_DIR/openshell-only-policy.yaml"; then
+    fail "the comparison sandbox policy still names Tenuo"
+  fi
+  SANDBOX_POLICY="$RUN_DIR/openshell-only-policy.yaml"
+
+  SANDBOX_NAME="n2-$$-$RANDOM"
+  CHILD_SANDBOX_NAME="c2-$$-$RANDOM"
+  "${CLI[@]}" sandbox create --name "$SANDBOX_NAME" --policy "$SANDBOX_POLICY" --output json --no-tty --detach -- sleep infinity >>"$SETUP_LOG" 2>&1 \
+    || fail "comparison sandbox creation"
+  "${CLI[@]}" sandbox create --name "$CHILD_SANDBOX_NAME" --policy "$SANDBOX_POLICY" --output json --no-tty --detach -- sleep infinity >>"$SETUP_LOG" 2>&1 \
+    || fail "comparison child sandbox creation"
+
+  control_allow "task A read" "$FIXTURE_DIR/task-a-read.json" "read payments logs in staging"
+  control_allow "task B read" "$FIXTURE_DIR/task-b-read.json" "read payments logs in staging"
+  control_allow "approved restart" "$FIXTURE_DIR/task-a-restart.json" "restarted payments in staging"
+  control_allow "repeated approved restart" "$FIXTURE_DIR/task-a-restart-repeat.json" "restarted payments in staging"
+  control_allow "restart without approval" "$FIXTURE_DIR/task-a-unapproved.json" "restarted payments in staging"
+  control_allow "approval does not cover replicas 5" "$FIXTURE_DIR/task-a-approval-mismatch.json" "restarted payments in staging"
+  control_allow "task B restart" "$FIXTURE_DIR/task-b-restart.json" "restarted payments in staging"
+  control_allow "copied warrant" "$FIXTURE_DIR/copied-warrant.json" "restarted payments in staging"
+  control_allow "production read" "$FIXTURE_DIR/task-a-constraint.json" "read payments logs in staging"
+  control_allow "replicas 8" "$FIXTURE_DIR/task-a-replicas.json" "restarted payments in staging"
+  control_allow "missing warrant" "$FIXTURE_DIR/missing-warrant.json" "restarted payments in staging"
+  control_allow "narrowed read" "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" "$CHILD_SANDBOX_NAME"
+  control_allow "narrowed restart" "$FIXTURE_DIR/delegated-restart.json" "restarted payments in staging" "$CHILD_SANDBOX_NAME"
+  control_direct "direct task B restart" "$FIXTURE_DIR/task-b-restart.json"
+  control_direct "direct missing warrant" "$FIXTURE_DIR/missing-warrant.json"
+  control_direct "direct narrowed restart" "$FIXTURE_DIR/delegated-restart.json"
+  record_obs "wider child" "openshell-only" "not checked" "attenuation" "" 0 0
+  printf 'PASS openshell-only wider child was not checked\n'
+
+  jq -se '
+    length == 16
+    and ([.[] | select(.arguments.environment == "production")] | length >= 1)
+    and ([.[] | select(.arguments.replicas == 8)] | length >= 1)
+  ' "$CONTROL_EFFECT" >/dev/null || fail "comparison effect log is missing calls Tenuo denied"
+}
+
+run_timing() {
+  local bench="$RUN_DIR/openshell-bench.json"
+  local -a requests=()
+  local path
+  for path in "$FIXTURE_DIR"/*.json; do
+    [[ "$(basename "$path")" == "policy.json" ]] && continue
+    requests+=(--request "$path")
+  done
+  "$TENUO_TARGET/debug/tenuo-demo-fixture" bench \
+    --policy "$FIXTURE_DIR/policy.json" \
+    --sandbox-id "$SANDBOX_ID" \
+    --iterations 1000 \
+    "${requests[@]}" >"$bench" || fail "OpenShell timing sample"
+  "$DEMO_PYTHON" "$EXAMPLE_DIR/outcome_matrix.py" \
+    --observations "$OBS" \
+    --policy "$FIXTURE_DIR/policy.json" \
+    --requests "$FIXTURE_DIR" \
+    --warrant "$FIXTURE_DIR/warrants/task-b.cbor" \
+    --holder-key "$FIXTURE_DIR/signers/task-b/key" \
+    --openshell-bench "$bench" \
+    --timeout-ms 2000 \
+    --output-dir "$ROOT/results" || fail "outcome matrix"
 }
 
 for command in cargo curl git jq nc openssl python3 "$COMPUTE_DRIVER"; do
@@ -503,7 +733,7 @@ prepare_destination_python
   --output "$FIXTURE_DIR" \
   --sandbox-id bootstrap \
   --openshell-jwt-dir "$JWT_DIR" \
-  --openshell-jwt-key-id "$RUN_ID"
+  --openshell-jwt-key-id "$RUN_ID" >"$FIXTURE_LOG" 2>&1
 write_gateway_config
 start_upstream
 wait_for_port "$UPSTREAM_PID" "$SERVICE_HOST" "$UPSTREAM_PORT" "MCP effect server"
