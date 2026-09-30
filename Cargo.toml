@@ -24,7 +24,7 @@ path = "src/bin/tenuo-openshell.rs"
 [dependencies]
 async-trait = "0.1"
 arc-swap = "1.7"
-axum = "0.7"
+axum = "0.8"
 base64 = "0.22"
 chrono = "0.4"
 ciborium = "0.2"

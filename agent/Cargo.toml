@@ -14,7 +14,7 @@ name = "tenuo-openshell-agent"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.7"
+axum = "0.8"
 base64 = "0.22"
 ciborium = "0.2"
 clap = { version = "4.5", features = ["derive", "env"] }
