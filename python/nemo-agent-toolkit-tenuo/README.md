@@ -1,30 +1,32 @@
 # NVIDIA NeMo Agent Toolkit — Tenuo
 
-Provider-owned `nemo-agent-toolkit-tenuo` middleware that authorizes a function
-call with a Tenuo warrant before the function runs.
+Provider-owned Agent Toolkit middleware that checks a Tenuo warrant before a
+function runs. Unauthorized calls stop before `call_next`, so protected
+function code never receives them.
 
-The warrant is bound to the current task with `authority()`. The middleware does not read a warrant from function arguments. On denial it raises `AuthorizationDenied` and does not call the next stage. A call that still needs a signed approval raises `ApprovalRequired`, a subclass of `AuthorizationDenied`.
+> [!IMPORTANT]
+> `nemo-agent-toolkit-tenuo` is currently a source preview and is not published
+> on PyPI. Install it from a pinned repository revision until the first release.
 
-This package is the Agent Toolkit plugin. It does not implement the OpenShell supervisor service in the repository root.
+This package is the in-process Agent Toolkit integration. The independent
+OpenShell supervisor middleware is implemented at the repository root.
 
-## Install
+## Install from source
 
-Use the same environment as `nvidia-nat-core` 1.8:
-
-```bash
-pip install nemo-agent-toolkit-tenuo
-```
-
-For a source checkout:
+From the repository root, use the same environment as Agent Toolkit 1.8:
 
 ```bash
-uv sync --extra test
-uv run pytest -q
-uv run nat info components
+uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test
+uv run --locked --project python/nemo-agent-toolkit-tenuo nat info components
 ```
 
-The distribution, import namespace, entry point, and `_type` follow NVIDIA's
-third-party plugin convention:
+For an existing environment, an editable or regular local install also works:
+
+```bash
+python -m pip install ./python/nemo-agent-toolkit-tenuo
+```
+
+The package uses NVIDIA's third-party plugin convention:
 
 | Surface | Value |
 | --- | --- |
@@ -33,22 +35,23 @@ third-party plugin convention:
 | Entry point | `nat_tenuo` |
 | Middleware `_type` | `tenuo` |
 
-This release is compatibility-tested against `nvidia-nat-core` 1.8.x.
+## Bind task authority
 
-## Bind a warrant
+Bind authority in application-controlled task scope. Do not accept a warrant
+or holder key from model-generated function arguments.
 
 ```python
 from nat.plugins.tenuo import authority
 
 with authority(warrant.bind(holder)):
-    ...
+    result = await workflow.ainvoke(input)
 ```
 
-`holder` is the signing key for that warrant's holder. The binding lasts for the `with` block and for async tasks started inside it.
+The binding follows Python context propagation, including async tasks created
+inside the block. The middleware does not write MCP `_meta.tenuo`; use Tenuo's
+`SecureMCPClient` when the same authority must cross an MCP boundary.
 
-To attach the same warrant to an MCP `tools/call`, pass it through `SecureMCPClient` from the `tenuo` package. This middleware does not write `_meta.tenuo`.
-
-## Configuration
+## Configure middleware
 
 ```yaml
 middleware:
@@ -63,13 +66,25 @@ functions:
     middleware: [task_authorization]
 ```
 
-`trusted_roots` selects which issuers are accepted. An empty list is rejected when the configuration is loaded. The middleware is not final, so later middleware still runs after an allow.
+`trusted_roots` selects accepted issuers and cannot be empty. A denied call
+raises `AuthorizationDenied`; a call needing a signed approval raises
+`ApprovalRequired`, which subclasses it. The middleware is not final, so later
+middleware continues after an allow.
 
-## Test
+## Compatibility and verification
+
+This preview is tested with Python 3.11–3.13, `nvidia-nat-core` 1.8.x, and
+Tenuo 0.3.x. Run its tests and distribution build with:
 
 ```bash
-pytest
+uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test \
+  pytest python/nemo-agent-toolkit-tenuo/tests -q
+uv build --project python/nemo-agent-toolkit-tenuo
 ```
+
+See the repository [security policy](../../SECURITY.md) before reporting a
+vulnerability and [release guide](../../docs/releasing.md) for the publication
+gate.
 
 ## License
 

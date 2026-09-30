@@ -1,5 +1,9 @@
 # Tenuo for NVIDIA OpenShell
 
+[![CI](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/ci.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/ci.yml)
+[![OpenShell E2E](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Task-scoped authorization for agents running in NVIDIA OpenShell and NVIDIA
 NeMo Agent Toolkit.
 
@@ -29,6 +33,77 @@ The integration is Apache-2.0. It consists of:
   unauthorized function calls before `call_next`; and
 - an authenticated, end-to-end OpenShell demo that proves denied calls do not
   reach the protected effect.
+
+> [!IMPORTANT]
+> The production deployment profile is implemented and tested from source.
+> Registry artifacts have not been published yet, so install from a pinned
+> source revision until the first signed release. See
+> [Releasing](docs/releasing.md) for the publication gate.
+
+## Choose a path
+
+| Goal | Start here |
+| --- | --- |
+| Verify a standalone checkout | [Run the local smoke test](#quickstart-standalone-smoke-test) |
+| See the security boundary work | [Run the authenticated demo](#quickstart-real-openshell-demo) |
+| Operate the supervisor middleware | [Secure production mode](#secure-production-mode) |
+| Add early denial to Agent Toolkit | [Agent Toolkit plugin](#nvidia-nemo-agent-toolkit-plugin) |
+| Connect an optional control plane | [Provider integration contract](docs/providers.md) |
+| Review or contribute | [Architecture](docs/architecture.md) and [Contributing](CONTRIBUTING.md) |
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/`, `proto/` | Rust supervisor middleware and pinned OpenShell protocol |
+| `python/nemo-agent-toolkit-tenuo/` | Independently buildable Agent Toolkit distribution |
+| `examples/demo/` | Real OpenShell gateway and destination-verification demo |
+| `examples/interoperability/` | Clearly separated A2A interoperability evidence |
+| `ci/`, `.github/workflows/` | Local release gate and hosted verification |
+| `docs/` | Architecture, operations, provider contract, upstream contract, gap analysis, and release process |
+
+## Core concepts
+
+- A **warrant** is signed, task-scoped authority: tools, argument constraints,
+  lifetime, and optional approval requirements.
+- **Proof of possession (PoP)** proves that the current task controls the
+  warrant holder key; copying a warrant alone is insufficient.
+- **Attenuation** delegates a warrant while only narrowing its authority.
+- The Agent Toolkit plugin gives fast, in-process feedback. OpenShell
+  middleware is the independent boundary for covered outbound MCP traffic.
+
+## Quickstart: standalone smoke test
+
+Verify the open-source onboarding path before installing OpenShell or creating
+production credentials:
+
+```bash
+make smoke
+```
+
+This builds the Rust binaries, creates local fixture authority, starts the
+middleware with the built-in file policy provider, and checks `/live`, `/ready`,
+metrics, and receipt-key initialization. It requires Rust, Python 3, and
+`curl`. It does not require Docker, an account, an API key, or a hosted Tenuo
+service, and it makes no request to one. Cargo may download normal build
+dependencies on the first run.
+
+## Quickstart: real OpenShell demo
+
+You need Linux or macOS, Docker 28+ or Podman 5+, Rust 1.91+, Python 3.11+,
+`git`, `curl`, `jq`, `nc`, `openssl`, and `make`. The first run downloads and
+builds pinned OpenShell components and commonly takes 10–20 minutes.
+
+```bash
+make demo
+```
+
+The launcher prints and writes `results/outcome-matrix.md`. It builds the
+gateway, CLI, middleware, and demo workload, while using NVIDIA's pinned
+supervisor and sandbox-runtime images. It creates temporary keys and an
+authenticated HTTPS middleware registration, then cleans up the runtime.
+See [the demo guide](examples/demo/README.md) for platform details and
+overrides.
 
 ## See the difference
 
@@ -66,17 +141,12 @@ the same offline receipt report as the OpenShell and destination decisions.
 The demo also performs a real Tenuo A2A JSON-RPC handoff over localhost HTTP.
 It sends the full parent/child warrant stack plus a child-holder
 proof-of-possession signature. The worker executes `read_logs`, while the
-read-only delegated authority cannot invoke `restart_service`.
+read-only delegated authority cannot invoke `restart_service`. This is a
+separate [interoperability proof](examples/interoperability/README.md), not a
+third distributed package.
 
-Run the calls through a real OpenShell gateway and sandbox:
-
-```bash
-make demo
-```
-
-The launcher downloads the pinned OpenShell source when needed, builds its
-gateway and supervisor image, and creates an authenticated HTTPS middleware
-registration. It runs the calls with the warrant check, then again through a
+The launcher downloads the pinned OpenShell source when needed. It runs the
+calls with the warrant check, then again through a
 second gateway that does not register the middleware. That sandbox policy
 keeps the same tool admission rules and omits the middleware block. OpenShell
 rejects a sandbox policy that names a middleware the gateway does not
@@ -89,7 +159,7 @@ p99 of 1,000 checks at each enforcement point next to the configured
 middleware timeout, and the median end-to-end time of the sandbox calls from
 the first run.
 
-The effect server must observe only the five allowed sandbox calls in the
+The effect server must observe only the four allowed sandbox calls in the
 first run. It still denies a direct call that did not pass through OpenShell.
 The launcher then verifies the signed authorization receipts offline with the
 issuer and receipt-signer public keys. A receipt records the decision; it
@@ -122,7 +192,7 @@ before they can reach a protected tool. This service does not implement
 `WEBSOCKET_MESSAGE`. Text frames on that binding, and `HTTP_RESPONSE`, are not
 authorization points here. The HTTP demo does not exercise them.
 
-### Production listener
+### Secure production mode
 
 Production mode is the default. It requires server TLS and an
 operator-provisioned OpenShell Ed25519 public key:
@@ -136,7 +206,12 @@ cargo run --release -- \
   --openshell-jwt-public-key /etc/openshell/jwt/public.pem \
   --openshell-gateway-id production-gateway \
   --openshell-jwt-key-id production-key-1 \
-  --audience urn:openshell:extension:middleware:tenuo/authorization
+  --audience urn:openshell:extension:middleware:tenuo/authorization \
+  --replay-redis-url redis://redis.security.svc:6379/ \
+  --receipt-key /etc/tenuo/receipts/key \
+  --receipt-log /var/lib/tenuo/receipts.jsonl \
+  --require-receipts \
+  --admin-listen 0.0.0.0:9090
 ```
 
 The verifier pins `alg=EdDSA`, `typ=openshell-ext+jwt`, optional `kid`, exact
@@ -169,6 +244,7 @@ reusable display name:
 
 ```json
 {
+  "version": 1,
   "max_warrant_lifetime_secs": 3600,
   "approval_replay_protection": true,
   "sandboxes": {
@@ -182,10 +258,47 @@ reusable display name:
 A missing sandbox, missing root, unreadable policy, or unavailable verifier
 denies the request.
 
-`approval_replay_protection` enables the integration-owned, in-process nonce
-store. Production deployments that run more than one middleware replica must
-replace this with a shared atomic store before claiming cross-replica replay
-protection; the signed approval nonce is the stable key.
+`approval_replay_protection` uses Redis in the supported production profile.
+All approval nonces on one request are consumed atomically with expiry, across
+replicas. Production startup fails if replay protection is enabled without
+Redis. `--allow-in-memory-replay` is an explicit single-instance demo escape
+hatch.
+
+Policy files are versioned and polled. A valid higher version replaces the
+active snapshot atomically; invalid or rolled-back updates preserve the last
+valid version. `/ready` fails when the policy provider, replay backend, or
+signed revocation state is stale. `/live` and Prometheus `/metrics` share the
+separate admin listener.
+
+The default provider reads this local file and performs no network activity.
+Provider-synchronized snapshots add a `valid_until` Unix timestamp so a stale
+but readable cache cannot remain authoritative indefinitely. The public
+provider and readiness interfaces, durable receipt-export contract, and
+acceptance tests are documented in [Provider integration](docs/providers.md).
+
+For emergency revocation, a sandbox entry may require a signed Tenuo SRL:
+
+```json
+"revocation": {
+  "signed_list_base64": "<signed SRL>",
+  "max_staleness_secs": 300,
+  "clock_tolerance_secs": 30,
+  "rollback_floor_path": "/var/lib/tenuo/revocation-floor.json"
+}
+```
+
+The middleware verifies issuer signature and freshness and persists a
+monotonic rollback floor. Missing, stale, untrusted, rolled-back, or equivocated
+state fails closed. Receipts include the SRL version and hash.
+
+### Kubernetes deployment
+
+The [Helm chart](deploy/helm/tenuo-openshell/README.md) supplies the supported
+HA deployment: Redis replay protection, readiness/liveness probes, persistent
+revocation floors and receipts, non-root read-only containers, resource bounds,
+a disruption budget, and default-deny network policy. The network selectors
+must match the OpenShell gateway/supervisor and Redis namespaces in the target
+cluster.
 
 ## NVIDIA NeMo Agent Toolkit plugin
 
@@ -201,8 +314,8 @@ The Python distribution follows NVIDIA's partner-owned package convention:
 Install the source package into the same environment as Agent Toolkit 1.8:
 
 ```bash
-uv sync --project python/nemo-agent-toolkit-tenuo --extra test
-uv run --project python/nemo-agent-toolkit-tenuo nat info components
+uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test
+uv run --locked --project python/nemo-agent-toolkit-tenuo nat info components
 ```
 
 Bind authority to an application-controlled task scope rather than accepting it
@@ -279,7 +392,11 @@ CI runs Rust formatting, linting, tests, a release build, Python tests across
 supported versions, Agent Toolkit entry-point discovery, wheel/sdist builds,
 container builds, and demo-fixture validation. The authenticated OpenShell
 gateway suite is also available as a manual and weekly workflow because it
-builds a full supervisor image.
+starts the complete pinned supervisor stack.
+
+Repository-level `make check` is the local release gate. It also builds the
+wheel and source distribution and verifies that the source archive does not
+contain tests that depend on files outside the Python package.
 
 ## License
 

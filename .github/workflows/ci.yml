@@ -11,6 +11,18 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TENUO_TEST_REDIS_URL: redis://127.0.0.1:6379/
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -18,9 +30,13 @@ jobs:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --all-targets --locked
       - run: cargo build --release --locked
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+      - run: helm lint deploy/helm/tenuo-openshell
 
   agent-toolkit-plugin:
     runs-on: ubuntu-latest
@@ -33,10 +49,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --project python/nemo-agent-toolkit-tenuo --extra test
-      - run: uv run --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q
+      - run: uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test
+      - run: uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q
       - name: Verify plugin discovery
-        run: uv run --project python/nemo-agent-toolkit-tenuo --extra test nat info components | grep -F tenuo
+        run: uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test nat info components | grep -F tenuo
       - run: uv build --project python/nemo-agent-toolkit-tenuo
 
   demo-assets:
@@ -47,7 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y jq
       - run: bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh ci/check.sh
-      - run: python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py examples/demo/a2a_handoff.py
+      - run: python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py examples/interoperability/a2a_handoff.py
       - run: cargo run --locked --bin tenuo-demo-fixture -- --output /tmp/tenuo-fixtures --sandbox-id ci-sandbox
       - run: jq -e '.sandboxes["ci-sandbox"]' /tmp/tenuo-fixtures/policy.json
       - run: jq -e '.params._meta.tenuo' /tmp/tenuo-fixtures/task-a-read.json

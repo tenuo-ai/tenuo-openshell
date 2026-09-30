@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise a real Tenuo A2A HTTP handoff with an attenuated warrant."""
+"""Exercise a real Tenuo A2A interoperability handoff with an attenuated warrant."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ import uvicorn
 
 from tenuo import SigningKey, Warrant
 from tenuo.a2a import A2AServer
+# Compatibility bridge for Tenuo 0.3.1. See this directory's README; migrate
+# to the public A2A client before treating this as a standalone integration.
 from tenuo_core import encode_warrant_stack
 
 

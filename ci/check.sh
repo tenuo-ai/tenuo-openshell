@@ -5,14 +5,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh
-python3 -m py_compile examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo build --release --locked
+bash -n scripts/bootstrap-openshell.sh scripts/onboarding-smoke.sh scripts/openshell-e2e.sh
+TENUO_SMOKE_SKIP_BUILD=1 scripts/onboarding-smoke.sh
+if command -v helm >/dev/null 2>&1; then
+  helm lint deploy/helm/tenuo-openshell
+fi
+python3 -m py_compile \
+  examples/demo/mcp_server.py \
+  examples/demo/audit_receipts.py \
+  examples/demo/test_destination.py \
+  examples/demo/local_denial.py \
+  examples/demo/outcome_matrix.py \
+  examples/interoperability/a2a_handoff.py
 
 fixture_dir="$(mktemp -d)"
-trap 'rm -rf "$fixture_dir"' EXIT
-cargo run --quiet --bin tenuo-demo-fixture -- --output "$fixture_dir" --sandbox-id test-sandbox
+dist_dir="$(mktemp -d)"
+trap 'rm -rf "$fixture_dir" "$dist_dir"' EXIT
+cargo run --quiet --locked --bin tenuo-demo-fixture -- --output "$fixture_dir" --sandbox-id test-sandbox
 jq -e '.sandboxes["test-sandbox"]' "$fixture_dir/policy.json" >/dev/null
 jq -e '.params._meta.tenuo' "$fixture_dir/task-a-read.json" >/dev/null
 jq -e '.params._meta.tenuo' "$fixture_dir/task-b-restart.json" >/dev/null
@@ -25,7 +37,11 @@ if python3 -c 'import tenuo; parts=tuple(int(p) for p in tenuo.__version__.split
   TENUO_DEMO_EFFECT_LOG=/tmp/unused python3 examples/demo/test_destination.py --fixture "$fixture_dir"
 fi
 
-uv run --project python/nemo-agent-toolkit-tenuo --extra test \
+uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test \
   pytest python/nemo-agent-toolkit-tenuo/tests -q
-uv run --project python/nemo-agent-toolkit-tenuo --extra test nat info components \
+uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test nat info components \
   | grep -F tenuo >/dev/null
+uv build --project python/nemo-agent-toolkit-tenuo --out-dir "$dist_dir"
+test "$(find "$dist_dir" -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ')" = 1
+test "$(find "$dist_dir" -maxdepth 1 -name '*.tar.gz' | wc -l | tr -d ' ')" = 1
+! tar -tzf "$dist_dir"/*.tar.gz | grep -F 'tests/test_outcome_matrix.py' >/dev/null

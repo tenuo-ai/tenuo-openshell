@@ -1,15 +1,18 @@
-.PHONY: check demo e2e test test-rust test-python
+.PHONY: check demo e2e smoke test test-rust test-python
 
-check: test
+check:
 	ci/check.sh
 
 test: test-rust test-python
 
 test-rust:
-	cargo test --all-targets
+	cargo test --all-targets --locked
 
 test-python:
-	uv run --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q
+	uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q
 
 demo e2e:
 	scripts/openshell-e2e.sh
+
+smoke:
+	scripts/onboarding-smoke.sh

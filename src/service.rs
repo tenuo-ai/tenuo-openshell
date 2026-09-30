@@ -2,7 +2,7 @@
 
 use crate::auth::{AuthenticatedCaller, CallerKind};
 use crate::evaluate::{self, Outcome};
-use crate::policy::{self, PolicySet};
+use crate::policy::{self, PolicyManager, PolicySet};
 use crate::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddleware;
 use crate::proto::openshell::middleware::v1::{
     Decision, HttpRequestEvaluation, HttpRequestResult, MiddlewareBinding,
@@ -11,6 +11,7 @@ use crate::proto::openshell::middleware::v1::{
 };
 use crate::reason;
 use crate::receipt::ReceiptLog;
+use crate::telemetry::Telemetry;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
@@ -18,26 +19,55 @@ const MAX_PAYLOAD_BYTES: u64 = 262_144;
 const CONTRACT_CAPABILITY: &str = "openshell.supervisor-middleware.contract";
 
 pub struct MiddlewareService {
-    policy: Arc<PolicySet>,
+    policy: Arc<PolicyManager>,
     expected_audience: Option<String>,
     receipts: Option<Arc<ReceiptLog>>,
+    telemetry: Arc<Telemetry>,
 }
 
 impl MiddlewareService {
     pub fn new(policy: PolicySet) -> Self {
         Self {
-            policy: Arc::new(policy),
+            policy: Arc::new(PolicyManager::fixed(policy)),
             expected_audience: None,
             receipts: None,
+            telemetry: Arc::new(Telemetry::default()),
         }
     }
 
     pub fn authenticated(policy: PolicySet, expected_audience: String) -> Self {
         Self {
-            policy: Arc::new(policy),
+            policy: Arc::new(PolicyManager::fixed(policy)),
             expected_audience: Some(expected_audience),
             receipts: None,
+            telemetry: Arc::new(Telemetry::default()),
         }
+    }
+
+    pub fn authenticated_with_manager(
+        policy: Arc<PolicyManager>,
+        expected_audience: String,
+    ) -> Self {
+        Self {
+            policy,
+            expected_audience: Some(expected_audience),
+            receipts: None,
+            telemetry: Arc::new(Telemetry::default()),
+        }
+    }
+
+    pub fn with_manager(policy: Arc<PolicyManager>) -> Self {
+        Self {
+            policy,
+            expected_audience: None,
+            receipts: None,
+            telemetry: Arc::new(Telemetry::default()),
+        }
+    }
+
+    pub fn with_telemetry(mut self, telemetry: Arc<Telemetry>) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     pub fn with_receipts(mut self, receipts: ReceiptLog) -> Self {
@@ -161,14 +191,17 @@ impl SupervisorMiddleware for MiddlewareService {
             .map(|context| context.sandbox_id.as_str())
             .unwrap_or("");
         let pre_credentials = request.phase == SupervisorMiddlewarePhase::PreCredentials as i32;
+        let policy = self.policy.snapshot();
         let outcome = evaluate::evaluate(
-            &self.policy,
+            &policy,
             sandbox_id,
             pre_credentials,
             &request.body,
             meta_mode,
             self.receipts.as_deref(),
-        );
+        )
+        .await;
+        self.telemetry.observe(&outcome);
         Ok(Response::new(http_result(outcome)))
     }
 

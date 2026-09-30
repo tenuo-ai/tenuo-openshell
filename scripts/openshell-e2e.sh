@@ -317,6 +317,7 @@ start_middleware() {
     --openshell-jwt-public-key "$JWT_DIR/public.pem" \
     --openshell-gateway-id "$RUN_ID" \
     --openshell-jwt-key-id "$RUN_ID" \
+    --allow-in-memory-replay \
     --audience "$AUDIENCE" \
     --receipt-key "$RECEIPT_KEY" \
     --receipt-log "$RECEIPT_DIR/openshell.jsonl" >>"$MIDDLEWARE_LOG" 2>&1 &
@@ -550,7 +551,7 @@ run_suite() {
     --dir "$RECEIPT_DIR" \
     --policy "$FIXTURE_DIR/policy.json" \
     --demo | tee "$RESULTS_DIR/evidence/receipt-audit.txt" || fail "offline receipt verification"
-  "$DEMO_PYTHON" "$EXAMPLE_DIR/a2a_handoff.py" \
+  "$DEMO_PYTHON" "$ROOT/examples/interoperability/a2a_handoff.py" \
     --port "$A2A_PORT" \
     --output "$RESULTS_DIR/evidence/a2a-handoff.json" || fail "A2A authority handoff"
   run_control

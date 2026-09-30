@@ -1,0 +1,170 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tenuo-openshell.fullname" . }}
+  labels:
+    {{- include "tenuo-openshell.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "tenuo-openshell.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "tenuo-openshell.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "tenuo-openshell.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "tenuo-openshell.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: middleware
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --policy
+            - /etc/tenuo/policy/{{ .Values.policy.key }}
+            - --listen
+            - 0.0.0.0:{{ .Values.service.port }}
+            - --admin-listen
+            - 0.0.0.0:{{ .Values.service.adminPort }}
+            - --policy-reload-secs
+            - {{ .Values.policy.reloadSeconds | quote }}
+            - --policy-max-stale-secs
+            - {{ .Values.policy.maxStaleSeconds | quote }}
+            - --replay-key-prefix
+            - {{ .Values.replay.keyPrefix | quote }}
+            - --tls-cert
+            - /etc/tenuo/tls/tls.crt
+            - --tls-key
+            - /etc/tenuo/tls/tls.key
+            - --openshell-jwt-public-key
+            - /etc/tenuo/openshell/public.pem
+            - --openshell-gateway-id
+            - {{ .Values.openshell.gatewayId | quote }}
+            - --openshell-jwt-key-id
+            - {{ .Values.openshell.jwtKeyId | quote }}
+            - --audience
+            - {{ .Values.openshell.audience | quote }}
+            - --receipt-key
+            - /etc/tenuo/receipts/key
+            - --receipt-log
+            - /var/lib/tenuo/receipts.jsonl
+            - --require-receipts
+          env:
+            - name: TENUO_REPLAY_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.replay.redisSecret }}
+                  key: {{ .Values.replay.redisUrlKey }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.port }}
+            - name: admin
+              containerPort: {{ .Values.service.adminPort }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: admin
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: admin
+            periodSeconds: 10
+            timeoutSeconds: 2
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: admin
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /etc/tenuo/policy
+              readOnly: true
+            - name: tls
+              mountPath: /etc/tenuo/tls
+              readOnly: true
+            - name: openshell-jwt
+              mountPath: /etc/tenuo/openshell
+              readOnly: true
+            - name: receipt-key
+              mountPath: /etc/tenuo/receipts
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/tenuo
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ .Values.policy.existingConfigMap }}
+            defaultMode: 0440
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.tls.certificateKey }}
+                path: tls.crt
+              - key: {{ .Values.tls.privateKeyKey }}
+                path: tls.key
+        - name: openshell-jwt
+          secret:
+            secretName: {{ .Values.openshell.jwtPublicKeySecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.openshell.jwtPublicKeyKey }}
+                path: public.pem
+        - name: receipt-key
+          secret:
+            secretName: {{ .Values.receipts.signingKeySecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.receipts.signingKeyKey }}
+                path: key
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

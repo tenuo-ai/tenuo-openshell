@@ -1,0 +1,64 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/tenuo-ai/tenuo-openshell
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  port: 50051
+  adminPort: 9090
+
+policy:
+  existingConfigMap: tenuo-openshell-policy
+  key: policy.json
+  reloadSeconds: 5
+  maxStaleSeconds: 30
+
+tls:
+  existingSecret: tenuo-openshell-tls
+  certificateKey: tls.crt
+  privateKeyKey: tls.key
+
+openshell:
+  gatewayId: production-gateway
+  jwtKeyId: production-key-1
+  audience: urn:openshell:extension:middleware:tenuo/authorization
+  jwtPublicKeySecret: openshell-extension-jwt
+  jwtPublicKeyKey: public.pem
+
+replay:
+  redisSecret: tenuo-openshell-redis
+  redisUrlKey: url
+  keyPrefix: tenuo:openshell:production:approval
+
+receipts:
+  signingKeySecret: tenuo-openshell-receipts
+  signingKeyKey: key
+
+persistence:
+  size: 1Gi
+  storageClass: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+networkPolicy:
+  enabled: true
+  callerNamespaceSelector:
+    kubernetes.io/metadata.name: openshell
+  redisNamespaceSelector:
+    kubernetes.io/metadata.name: redis
+  redisPodSelector:
+    app.kubernetes.io/name: redis
+  redisPort: 6379
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

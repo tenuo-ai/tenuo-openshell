@@ -101,10 +101,12 @@ The supported dependency is `nvidia-nat-core>=1.8,<1.9`; this repository does no
 
 ## Executable verification
 
-`make e2e` builds the pinned OpenShell gateway, CLI, and supervisor image; creates
-an authenticated HTTPS middleware registration; creates a real sandbox; sends
-one authorized and two unauthorized MCP calls; and proves the protected effect
-ran exactly once. `make check` covers Rust tests, JWT negative cases, signed
+`make e2e` builds the pinned OpenShell gateway, CLI, middleware, and workload;
+uses NVIDIA's pinned supervisor and sandbox-runtime images; creates an
+authenticated HTTPS middleware registration; and runs the complete outcome
+matrix through real sandboxes. Four protected sandbox calls execute in the
+middleware-enabled run; denied calls do not reach the effect. `make check`
+covers Rust formatting, linting, tests and release builds, JWT negative cases, signed
 fixture generation, Agent Toolkit 1.8 plugin tests, entry-point discovery, and
 package builds. The full gateway suite requires a supported container runtime
 and is therefore a separate manual/weekly CI job.

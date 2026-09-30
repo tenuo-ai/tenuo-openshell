@@ -214,16 +214,19 @@ fn bench(
         bodies.push(fs::read(path)?);
     }
     let mut samples = Vec::with_capacity(iterations as usize);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     for index in 0..iterations {
         let body = &bodies[index as usize % bodies.len()];
-        let outcome = tenuo_openshell_middleware::evaluate(
+        let outcome = runtime.block_on(tenuo_openshell_middleware::evaluate(
             &policy,
             sandbox_id,
             true,
             body,
             tenuo_openshell_middleware::MetaMode::Preserve,
             None,
-        );
+        ));
         samples.push(outcome.verify_us);
     }
     samples.sort_unstable();

@@ -50,6 +50,11 @@ reads Task A's key and the child public key. It does not read the child secret.
     `restart_service` skill runs. The machine-readable result is retained as
     `results/evidence/a2a-handoff.json`.
 
+The A2A step is maintained under
+[`examples/interoperability`](../interoperability/README.md). It is an
+interoperability proof with a documented Tenuo 0.3.1 compatibility bridge, not
+part of the OpenShell middleware package surface.
+
 The effect server verifies the preserved warrant with `MCPVerifier` before it
 runs a tool. After the sandbox calls, the suite sends three requests directly to
 that server, bypassing OpenShell: Task B's restart, a restart with no warrant,

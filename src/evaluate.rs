@@ -26,7 +26,7 @@ pub struct Outcome {
 /// set and the JSON-RPC id is present, one `tenuo_decision` line is written
 /// to stderr. The line carries the request id, duration, outcome, and reason
 /// code.
-pub fn evaluate(
+pub async fn evaluate(
     policy: &PolicySet,
     sandbox_id: &str,
     pre_credentials: bool,
@@ -42,7 +42,8 @@ pub fn evaluate(
         body,
         meta_mode,
         receipts,
-    );
+    )
+    .await;
     outcome.verify_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     if std::env::var_os("TENUO_DECISION_LOG").is_some() && !outcome.request_id.is_empty() {
         let name = if outcome.allow { "allow" } else { "deny" };
@@ -59,7 +60,7 @@ pub fn evaluate(
     outcome
 }
 
-fn decide(
+async fn decide(
     policy: &PolicySet,
     sandbox_id: &str,
     pre_credentials: bool,
@@ -75,6 +76,7 @@ fn decide(
         Err(code) => return deny(code),
     };
     let trusted_roots_hash = policy.trusted_roots_hash(sandbox_id).ok();
+    let revocation = policy.revocation_commitment(sandbox_id).ok().flatten();
     let request = match mcp::parse_body(body) {
         Ok(request) => request,
         Err(
@@ -97,23 +99,27 @@ fn decide(
             request_id,
             tenuo,
             document,
-        } => authorize_tool(
-            AuthorizationContext {
-                policy,
-                sandbox_id,
-                guard,
-                meta_mode,
-            },
-            &name,
-            &arguments,
-            tenuo.as_ref(),
-            &document,
-            ReceiptContext {
-                log: receipts,
-                request_id: &request_id,
-                trusted_roots_hash,
-            },
-        ),
+        } => {
+            authorize_tool(
+                AuthorizationContext {
+                    policy,
+                    sandbox_id,
+                    guard,
+                    meta_mode,
+                },
+                &name,
+                &arguments,
+                tenuo.as_ref(),
+                &document,
+                ReceiptContext {
+                    log: receipts,
+                    request_id: &request_id,
+                    trusted_roots_hash,
+                    revocation,
+                },
+            )
+            .await
+        }
     }
 }
 
@@ -121,6 +127,7 @@ struct ReceiptContext<'a> {
     log: Option<&'a ReceiptLog>,
     request_id: &'a str,
     trusted_roots_hash: Option<[u8; 32]>,
+    revocation: Option<(u64, [u8; 32])>,
 }
 
 struct AuthorizationContext<'a> {
@@ -130,7 +137,7 @@ struct AuthorizationContext<'a> {
     meta_mode: MetaMode,
 }
 
-fn authorize_tool(
+async fn authorize_tool(
     authorization: AuthorizationContext<'_>,
     name: &str,
     arguments: &Value,
@@ -154,7 +161,7 @@ fn authorize_tool(
         Err(_) => return identified(deny(reason::INVALID_REQUEST), receipts.request_id),
     };
     if let Err(denial) = authorization.guard.check_received(&received, &call) {
-        record(
+        let _ = record(
             &receipts,
             DecisionReceipt {
                 request_id: receipts.request_id,
@@ -163,6 +170,8 @@ fn authorize_tool(
                 pop: received.signature().to_bytes(),
                 pop_args: call.pop_args(),
                 trusted_roots_hash: [0; 32],
+                srl_version: receipts.revocation.map(|value| value.0),
+                srl_hash: receipts.revocation.map(|value| value.1),
                 denial: Some(&denial),
             },
         );
@@ -174,6 +183,7 @@ fn authorize_tool(
     if let Err(code) = authorization
         .policy
         .consume_approvals(authorization.sandbox_id, received.approvals())
+        .await
     {
         return identified(deny(code), receipts.request_id);
     }
@@ -184,16 +194,22 @@ fn authorize_tool(
         pop: received.signature().to_bytes(),
         pop_args: call.pop_args(),
         trusted_roots_hash: [0; 32],
+        srl_version: receipts.revocation.map(|value| value.0),
+        srl_hash: receipts.revocation.map(|value| value.1),
         denial: None,
     };
     match authorization.meta_mode {
         MetaMode::Preserve => {
-            record(&receipts, allowed);
+            if !record(&receipts, allowed) && receipt_is_required(&receipts) {
+                return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+            }
             identified(allow_unchanged(), receipts.request_id)
         }
         MetaMode::Strip => match mcp::strip_tenuo(document) {
             Ok(body) => {
-                record(&receipts, allowed);
+                if !record(&receipts, allowed) && receipt_is_required(&receipts) {
+                    return identified(deny(reason::VERIFIER_FAILED), receipts.request_id);
+                }
                 identified(
                     Outcome {
                         allow: true,
@@ -210,12 +226,16 @@ fn authorize_tool(
     }
 }
 
-fn record(receipts: &ReceiptContext<'_>, mut decision: DecisionReceipt<'_>) {
+fn record(receipts: &ReceiptContext<'_>, mut decision: DecisionReceipt<'_>) -> bool {
     let (Some(log), Some(trusted_roots_hash)) = (receipts.log, receipts.trusted_roots_hash) else {
-        return;
+        return receipts.log.is_none();
     };
     decision.trusted_roots_hash = trusted_roots_hash;
-    log.record(decision);
+    log.record(decision)
+}
+
+fn receipt_is_required(receipts: &ReceiptContext<'_>) -> bool {
+    receipts.log.is_some_and(ReceiptLog::is_required)
 }
 
 fn allow_unchanged() -> Outcome {
@@ -251,6 +271,24 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tenuo::sdk::transport::mcp_meta::encode_meta;
     use tenuo::{ConstraintSet, Exact, Range, SigningKey, Warrant, SIGNATURE_CONTEXT};
+
+    fn evaluate(
+        policy: &PolicySet,
+        sandbox_id: &str,
+        pre_credentials: bool,
+        body: &[u8],
+        meta_mode: MetaMode,
+        receipts: Option<&ReceiptLog>,
+    ) -> Outcome {
+        futures::executor::block_on(super::evaluate(
+            policy,
+            sandbox_id,
+            pre_credentials,
+            body,
+            meta_mode,
+            receipts,
+        ))
+    }
 
     fn policy_for(root: &SigningKey) -> PolicySet {
         let document = json!({
@@ -343,6 +381,45 @@ mod tests {
         let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, None);
         assert!(!outcome.allow);
         assert_eq!(outcome.reason_code, reason::TOOL_DENIED);
+    }
+
+    #[test]
+    fn signed_revocation_denies_and_is_committed_to_receipts() {
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let issued = warrant(&issuer, &holder, "read_logs");
+        let srl = tenuo::SignedRevocationList::builder()
+            .revoke(issued.id().to_string())
+            .version(7)
+            .build(&issuer)
+            .expect("srl");
+        let directory = tempfile::tempdir().expect("tempdir");
+        let document = json!({
+            "version": 1,
+            "max_warrant_lifetime_secs": 3600,
+            "sandboxes": {
+                "sbx": {
+                    "trusted_roots": [hex::encode(issuer.public_key().to_bytes())],
+                    "revocation": {
+                        "signed_list_base64": srl.to_base64().expect("encoded srl"),
+                        "max_staleness_secs": 300,
+                        "clock_tolerance_secs": 30,
+                        "rollback_floor_path": directory.path().join("floor.json")
+                    }
+                }
+            }
+        });
+        let policy = PolicySet::from_json(document.to_string().as_bytes()).expect("policy");
+        assert_eq!(policy.revocation_commitment("sbx").unwrap().unwrap().0, 7);
+        let arguments = json!({"service": "payments"});
+        let body = tools_call(
+            "read_logs",
+            arguments.clone(),
+            Some(sign(&issued, &holder, "read_logs", &arguments)),
+        );
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, None);
+        assert!(!outcome.allow);
+        assert_eq!(outcome.reason_code, reason::REVOKED);
     }
 
     #[test]
@@ -688,12 +765,38 @@ mod tests {
         assert!(payload.request_hash.is_some());
         assert!(payload.trusted_roots_hash.is_some());
 
-        let blocked = tempfile::tempdir().expect("tempdir");
-        let blocked_log = blocked.path().join("openshell.jsonl");
-        std::fs::create_dir(&blocked_log).expect("directory blocks the log");
-        let log = ReceiptLog::open(&blocked.path().join("receipt.key"), &blocked_log)
-            .expect("receipt log opens before the first write");
         let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, Some(&log));
         assert!(outcome.allow);
+        let lines =
+            std::fs::read_to_string(directory.path().join("openshell.jsonl")).expect("chained log");
+        let second = lines.lines().nth(1).expect("second receipt");
+        let bytes = hex::decode(second).expect("second receipt hex");
+        let receipt: tenuo::Receipt = ciborium::from_reader(bytes.as_slice()).expect("receipt");
+        let payload = receipt.verify_signature().expect("signature");
+        assert!(payload.prev_receipt_hash.is_some());
+
+        let blocked = tempfile::tempdir().expect("tempdir");
+        let blocked_log = blocked.path().join("best-effort.jsonl");
+        let log = ReceiptLog::open(&blocked.path().join("receipt.key"), &blocked_log)
+            .expect("receipt log");
+        std::fs::create_dir(&blocked_log).expect("directory blocks the log");
+        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, Some(&log));
+        assert!(outcome.allow);
+
+        let required_log = blocked.path().join("required.jsonl");
+        let required = ReceiptLog::open(&blocked.path().join("required.key"), &required_log)
+            .expect("required receipt log")
+            .require_delivery();
+        std::fs::create_dir(&required_log).expect("directory blocks required log");
+        let outcome = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &body,
+            MetaMode::Preserve,
+            Some(&required),
+        );
+        assert!(!outcome.allow);
+        assert_eq!(outcome.reason_code, reason::VERIFIER_FAILED);
     }
 }

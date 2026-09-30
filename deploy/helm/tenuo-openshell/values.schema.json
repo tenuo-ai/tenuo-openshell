@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["replicaCount", "image", "policy", "tls", "openshell", "replay", "receipts", "networkPolicy"],
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 2 },
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1, "not": { "const": "latest" } }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["existingConfigMap", "key"],
+      "properties": {
+        "existingConfigMap": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 },
+        "reloadSeconds": { "type": "integer", "minimum": 1 },
+        "maxStaleSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "required": ["existingSecret"],
+      "properties": { "existingSecret": { "type": "string", "minLength": 1 } }
+    },
+    "openshell": {
+      "type": "object",
+      "required": ["gatewayId", "audience", "jwtPublicKeySecret"],
+      "properties": {
+        "gatewayId": { "type": "string", "minLength": 1 },
+        "audience": { "type": "string", "minLength": 1 },
+        "jwtPublicKeySecret": { "type": "string", "minLength": 1 }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "required": ["redisSecret", "redisUrlKey", "keyPrefix"],
+      "properties": {
+        "redisSecret": { "type": "string", "minLength": 1 },
+        "redisUrlKey": { "type": "string", "minLength": 1 },
+        "keyPrefix": { "type": "string", "minLength": 1 }
+      }
+    },
+    "receipts": {
+      "type": "object",
+      "required": ["signingKeySecret", "signingKeyKey"],
+      "properties": {
+        "signingKeySecret": { "type": "string", "minLength": 1 },
+        "signingKeyKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "required": ["enabled", "callerNamespaceSelector", "redisNamespaceSelector", "redisPodSelector"],
+      "properties": {
+        "enabled": { "const": true },
+        "callerNamespaceSelector": { "type": "object", "minProperties": 1 },
+        "redisNamespaceSelector": { "type": "object", "minProperties": 1 },
+        "redisPodSelector": { "type": "object", "minProperties": 1 }
+      }
+    }
+  }
+}

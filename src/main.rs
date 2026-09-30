@@ -5,10 +5,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tenuo_openshell_middleware::auth::ExtensionJwtVerifier;
-use tenuo_openshell_middleware::policy::PolicySet;
+use tenuo_openshell_middleware::policy::{PolicyManager, PolicySet};
 use tenuo_openshell_middleware::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddlewareServer;
 use tenuo_openshell_middleware::receipt::ReceiptLog;
+use tenuo_openshell_middleware::replay::RedisReplayStore;
 use tenuo_openshell_middleware::service::MiddlewareService;
+use tenuo_openshell_middleware::telemetry::Telemetry;
 use tokio::net::TcpListener;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 
@@ -60,6 +62,34 @@ struct Args {
     /// Hex receipt log. A write failure does not change the authorization decision.
     #[arg(long)]
     receipt_log: Option<PathBuf>,
+
+    /// Deny allowed operations when their signed receipt cannot be persisted.
+    #[arg(long)]
+    require_receipts: bool,
+
+    /// Redis URL for durable, cross-replica approval replay protection.
+    #[arg(long, env = "TENUO_REPLAY_REDIS_URL")]
+    replay_redis_url: Option<String>,
+
+    /// Deployment-specific Redis key prefix for replay isolation.
+    #[arg(long, default_value = "tenuo:openshell:approval")]
+    replay_key_prefix: String,
+
+    /// Explicitly accept process-local replay state. Development and demos only.
+    #[arg(long)]
+    allow_in_memory_replay: bool,
+
+    /// Credential-free health and Prometheus listener.
+    #[arg(long, default_value = "127.0.0.1:9090")]
+    admin_listen: SocketAddr,
+
+    /// Poll interval for atomic policy reloads.
+    #[arg(long, default_value_t = 5)]
+    policy_reload_secs: u64,
+
+    /// Readiness fails after the policy provider cannot be read for this long.
+    #[arg(long, default_value_t = 30)]
+    policy_max_stale_secs: u64,
 }
 
 struct ProductionSecurity {
@@ -87,7 +117,11 @@ impl tonic::service::Interceptor for OpenShellAuthInterceptor {
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
-    let policy = match PolicySet::load(&args.policy) {
+    let policy_document = match std::fs::read(&args.policy) {
+        Ok(document) => document,
+        Err(error) => return usage_error(format!("policy load failed: {error}")),
+    };
+    let mut policy = match PolicySet::from_json(&policy_document) {
         Ok(policy) => policy,
         Err(error) => return usage_error(format!("policy load failed: {error}")),
     };
@@ -95,7 +129,52 @@ async fn main() -> ExitCode {
         Ok(security) => security,
         Err(error) => return usage_error(error),
     };
-    let receipts = match receipt_log(&args) {
+    match args.replay_redis_url.as_deref() {
+        Some(url) => {
+            let store = match RedisReplayStore::connect(url, &args.replay_key_prefix).await {
+                Ok(store) => store,
+                Err(_) => return usage_error("Redis replay store is unavailable".to_string()),
+            };
+            policy = policy.with_replay_store(std::sync::Arc::new(store));
+        }
+        None if security.is_some() && !args.allow_in_memory_replay => {
+            return usage_error(
+                "the production profile requires --replay-redis-url; use --allow-in-memory-replay only for a single-instance evaluation".to_string(),
+            );
+        }
+        None => {}
+    }
+    let policy = std::sync::Arc::new(PolicyManager::new(
+        args.policy.clone(),
+        policy,
+        policy_document,
+    ));
+    let telemetry = std::sync::Arc::new(Telemetry::default());
+    let admin_listener = match TcpListener::bind(args.admin_listen).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            return usage_error(format!("admin bind {} failed: {error}", args.admin_listen));
+        }
+    };
+    tokio::spawn(policy.clone().run(std::time::Duration::from_secs(
+        args.policy_reload_secs.max(1),
+    )));
+    let admin_policy = policy.clone();
+    let admin_telemetry = telemetry.clone();
+    let admin_max_stale = std::time::Duration::from_secs(args.policy_max_stale_secs.max(1));
+    tokio::spawn(async move {
+        if let Err(error) = tenuo_openshell_middleware::admin::serve(
+            admin_listener,
+            admin_policy,
+            admin_telemetry,
+            admin_max_stale,
+        )
+        .await
+        {
+            eprintln!("{error}");
+        }
+    });
+    let receipts = match receipt_log(&args, security.is_some() && !args.allow_in_memory_replay) {
         Ok(receipts) => receipts,
         Err(error) => return usage_error(error),
     };
@@ -112,18 +191,21 @@ async fn main() -> ExitCode {
                 args.listen
             );
             let service = SupervisorMiddlewareServer::new(install_receipts(
-                MiddlewareService::new(policy),
+                MiddlewareService::with_manager(policy).with_telemetry(telemetry),
                 receipts,
             ));
             Server::builder()
                 .add_service(service)
-                .serve_with_incoming(incoming)
+                .serve_with_incoming_shutdown(incoming, shutdown_signal())
                 .await
         }
         Some(security) => {
             let audience = security.verifier.audience().to_string();
-            let service =
-                install_receipts(MiddlewareService::authenticated(policy, audience), receipts);
+            let service = install_receipts(
+                MiddlewareService::authenticated_with_manager(policy, audience)
+                    .with_telemetry(telemetry),
+                receipts,
+            );
             let interceptor = OpenShellAuthInterceptor {
                 verifier: security.verifier,
             };
@@ -133,7 +215,7 @@ async fn main() -> ExitCode {
                 .tls_config(ServerTlsConfig::new().identity(security.identity))
                 .expect("validated TLS identity")
                 .add_service(service)
-                .serve_with_incoming(incoming)
+                .serve_with_incoming_shutdown(incoming, shutdown_signal())
                 .await
         }
     };
@@ -145,11 +227,30 @@ async fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn receipt_log(args: &Args) -> Result<Option<ReceiptLog>, String> {
-    match (&args.receipt_key, &args.receipt_log) {
-        (None, None) => Ok(None),
-        (Some(key), Some(log)) => ReceiptLog::open(key, log).map(Some),
-        _ => Err("--receipt-key and --receipt-log must be set together".to_string()),
+fn receipt_log(args: &Args, require_existing_key: bool) -> Result<Option<ReceiptLog>, String> {
+    let log = match (&args.receipt_key, &args.receipt_log) {
+        (None, None) if args.require_receipts => {
+            return Err("--require-receipts needs --receipt-key and --receipt-log".to_string());
+        }
+        (None, None) => None,
+        (Some(key), Some(log)) if require_existing_key => {
+            Some(ReceiptLog::open_existing(key, log)?)
+        }
+        (Some(key), Some(log)) => Some(ReceiptLog::open(key, log)?),
+        _ => return Err("--receipt-key and --receipt-log must be set together".to_string()),
+    };
+    Ok(log.map(|log| {
+        if args.require_receipts {
+            log.require_delivery()
+        } else {
+            log
+        }
+    }))
+}
+
+async fn shutdown_signal() {
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        eprintln!("failed to install shutdown signal: {error}");
     }
 }
 
