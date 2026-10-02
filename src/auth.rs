@@ -90,6 +90,11 @@ mod tests {
     }
 
     #[test]
+    fn crypto_backend_passes_the_startup_self_test() {
+        crypto_self_test().expect("JWT crypto backend");
+    }
+
+    #[test]
     fn accepts_gateway_and_supervisor_shapes() {
         let (key, verifier) = material();
         let now = now();
@@ -182,6 +187,34 @@ mod tests {
     }
 }
 
+/// Signs and verifies one token with a throwaway key before any real
+/// credential arrives. jsonwebtoken selects its crypto backend by feature and
+/// panics on first use when none is usable; without this check that panic
+/// would deny every gateway call instead of stopping startup.
+fn crypto_self_test() -> Result<(), String> {
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use rcgen::{KeyPair, PKCS_ED25519};
+
+    let failed = |detail: &str| format!("JWT crypto self-test failed: {detail}");
+    let pair = KeyPair::generate_for(&PKCS_ED25519).map_err(|_| failed("Ed25519 key"))?;
+    let signing = EncodingKey::from_ed_pem(pair.serialize_pem().as_bytes())
+        .map_err(|_| failed("signing key"))?;
+    let verifying = DecodingKey::from_ed_pem(pair.public_key_pem().as_bytes())
+        .map_err(|_| failed("verifying key"))?;
+    let claims = serde_json::json!({ "sub": "self-test", "exp": i64::MAX });
+    let round_trip = std::panic::catch_unwind(|| {
+        let token = encode(&Header::new(Algorithm::EdDSA), &claims, &signing).ok()?;
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.validate_aud = false;
+        decode::<serde_json::Value>(&token, &verifying, &validation).ok()
+    });
+    match round_trip {
+        Ok(Some(data)) if data.claims == claims => Ok(()),
+        Ok(_) => Err(failed("token did not round-trip")),
+        Err(_) => Err(failed("no usable crypto backend")),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthenticatedCaller {
     pub kind: CallerKind,
@@ -218,6 +251,7 @@ impl ExtensionJwtVerifier {
         if gateway_id.is_empty() || audience.is_empty() {
             return Err("gateway id and audience must not be empty".to_string());
         }
+        crypto_self_test()?;
         let key = DecodingKey::from_ed_pem(pem)
             .map_err(|_| "OpenShell JWT public key is not Ed25519 PEM".to_string())?;
         Ok(Self {

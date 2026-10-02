@@ -28,6 +28,12 @@ ignore = [
     # Current releases are thin wrappers over rustls-pki-types. Remove this
     # entry when tonic is upgraded to a release that drops the dependency.
     { id = "RUSTSEC-2025-0134", reason = "unmaintained, transitive via tonic 0.12 TLS; startup-only PEM parsing" },
+    # Marvin is a timing attack on RSA private-key operations. rsa arrives only
+    # through jsonwebtoken's `rust_crypto` backend, which has no per-algorithm
+    # features. The middleware holds no RSA key and `auth::verify` rejects
+    # every algorithm except EdDSA, so no RSA code runs. Remove this entry when
+    # rsa ships a fix or jsonwebtoken lets the RSA backend be left out.
+    { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken rust_crypto; no RSA keys or RS* algorithms are accepted" },
 ]
 
 [licenses]
