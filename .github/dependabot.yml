@@ -7,6 +7,17 @@ updates:
     groups:
       cargo-minor:
         update-types: [minor, patch]
+    ignore:
+      # Generated gRPC code must match the tonic runtime, and opentelemetry-otlp
+      # pins a tonic major. tonic-build 0.14 also moved codegen to
+      # tonic-prost-build, which an automated bump cannot do. Upgrade this
+      # family by hand in one PR.
+      - dependency-name: "tonic*"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "prost*"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "opentelemetry*"
+        update-types: [version-update:semver-major, version-update:semver-minor]
 
   # The Agent Toolkit plugin is locked with uv; the uv ecosystem updates
   # uv.lock together with pyproject.toml.
