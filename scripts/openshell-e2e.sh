@@ -681,6 +681,8 @@ run_suite() {
     "task A production read was denied" "" "production read"
   expect_deny "$FIXTURE_DIR/task-a-replicas.json" "tenuo_constraint_denied" \
     "task A replicas=8 restart was denied" "" "replicas 8"
+  expect_deny "$FIXTURE_DIR/task-a-other-service.json" "tenuo_constraint_denied" \
+    "task A restart of auth was denied" "" "restart other service"
   expect_deny "$FIXTURE_DIR/missing-warrant.json" "tenuo_missing_warrant" \
     "missing authority was denied" "" "missing warrant"
   expect_allow "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" \
@@ -695,7 +697,7 @@ run_suite() {
     length == 5
     and ([.[] | select(.tool == "read_logs" and .arguments.service == "payments" and .arguments.environment == "staging")] | length == 4)
     and ([.[] | select(.tool == "restart_service" and .arguments.service == "payments" and .arguments.environment == "staging" and .arguments.replicas == 3)] | length == 1)
-    and ([.[] | select(.arguments.service == "identity" or .arguments.environment == "production" or .arguments.replicas == 8 or .arguments.replicas == 5)] | length == 0)
+    and ([.[] | select(.arguments.service == "identity" or .arguments.service == "auth" or .arguments.environment == "production" or .arguments.replicas == 8 or .arguments.replicas == 5)] | length == 0)
   ' "$EFFECT_LOG" >/dev/null || fail "effect server observed only the five authorized calls"
 
   expect_destination_deny "$FIXTURE_DIR/task-b-restart.json" "direct task B restart" "direct task B restart"
@@ -863,6 +865,7 @@ PY
   control_allow "copied warrant" "$FIXTURE_DIR/copied-warrant.json" "restarted payments in staging"
   control_allow "production read" "$FIXTURE_DIR/task-a-constraint.json" "read payments logs in staging"
   control_allow "replicas 8" "$FIXTURE_DIR/task-a-replicas.json" "restarted payments in staging"
+  control_allow "restart other service" "$FIXTURE_DIR/task-a-other-service.json" "restarted auth in staging"
   control_allow "missing warrant" "$FIXTURE_DIR/missing-warrant.json" "restarted payments in staging"
   control_allow "narrowed read" "$FIXTURE_DIR/delegated-read.json" "read payments logs in staging" "$CHILD_SANDBOX_NAME"
   control_allow "narrowed restart" "$FIXTURE_DIR/delegated-restart.json" "restarted payments in staging" "$CHILD_SANDBOX_NAME"
@@ -875,8 +878,9 @@ PY
   printf 'PASS openshell-only wider child was not checked\n'
 
   jq -se '
-    length == 20
+    length == 21
     and ([.[] | select(.arguments.environment == "production")] | length >= 1)
+    and ([.[] | select(.tool == "restart_service" and .arguments.service == "auth")] | length == 1)
     and ([.[] | select(.arguments.replicas == 8)] | length >= 1)
   ' "$CONTROL_EFFECT" >/dev/null || fail "comparison effect log is missing calls Tenuo denied"
 }
