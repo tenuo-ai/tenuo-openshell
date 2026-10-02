@@ -8,11 +8,6 @@ license = "Apache-2.0"
 [package.metadata]
 cargo-fuzz = true
 
-# An own workspace keeps this crate out of the root build and lets it build
-# whether or not the root manifest declares a workspace.
-[workspace]
-members = ["."]
-
 [dependencies]
 futures = "0.3"
 libfuzzer-sys = "0.4"

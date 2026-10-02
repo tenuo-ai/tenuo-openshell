@@ -59,7 +59,7 @@ for port in "$MCP_PORT" "$LLM_PORT" "$PROXY_PORT"; do
 done
 
 if [[ -z "${TENUO_SKIP_BUILD:-}" ]]; then
-  cargo build --quiet --locked --manifest-path "$ROOT/Cargo.toml" --workspace --bins
+  cargo build --quiet --locked --manifest-path "$ROOT/Cargo.toml" --bins
 fi
 TARGET="$(cd "$ROOT" && cargo metadata --format-version=1 --no-deps | jq -er '.target_directory')/debug"
 AGENT="$TARGET/tenuo-openshell-agent"
