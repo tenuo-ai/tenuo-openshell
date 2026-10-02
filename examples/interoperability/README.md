@@ -8,7 +8,6 @@ distributed products or stable public APIs.
 stack and child-holder proof over JSON-RPC HTTP, allows `read_logs`, and denies
 `restart_service` before the skill runs.
 
-The pinned Tenuo 0.3.1 client surface does not yet expose the required full
-warrant-stack encoding, so this proof imports `tenuo_core.encode_warrant_stack`
-as a documented compatibility bridge. Replace it with the public Tenuo A2A
-client before declaring this example a standalone supported integration.
+The Tenuo 0.3.1 A2A client does not send a full warrant stack, so this proof
+encodes the stack with the public `tenuo.encode_warrant_stack` and posts the
+JSON-RPC request itself. Switch to the A2A client once a release sends stacks.

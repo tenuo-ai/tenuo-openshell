@@ -14,11 +14,8 @@ import uuid
 import httpx
 import uvicorn
 
-from tenuo import SigningKey, Warrant
+from tenuo import SigningKey, Warrant, encode_warrant_stack
 from tenuo.a2a import A2AServer
-# Compatibility bridge for Tenuo 0.3.1. See this directory's README; migrate
-# to the public A2A client before treating this as a standalone integration.
-from tenuo_core import encode_warrant_stack
 
 
 async def run(port: int) -> dict:
