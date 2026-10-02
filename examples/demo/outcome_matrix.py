@@ -56,6 +56,7 @@ EXPECTED = {
     "copied warrant": ("deny", "allow", "openshell", "tenuo_invalid_authority"),
     "production read": ("deny", "allow", "openshell", "tenuo_constraint_denied"),
     "replicas 8": ("deny", "allow", "openshell", "tenuo_constraint_denied"),
+    "restart other service": ("deny", "allow", "openshell", "tenuo_constraint_denied"),
     "missing warrant": ("deny", "allow", "openshell", "tenuo_missing_warrant"),
     "narrowed read": ("allow", "allow", "openshell", ""),
     "narrowed restart": ("deny", "allow", "openshell", "tenuo_tool_denied"),

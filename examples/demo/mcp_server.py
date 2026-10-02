@@ -229,10 +229,11 @@ class Handler(BaseHTTPRequestHandler):
         effect = {"tool": name, "arguments": arguments}
         with self.effect_log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(effect, sort_keys=True) + "\n")
+        target = f"{arguments.get('service')} in {arguments.get('environment')}"
         text = (
-            "restarted payments in staging"
+            f"restarted {target}"
             if name == "restart_service"
-            else "read payments logs in staging"
+            else f"read {arguments.get('service')} logs in {arguments.get('environment')}"
         )
         self._json(
             200,

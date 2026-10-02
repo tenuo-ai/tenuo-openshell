@@ -436,6 +436,18 @@ fn prepare(
         false,
         None,
     )?;
+    // Same tool OpenShell admits, different target: the warrant names payments.
+    sign_with(
+        &exe,
+        &key_a,
+        &warrant_a,
+        &output.join("task-a-other-service.json"),
+        14,
+        "restart_service",
+        r#"{"service":"auth","environment":"staging","replicas":3}"#,
+        false,
+        None,
+    )?;
     sign_with(
         &exe,
         &key_b,
