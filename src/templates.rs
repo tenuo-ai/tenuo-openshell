@@ -119,6 +119,32 @@ impl Template {
     }
 }
 
+/// Tools that set `_allow_unknown`. Arguments they do not list are never
+/// checked, including ones a later server version adds.
+pub fn open_tools(capabilities: &Value) -> Vec<&str> {
+    capabilities
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, arguments)| arguments.get("_allow_unknown") == Some(&Value::Bool(true)))
+        .map(|(tool, _)| tool.as_str())
+        .collect()
+}
+
+/// Removes `_allow_unknown` from every tool, so each tool admits only its
+/// listed arguments and requires all of them.
+pub fn close_all(capabilities: &mut Value) {
+    for arguments in capabilities
+        .as_object_mut()
+        .into_iter()
+        .flat_map(|tools| tools.values_mut())
+    {
+        if let Some(arguments) = arguments.as_object_mut() {
+            arguments.remove("_allow_unknown");
+        }
+    }
+}
+
 /// Splits `name=value` from the command line.
 pub fn parse_param(text: &str) -> Result<(String, String), String> {
     text.split_once('=')
@@ -287,6 +313,18 @@ mod tests {
             assert!(!t.description.is_empty(), "{name}");
         }
         assert!(Template::builtin("nope").unwrap_err().contains("available"));
+    }
+
+    #[test]
+    fn closing_removes_every_opt_out() {
+        let mut capabilities = json!({
+            "a": {"x": 1, "_allow_unknown": true},
+            "b": {"x": 1},
+        });
+        assert_eq!(open_tools(&capabilities), vec!["a"]);
+        close_all(&mut capabilities);
+        assert!(open_tools(&capabilities).is_empty());
+        assert_eq!(capabilities, json!({"a": {"x": 1}, "b": {"x": 1}}));
     }
 
     #[test]

@@ -130,6 +130,10 @@ struct AuthorityArgs {
     /// Template parameter as name=value. Repeatable; list values are comma-separated.
     #[arg(long = "param", requires = "template", value_parser = parse_param)]
     params: Vec<(String, String)>,
+    /// Drop the template's `_allow_unknown` opt-outs. Every tool then admits
+    /// only its listed arguments and requires all of them.
+    #[arg(long, requires = "template")]
+    closed: bool,
     #[arg(long, default_value_t = 3600)]
     ttl: u64,
 }
@@ -411,7 +415,11 @@ fn capabilities(args: &AuthorityArgs) -> Result<Vec<(String, ConstraintSet)>> {
                 Some(path) => Template::parse(&fs::read_to_string(path)?)?,
                 None => Template::builtin(name)?,
             };
-            capabilities_from(&template.render(&args.params)?)
+            let mut rendered = template.render(&args.params)?;
+            if args.closed {
+                templates::close_all(&mut rendered);
+            }
+            capabilities_from(&rendered)
         }
         _ => Err("pass --capabilities or --template".into()),
     }
@@ -422,6 +430,13 @@ fn list_templates() -> Result<String> {
     for (name, _) in templates::BUILTIN {
         let template = Template::builtin(name)?;
         out.push_str(&format!("{name}\n  {}\n", template.description));
+        let open = templates::open_tools(&template.capabilities);
+        if !open.is_empty() {
+            out.push_str(&format!(
+                "  open (unlisted arguments unchecked; --closed removes): {}\n",
+                open.join(", ")
+            ));
+        }
         for (param, spec) in &template.params {
             let list = if spec.list { " (list)" } else { "" };
             out.push_str(&format!(
@@ -949,6 +964,16 @@ mod tests {
     /// Issues `template` with `params`, round-trips the warrant through the
     /// wire encoding the sandbox receives, and checks `call` against it.
     fn template_allows(template: &str, params: &[(&str, &str)], tool: &str, call: Value) -> bool {
+        template_allows_with(template, params, false, tool, call)
+    }
+
+    fn template_allows_with(
+        template: &str,
+        params: &[(&str, &str)],
+        closed: bool,
+        tool: &str,
+        call: Value,
+    ) -> bool {
         let directory = tempfile::tempdir().unwrap();
         let issuer_key = directory.path().join("issuer.key");
         fs::write(&issuer_key, SigningKey::generate().secret_key_bytes()).unwrap();
@@ -962,6 +987,7 @@ mod tests {
                 .iter()
                 .map(|(name, value)| (name.to_string(), value.to_string()))
                 .collect(),
+            closed,
             ttl: 60,
         };
         let chain = issue(&args, &SigningKey::generate().public_key()).unwrap();
@@ -1034,6 +1060,19 @@ mod tests {
                 "{tool}"
             );
         }
+    }
+
+    #[test]
+    fn closed_templates_admit_only_listed_arguments() {
+        let ro = [("owner", "tenuo-ai"), ("repos", "tenuo")];
+        let read = |closed: bool, call: Value| {
+            template_allows_with("github-readonly", &ro, closed, "get_file_contents", call)
+        };
+        let exact = json!({"owner": "tenuo-ai", "repo": "tenuo"});
+        let with_ref = json!({"owner": "tenuo-ai", "repo": "tenuo", "ref": "main"});
+        assert!(read(false, with_ref.clone()));
+        assert!(read(true, exact));
+        assert!(!read(true, with_ref));
     }
 
     #[test]
@@ -1174,6 +1213,7 @@ mod tests {
             capabilities: Some(r#"{"read_logs": {}}"#.to_string()),
             template: None,
             params: Vec::new(),
+            closed: false,
             ttl: 60,
         };
         let chain = issue(&args, &child.public_key()).unwrap();

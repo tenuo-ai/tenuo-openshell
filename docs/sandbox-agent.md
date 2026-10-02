@@ -178,6 +178,24 @@ tenuo-openshell provision --sandbox <name> --issuer-key issuer.key \
 | `kubernetes-readonly` | containers/kubernetes-mcp-server | Pod, event, and workload reads in listed namespaces; no Secret or ConfigMap reads; no multi-cluster `context`. |
 | `slack-channels` | Slack reference server | History, replies, posts, and reactions in listed channel IDs. |
 
+#### Open tools are the operator's choice
+
+Most template tools set `_allow_unknown`, because MCP servers take optional
+arguments that agents send inconsistently, and a listed argument is required.
+On those tools the listed arguments (owner, repo, path, URL, namespace,
+channel) are enforced, and **every other argument is never checked**,
+including arguments a later server version adds. `warrant templates` names the
+open tools of each template.
+
+Add `--closed` to drop every `_allow_unknown`. Each tool then admits only its
+listed arguments and requires all of them, so a call that adds `ref` or
+`perPage`, or leaves out a listed argument, is denied. Choose closed when you
+pin the MCP server version and control the client's arguments; choose open
+when agents call the tools freely. Pin the server version either way, and
+review the templates when you upgrade it. Core may later replace this choice
+with declared defaults for optional arguments
+([tenuo-ai/tenuo#770](https://github.com/tenuo-ai/tenuo/issues/770)).
+
 Rendering is strict: a missing, unknown, repeated, or unused `--param` is an
 error. `--template @file.json` loads a template in the same format as those
 in [`templates/`](../templates). Tool and argument names were taken from each

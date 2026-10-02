@@ -10,7 +10,7 @@ All notable changes will be documented here. The format follows
 
 - Warrant templates for GitHub, filesystem, fetch, Kubernetes, and Slack MCP
   servers: `warrant templates`, and `--template`/`--param` on `warrant issue`
-  and `provision`.
+  and `provision`. `--closed` removes a template's `_allow_unknown` opt-outs.
 - `subpath`, `url_safe`, and `_allow_unknown` in capabilities JSON.
 - OpenShell `HTTP_REQUEST / PRE_CREDENTIALS` supervisor middleware with secure
   TLS and JWT defaults.
