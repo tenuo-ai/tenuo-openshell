@@ -437,12 +437,14 @@ fn prepare(
         None,
     )?;
     // Same tool OpenShell admits, different target: the warrant names payments.
+    // Request ids are shared across the demo's receipt log: 8 is the unsigned
+    // call, 14 the in-process denial, and 17 the oversized result.
     sign_with(
         &exe,
         &key_a,
         &warrant_a,
         &output.join("task-a-other-service.json"),
-        14,
+        15,
         "restart_service",
         r#"{"service":"auth","environment":"staging","replicas":3}"#,
         false,
