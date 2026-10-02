@@ -1,0 +1,80 @@
+{
+  "description": "containers/kubernetes-mcp-server read tools limited to listed namespaces and workload kinds (no Secret or ConfigMap). Tools are closed, so namespace must be explicit and optional arguments, including the multi-cluster context, are denied.",
+  "params": {
+    "namespaces": {
+      "description": "Namespaces the agent may read, comma-separated",
+      "list": true
+    }
+  },
+  "capabilities": {
+    "pods_list_in_namespace": {
+      "namespace": {
+        "one_of": "${namespaces}"
+      }
+    },
+    "pods_get": {
+      "name": {
+        "wildcard": true
+      },
+      "namespace": {
+        "one_of": "${namespaces}"
+      }
+    },
+    "pods_log": {
+      "name": {
+        "wildcard": true
+      },
+      "namespace": {
+        "one_of": "${namespaces}"
+      }
+    },
+    "events_list": {
+      "namespace": {
+        "one_of": "${namespaces}"
+      }
+    },
+    "resources_list": {
+      "apiVersion": {
+        "wildcard": true
+      },
+      "kind": {
+        "one_of": [
+          "Deployment",
+          "StatefulSet",
+          "DaemonSet",
+          "ReplicaSet",
+          "Pod",
+          "Service",
+          "Job",
+          "CronJob"
+        ]
+      },
+      "namespace": {
+        "one_of": "${namespaces}"
+      }
+    },
+    "resources_get": {
+      "apiVersion": {
+        "wildcard": true
+      },
+      "kind": {
+        "one_of": [
+          "Deployment",
+          "StatefulSet",
+          "DaemonSet",
+          "ReplicaSet",
+          "Pod",
+          "Service",
+          "Job",
+          "CronJob"
+        ]
+      },
+      "name": {
+        "wildcard": true
+      },
+      "namespace": {
+        "one_of": "${namespaces}"
+      }
+    }
+  }
+}

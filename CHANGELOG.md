@@ -8,6 +8,10 @@ All notable changes will be documented here. The format follows
 
 ### Added
 
+- Warrant templates for GitHub, filesystem, fetch, Kubernetes, and Slack MCP
+  servers: `warrant templates`, and `--template`/`--param` on `warrant issue`
+  and `provision`.
+- `subpath`, `url_safe`, and `_allow_unknown` in capabilities JSON.
 - OpenShell `HTTP_REQUEST / PRE_CREDENTIALS` supervisor middleware with secure
   TLS and JWT defaults.
 - Tenuo warrant, proof-of-possession, constraint, approval, and replay checks.

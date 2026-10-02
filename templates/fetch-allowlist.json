@@ -1,0 +1,19 @@
+{
+  "description": "modelcontextprotocol fetch server limited to listed domains. Private, loopback, and cloud metadata addresses stay blocked. A *.example.com entry admits subdomains.",
+  "params": {
+    "domains": {
+      "description": "Domains the agent may fetch, comma-separated",
+      "list": true
+    }
+  },
+  "capabilities": {
+    "fetch": {
+      "url": {
+        "url_safe": {
+          "allow_domains": "${domains}"
+        }
+      },
+      "_allow_unknown": true
+    }
+  }
+}

@@ -16,10 +16,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 use std::time::Duration;
+use tenuo::constraints::{Subpath, UrlSafe};
 use tenuo::{
     ConstraintSet, ConstraintValue, Exact, OneOf, Pattern, PublicKey, Range, SigningKey, Warrant,
     Wildcard,
 };
+use tenuo_openshell_middleware::templates::{self, parse_param, Template};
 use tenuo_openshell_middleware::PolicySet;
 
 const DEFAULT_AUDIENCE: &str = "urn:openshell:extension:middleware:tenuo/authorization";
@@ -101,6 +103,8 @@ struct RegisterArgs {
 enum WarrantCommand {
     /// Print an encoded warrant for a holder public key.
     Issue(IssueArgs),
+    /// List the built-in templates and their parameters.
+    Templates,
 }
 
 #[derive(Args)]
@@ -113,9 +117,19 @@ struct AuthorityArgs {
     parent_key: Option<PathBuf>,
     #[arg(long, requires = "parent_key")]
     parent_warrant: Option<PathBuf>,
-    /// Capabilities as JSON, or @file. See `docs/deployment.md`.
+    /// Capabilities as JSON, or @file. See `docs/sandbox-agent.md`.
+    #[arg(
+        long,
+        required_unless_present = "template",
+        conflicts_with = "template"
+    )]
+    capabilities: Option<String>,
+    /// Built-in template name (see `warrant templates`), or @file.
     #[arg(long)]
-    capabilities: String,
+    template: Option<String>,
+    /// Template parameter as name=value. Repeatable; list values are comma-separated.
+    #[arg(long = "param", requires = "template", value_parser = parse_param)]
+    params: Vec<(String, String)>,
     #[arg(long, default_value_t = 3600)]
     ttl: u64,
 }
@@ -202,6 +216,10 @@ fn run(cli: Cli) -> Result<()> {
             let holder = read_public(&args.holder)?;
             let chain = issue(&args.authority, &holder)?;
             println!("{}", encode_chain(&chain)?);
+            Ok(())
+        }
+        Command::Warrant(WarrantCommand::Templates) => {
+            print!("{}", list_templates()?);
             Ok(())
         }
         Command::Provision(args) => provision(&args),
@@ -385,8 +403,38 @@ fn register(args: &RegisterArgs) -> String {
     )
 }
 
+fn capabilities(args: &AuthorityArgs) -> Result<Vec<(String, ConstraintSet)>> {
+    match (&args.capabilities, &args.template) {
+        (Some(text), None) => parse_capabilities(&read_arg(text)?),
+        (None, Some(name)) => {
+            let template = match name.strip_prefix('@') {
+                Some(path) => Template::parse(&fs::read_to_string(path)?)?,
+                None => Template::builtin(name)?,
+            };
+            capabilities_from(&template.render(&args.params)?)
+        }
+        _ => Err("pass --capabilities or --template".into()),
+    }
+}
+
+fn list_templates() -> Result<String> {
+    let mut out = String::new();
+    for (name, _) in templates::BUILTIN {
+        let template = Template::builtin(name)?;
+        out.push_str(&format!("{name}\n  {}\n", template.description));
+        for (param, spec) in &template.params {
+            let list = if spec.list { " (list)" } else { "" };
+            out.push_str(&format!(
+                "  --param {param}=...{list}  {}\n",
+                spec.description
+            ));
+        }
+    }
+    Ok(out)
+}
+
 fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
-    let capabilities = parse_capabilities(&read_arg(&args.capabilities)?)?;
+    let capabilities = capabilities(args)?;
     let ttl = Duration::from_secs(args.ttl);
     if let Some(path) = &args.issuer_key {
         let issuer = read_secret(path)?;
@@ -595,9 +643,18 @@ fn confirm() -> Result<bool> {
 ///                "query": {"wildcard": true}}}
 /// ```
 ///
-/// A bare value is an exact match.
+/// A bare value is an exact match. `subpath` takes an absolute root, and
+/// `url_safe` takes `true` or `{"allow_domains": [...]}`.
+///
+/// Listing any argument closes the tool: unlisted arguments are denied and
+/// every listed one must be present. `"_allow_unknown": true` admits unlisted
+/// arguments, for tools whose optional arguments (pagination, refs) do not
+/// widen what the call can reach.
 fn parse_capabilities(text: &str) -> Result<Vec<(String, ConstraintSet)>> {
-    let document: Value = serde_json::from_str(text)?;
+    capabilities_from(&serde_json::from_str(text)?)
+}
+
+fn capabilities_from(document: &Value) -> Result<Vec<(String, ConstraintSet)>> {
     let tools = document
         .as_object()
         .filter(|tools| !tools.is_empty())
@@ -609,8 +666,18 @@ fn parse_capabilities(text: &str) -> Result<Vec<(String, ConstraintSet)>> {
             .ok_or_else(|| format!("{tool}: constraints must be an object"))?;
         let mut set = ConstraintSet::new();
         for (field, spec) in arguments {
+            if field == "_allow_unknown" {
+                let allow = spec
+                    .as_bool()
+                    .ok_or_else(|| format!("{tool}._allow_unknown must be true or false"))?;
+                set.set_allow_unknown(allow);
+                continue;
+            }
             add_constraint(&mut set, field, spec)
                 .map_err(|error| format!("{tool}.{field}: {error}"))?;
+        }
+        if set.allow_unknown() && set.is_empty() {
+            return Err(format!("{tool}: _allow_unknown needs at least one constraint").into());
         }
         parsed.push((tool.clone(), set));
     }
@@ -624,7 +691,11 @@ fn add_constraint(set: &mut ConstraintSet, field: &str, spec: &Value) -> Result<
     };
     let (kind, value) = match object.iter().next() {
         Some(pair) if object.len() == 1 => pair,
-        _ => return Err("use one of exact, one_of, pattern, range, wildcard".into()),
+        _ => {
+            return Err(
+                "use one of exact, one_of, pattern, range, subpath, url_safe, wildcard".into(),
+            )
+        }
     };
     match kind.as_str() {
         "exact" => set.insert(field, Exact::new(scalar(value)?)),
@@ -650,6 +721,25 @@ fn add_constraint(set: &mut ConstraintSet, field: &str, spec: &Value) -> Result<
             }
             set.insert(field, Range::new(min, max)?);
         }
+        "subpath" => set.insert(
+            field,
+            Subpath::new(value.as_str().ok_or("subpath needs an absolute root")?)?,
+        ),
+        "url_safe" => match value {
+            Value::Bool(true) => set.insert(field, UrlSafe::new()),
+            Value::Object(options) if options.len() == 1 => {
+                let domains = options
+                    .get("allow_domains")
+                    .and_then(Value::as_array)
+                    .filter(|domains| !domains.is_empty())
+                    .ok_or("url_safe takes true or {\"allow_domains\": [...]}")?
+                    .iter()
+                    .map(|domain| domain.as_str().ok_or("allow_domains must be strings"))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                set.insert(field, UrlSafe::with_domains(domains));
+            }
+            _ => return Err("url_safe takes true or {\"allow_domains\": [...]}".into()),
+        },
         "wildcard" if value == &Value::Bool(true) => set.insert(field, Wildcard::new()),
         _ => return Err(format!("unknown constraint {kind}").into()),
     }
@@ -856,6 +946,210 @@ mod tests {
         assert!(warrant.check_constraints("open", &extra).is_ok());
     }
 
+    /// Issues `template` with `params`, round-trips the warrant through the
+    /// wire encoding the sandbox receives, and checks `call` against it.
+    fn template_allows(template: &str, params: &[(&str, &str)], tool: &str, call: Value) -> bool {
+        let directory = tempfile::tempdir().unwrap();
+        let issuer_key = directory.path().join("issuer.key");
+        fs::write(&issuer_key, SigningKey::generate().secret_key_bytes()).unwrap();
+        let args = AuthorityArgs {
+            issuer_key: Some(issuer_key),
+            parent_key: None,
+            parent_warrant: None,
+            capabilities: None,
+            template: Some(template.to_string()),
+            params: params
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            ttl: 60,
+        };
+        let chain = issue(&args, &SigningKey::generate().public_key()).unwrap();
+        let decoded = decode_chain(encode_chain(&chain).unwrap().as_bytes()).unwrap();
+        let call = tenuo::sdk::prelude::Call::try_from_json(tool, &call).unwrap();
+        decoded[0].check_constraints(tool, call.args()).is_ok()
+    }
+
+    #[test]
+    fn github_templates_hold_owner_repo_and_branch_edges() {
+        let ro = [("owner", "tenuo-ai"), ("repos", "tenuo,tenuo-openshell")];
+        let read = |call: Value| template_allows("github-readonly", &ro, "get_file_contents", call);
+        assert!(read(json!({"owner": "tenuo-ai", "repo": "tenuo"})));
+        assert!(read(json!({"owner": "tenuo-ai", "repo": "tenuo-openshell",
+                             "path": "README.md", "ref": "main"})));
+        assert!(!read(json!({"owner": "tenuo-ai", "repo": "tenuo-cloud"})));
+        assert!(!read(json!({"owner": "tenuo-ai-evil", "repo": "tenuo"})));
+        assert!(!read(json!({"owner": "tenuo-ai"})));
+        for tool in [
+            "search_code",
+            "push_files",
+            "delete_repository",
+            "merge_pull_request",
+        ] {
+            assert!(
+                !template_allows(
+                    "github-readonly",
+                    &ro,
+                    tool,
+                    json!({"owner": "tenuo-ai", "repo": "tenuo"})
+                ),
+                "{tool}"
+            );
+        }
+
+        let rw = [ro[0], ro[1], ("branch_prefix", "agent/")];
+        let push = |call: Value| template_allows("github-contributor", &rw, "push_files", call);
+        let files = json!([{"path": "a.txt", "content": "x"}]);
+        assert!(push(
+            json!({"owner": "tenuo-ai", "repo": "tenuo", "branch": "agent/fix/1",
+                             "message": "m", "files": files})
+        ));
+        assert!(!push(
+            json!({"owner": "tenuo-ai", "repo": "tenuo", "branch": "main",
+                              "message": "m", "files": files})
+        ));
+        assert!(!push(
+            json!({"owner": "tenuo-ai", "repo": "tenuo", "branch": "agent/fix/1",
+                              "message": "m", "files": files, "force": true})
+        ));
+        let pr = |head: &str| {
+            template_allows(
+                "github-contributor",
+                &rw,
+                "create_pull_request",
+                json!({"owner": "tenuo-ai", "repo": "tenuo", "title": "t",
+                       "head": head, "base": "main", "draft": true}),
+            )
+        };
+        assert!(pr("agent/fix/1"));
+        assert!(!pr("release"));
+        for tool in ["merge_pull_request", "delete_file", "create_or_update_file"] {
+            assert!(
+                !template_allows(
+                    "github-contributor",
+                    &rw,
+                    tool,
+                    json!({"owner": "tenuo-ai", "repo": "tenuo", "branch": "agent/x"})
+                ),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_template_stays_under_its_root() {
+        let params = [("root", "/srv/data")];
+        let read = |path: &str| {
+            template_allows(
+                "filesystem-readonly",
+                &params,
+                "read_text_file",
+                json!({"path": path, "head": 10}),
+            )
+        };
+        assert!(read("/srv/data/report.csv"));
+        assert!(read("/srv/data"));
+        assert!(!read("/srv/data/../../etc/passwd"));
+        assert!(!read("/srv/database/secret"));
+        assert!(!read("srv/data/report.csv"));
+        assert!(!template_allows(
+            "filesystem-readonly",
+            &params,
+            "write_file",
+            json!({"path": "/srv/data/x", "content": "y"})
+        ));
+    }
+
+    #[test]
+    fn fetch_template_admits_only_listed_public_domains() {
+        let params = [("domains", "docs.tenuo.ai,*.github.com")];
+        let fetch = |url: &str| {
+            template_allows(
+                "fetch-allowlist",
+                &params,
+                "fetch",
+                json!({"url": url, "max_length": 1000}),
+            )
+        };
+        assert!(fetch("https://docs.tenuo.ai/start"));
+        assert!(fetch("https://api.github.com/repos"));
+        assert!(!fetch("https://evil.example/"));
+        assert!(!fetch("https://docs.tenuo.ai.evil.example/"));
+        assert!(!fetch("http://169.254.169.254/latest/meta-data/"));
+        assert!(!fetch("http://127.0.0.1:8080/"));
+    }
+
+    #[test]
+    fn kubernetes_template_holds_namespace_kind_and_cluster_edges() {
+        let params = [("namespaces", "payments,checkout")];
+        let get =
+            |call: Value| template_allows("kubernetes-readonly", &params, "resources_get", call);
+        assert!(get(json!({"apiVersion": "apps/v1", "kind": "Deployment",
+                            "name": "api", "namespace": "payments"})));
+        assert!(!get(json!({"apiVersion": "apps/v1", "kind": "Deployment",
+                             "name": "api", "namespace": "kube-system"})));
+        assert!(!get(json!({"apiVersion": "v1", "kind": "Secret",
+                             "name": "db", "namespace": "payments"})));
+        assert!(!get(
+            json!({"apiVersion": "apps/v1", "kind": "Deployment", "name": "api"})
+        ));
+        assert!(!get(
+            json!({"apiVersion": "apps/v1", "kind": "Deployment", "name": "api",
+                             "namespace": "payments", "context": "prod-cluster"})
+        ));
+        for tool in [
+            "pods_delete",
+            "pods_exec",
+            "resources_delete",
+            "resources_create_or_update",
+        ] {
+            assert!(
+                !template_allows(
+                    "kubernetes-readonly",
+                    &params,
+                    tool,
+                    json!({"name": "api", "namespace": "payments"})
+                ),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn slack_template_posts_only_to_listed_channels() {
+        let params = [("channels", "C0123ABCD")];
+        let post = |channel: &str| {
+            template_allows(
+                "slack-channels",
+                &params,
+                "slack_post_message",
+                json!({"channel_id": channel, "text": "deploy finished"}),
+            )
+        };
+        assert!(post("C0123ABCD"));
+        assert!(!post("C9999ZZZZ"));
+        assert!(template_allows(
+            "slack-channels",
+            &params,
+            "slack_get_channel_history",
+            json!({"channel_id": "C0123ABCD", "limit": 20})
+        ));
+        assert!(!template_allows(
+            "slack-channels",
+            &params,
+            "slack_get_users",
+            json!({})
+        ));
+    }
+
+    #[test]
+    fn allow_unknown_needs_a_constraint_and_a_boolean() {
+        assert!(parse_capabilities(r#"{"t": {"_allow_unknown": true}}"#).is_err());
+        assert!(parse_capabilities(r#"{"t": {"a": "x", "_allow_unknown": "yes"}}"#).is_err());
+        assert!(parse_capabilities(r#"{"t": {"a": {"url_safe": {}}}}"#).is_err());
+        assert!(parse_capabilities(r#"{"t": {"a": {"subpath": "relative"}}}"#).is_err());
+    }
+
     #[test]
     fn attenuation_narrows_the_parent() {
         let directory = tempfile::tempdir().unwrap();
@@ -877,7 +1171,9 @@ mod tests {
             issuer_key: None,
             parent_key: Some(parent_key_path),
             parent_warrant: Some(parent_path),
-            capabilities: r#"{"read_logs": {}}"#.to_string(),
+            capabilities: Some(r#"{"read_logs": {}}"#.to_string()),
+            template: None,
+            params: Vec::new(),
             ttl: 60,
         };
         let chain = issue(&args, &child.public_key()).unwrap();

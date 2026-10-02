@@ -1,0 +1,55 @@
+{
+  "description": "Reference Slack MCP server (slack_* tools) limited to listed channel IDs. Channel listing and user lookups are left out.",
+  "params": {
+    "channels": {
+      "description": "Slack channel IDs, comma-separated, for example C0123ABCD",
+      "list": true
+    }
+  },
+  "capabilities": {
+    "slack_get_channel_history": {
+      "channel_id": {
+        "one_of": "${channels}"
+      },
+      "_allow_unknown": true
+    },
+    "slack_get_thread_replies": {
+      "channel_id": {
+        "one_of": "${channels}"
+      },
+      "thread_ts": {
+        "wildcard": true
+      }
+    },
+    "slack_post_message": {
+      "channel_id": {
+        "one_of": "${channels}"
+      },
+      "text": {
+        "wildcard": true
+      }
+    },
+    "slack_reply_to_thread": {
+      "channel_id": {
+        "one_of": "${channels}"
+      },
+      "thread_ts": {
+        "wildcard": true
+      },
+      "text": {
+        "wildcard": true
+      }
+    },
+    "slack_add_reaction": {
+      "channel_id": {
+        "one_of": "${channels}"
+      },
+      "timestamp": {
+        "wildcard": true
+      },
+      "reaction": {
+        "wildcard": true
+      }
+    }
+  }
+}

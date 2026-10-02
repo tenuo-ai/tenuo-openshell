@@ -19,6 +19,7 @@ pub mod result;
 pub mod result_receipt;
 pub mod service;
 pub mod telemetry;
+pub mod templates;
 
 pub use admin::ReadinessCheck;
 pub use evaluate::{evaluate, Outcome};

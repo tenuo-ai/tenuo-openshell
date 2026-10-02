@@ -1,0 +1,58 @@
+{
+  "description": "modelcontextprotocol filesystem server read tools limited to one directory tree. Paths are normalized lexically, so .. cannot leave root; symlinks are not resolved here. read_multiple_files and all write tools are left out.",
+  "params": {
+    "root": {
+      "description": "Absolute directory the agent may read"
+    }
+  },
+  "capabilities": {
+    "read_text_file": {
+      "path": {
+        "subpath": "${root}"
+      },
+      "_allow_unknown": true
+    },
+    "read_file": {
+      "path": {
+        "subpath": "${root}"
+      },
+      "_allow_unknown": true
+    },
+    "read_media_file": {
+      "path": {
+        "subpath": "${root}"
+      }
+    },
+    "get_file_info": {
+      "path": {
+        "subpath": "${root}"
+      }
+    },
+    "list_directory": {
+      "path": {
+        "subpath": "${root}"
+      }
+    },
+    "list_directory_with_sizes": {
+      "path": {
+        "subpath": "${root}"
+      },
+      "_allow_unknown": true
+    },
+    "directory_tree": {
+      "path": {
+        "subpath": "${root}"
+      },
+      "_allow_unknown": true
+    },
+    "search_files": {
+      "path": {
+        "subpath": "${root}"
+      },
+      "pattern": {
+        "wildcard": true
+      },
+      "_allow_unknown": true
+    }
+  }
+}

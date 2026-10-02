@@ -1,0 +1,138 @@
+{
+  "description": "github-readonly plus branch, push, pull request, and comment tools. Writes go only to branches starting with branch_prefix; push_files is closed so no unlisted argument passes. No merge, delete, or create_or_update_file (its optional allow_symlink_write cannot be closed off).",
+  "params": {
+    "owner": {
+      "description": "GitHub organization or user that owns the repositories"
+    },
+    "repos": {
+      "description": "Repository names, comma-separated",
+      "list": true
+    },
+    "branch_prefix": {
+      "description": "Branch name prefix the agent may write to, for example agent/"
+    }
+  },
+  "capabilities": {
+    "get_file_contents": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_issues": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "issue_read": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_pull_requests": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "pull_request_read": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_commits": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_branches": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_tags": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "get_commit": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "get_repository_tree": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "create_branch": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "branch": {
+        "pattern": "${branch_prefix}*"
+      },
+      "_allow_unknown": true
+    },
+    "push_files": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "branch": {
+        "pattern": "${branch_prefix}*"
+      },
+      "message": {
+        "wildcard": true
+      },
+      "files": {
+        "wildcard": true
+      }
+    },
+    "create_pull_request": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "head": {
+        "pattern": "${branch_prefix}*"
+      },
+      "base": {
+        "wildcard": true
+      },
+      "title": {
+        "wildcard": true
+      },
+      "_allow_unknown": true
+    },
+    "add_issue_comment": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "issue_number": {
+        "wildcard": true
+      },
+      "_allow_unknown": true
+    }
+  }
+}

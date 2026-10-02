@@ -136,11 +136,53 @@ constraints. A bare value is an exact match.
 | `{"one_of": [values]}` | One of the listed values. |
 | `{"pattern": "glob"}` | Glob match on a string. |
 | `{"range": {"min": n, "max": n}}` | Number within the bounds; either may be omitted. |
+| `{"subpath": "/root"}` | Absolute path inside the root, after lexical `.`/`..` normalization. Symlinks are not resolved. |
+| `{"url_safe": true}` | URL that is not private, loopback, metadata, or reserved. |
+| `{"url_safe": {"allow_domains": [domains]}}` | The same, limited to the domains; `*.example.com` admits subdomains. |
 | `{"wildcard": true}` | Any value. |
 
-Once a tool lists any constraint, arguments that are not listed are rejected;
-use `{"wildcard": true}` to admit one without constraining it. A tool with
-`{}` accepts any arguments, so prefer listing each argument.
+Once a tool lists any constraint, the tool is closed: arguments that are not
+listed are rejected, and every listed argument must be present, including a
+`{"wildcard": true}` one. A call that leaves out an optional argument the
+tool lists is therefore denied. For tools whose optional arguments cannot
+widen what the call reaches (pagination, a git ref, output limits), add
+`"_allow_unknown": true` to admit unlisted arguments while the listed ones
+stay enforced. An attenuated child does not inherit `_allow_unknown`. A tool
+with `{}` accepts any arguments, so prefer listing each argument. Tenuo core
+documents every constraint type in
+[`docs/constraints.md`](https://github.com/tenuo-ai/tenuo/blob/main/docs/constraints.md);
+this CLI accepts the ones in the table.
+
+### Templates
+
+Templates are ready-made capabilities for MCP servers that OpenShell users
+commonly admit. List them with their parameters:
+
+```bash
+tenuo-openshell warrant templates
+```
+
+Issue or provision from a template in place of `--capabilities`:
+
+```bash
+tenuo-openshell provision --sandbox <name> --issuer-key issuer.key \
+  --template github-readonly --param owner=tenuo-ai --param repos=tenuo,tenuo-openshell
+```
+
+| Template | Server | Scope |
+| --- | --- | --- |
+| `github-readonly` | github/github-mcp-server | Read tools on listed repositories of one owner. No search tools: their scope is inside a free-text query. |
+| `github-contributor` | github/github-mcp-server | The read tools plus `create_branch`, `push_files`, `create_pull_request`, and `add_issue_comment`, writing only to branches under `branch_prefix`. No merge or delete. |
+| `filesystem-readonly` | modelcontextprotocol filesystem | Read and list tools under one root. |
+| `fetch-allowlist` | modelcontextprotocol fetch | `fetch` for listed domains, with private and metadata addresses blocked. |
+| `kubernetes-readonly` | containers/kubernetes-mcp-server | Pod, event, and workload reads in listed namespaces; no Secret or ConfigMap reads; no multi-cluster `context`. |
+| `slack-channels` | Slack reference server | History, replies, posts, and reactions in listed channel IDs. |
+
+Rendering is strict: a missing, unknown, repeated, or unused `--param` is an
+error. `--template @file.json` loads a template in the same format as those
+in [`templates/`](../templates). Tool and argument names were taken from each
+server's source; check them against the server version you run, since a
+renamed tool is denied rather than silently admitted.
 
 ## 4. Run the proxy and point the agent at it
 

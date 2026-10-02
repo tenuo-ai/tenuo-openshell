@@ -1,0 +1,84 @@
+{
+  "description": "github/github-mcp-server read tools limited to listed repositories of one owner. Search tools are left out because their scope is inside the free-text query. Optional arguments (ref, path, filters, pagination) pass.",
+  "params": {
+    "owner": {
+      "description": "GitHub organization or user that owns the repositories"
+    },
+    "repos": {
+      "description": "Repository names, comma-separated",
+      "list": true
+    }
+  },
+  "capabilities": {
+    "get_file_contents": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_issues": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "issue_read": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_pull_requests": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "pull_request_read": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_commits": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_branches": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "list_tags": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "get_commit": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    },
+    "get_repository_tree": {
+      "owner": "${owner}",
+      "repo": {
+        "one_of": "${repos}"
+      },
+      "_allow_unknown": true
+    }
+  }
+}
