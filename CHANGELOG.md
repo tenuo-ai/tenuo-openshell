@@ -64,6 +64,12 @@ All notable changes will be documented here. The format follows
 
 ### Changed
 
+- `approval_replay_protection` defaults to `true`. A policy that omits it
+  now makes approvals single-use, which needs Redis in production or
+  `--allow-in-memory-replay` for a single-instance evaluation. Set it to
+  `false` explicitly to keep the old behavior.
+- Deployment guide documents policy-file integrity: the file is unsigned and
+  controls authorization.
 - Requires Tenuo 0.3.2. The integration now uses Tenuo core for warrant-chain
   encoding (`meta_envelope`), strict JSON parsing in the middleware
   (`parse_json_strict`), approval review and signing (`matches_warrant`,
