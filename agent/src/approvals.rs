@@ -29,21 +29,15 @@ pub fn request_hash(leaf: &Warrant, call: &Call<'_>) -> [u8; 32] {
     )
 }
 
-/// Decode a signed approval from base64 CBOR or raw CBOR bytes.
+/// Decode a signed approval: the `_meta.tenuo` approval encoding (base64 in
+/// either alphabet, decoded by Tenuo core) or raw CBOR bytes.
 pub fn decode(bytes: &[u8]) -> Result<SignedApproval, String> {
-    use base64::Engine;
-    let text = std::str::from_utf8(bytes).ok().map(str::trim);
-    let decoded = text.and_then(|text| {
-        [
-            &base64::engine::general_purpose::STANDARD,
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &base64::engine::general_purpose::URL_SAFE,
-        ]
-        .into_iter()
-        .find_map(|engine| engine.decode(text).ok())
-    });
-    let raw = decoded.as_deref().unwrap_or(bytes);
-    ciborium::from_reader(raw).map_err(|_| "not a signed approval".to_string())
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if let Ok(approval) = tenuo::meta_envelope::decode_approval(text) {
+            return Ok(approval);
+        }
+    }
+    ciborium::from_reader(bytes).map_err(|_| "not a signed approval".to_string())
 }
 
 fn now() -> u64 {
