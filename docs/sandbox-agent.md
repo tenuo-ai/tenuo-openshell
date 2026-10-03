@@ -28,6 +28,9 @@ cargo build --release --locked --workspace --bins
 Copy `target/release/tenuo-openshell-agent` into the sandbox image, for
 example at `/usr/local/bin/tenuo-openshell-agent`. The
 [demo image](../examples/demo/Dockerfile.sandbox) shows a two-stage build.
+The agent verifies the MCP server's TLS certificate against the system trust
+store, so the image needs CA certificates (for example the `ca-certificates`
+package). The demo image installs them.
 
 The release workflow also builds both binaries, but no release has published
 them yet. Once a GitHub release lists them, a release archive replaces the
