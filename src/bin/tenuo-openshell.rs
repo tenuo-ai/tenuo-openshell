@@ -26,7 +26,11 @@ const DEFAULT_AUDIENCE: &str = "urn:openshell:extension:middleware:tenuo/authori
 const AGENT: &str = "tenuo-openshell-agent";
 
 #[derive(Parser)]
-#[command(version, about = "Operator commands for Tenuo on NVIDIA OpenShell")]
+#[command(
+    name = "tenuo-openshell",
+    version,
+    about = "Operator commands for Tenuo on NVIDIA OpenShell"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
