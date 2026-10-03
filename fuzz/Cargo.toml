@@ -17,7 +17,7 @@ members = ["."]
 futures = "0.3"
 libfuzzer-sys = "0.4"
 serde_json = "1"
-tenuo = { version = "0.3.1", default-features = false, features = ["sdk", "mcp-transport"] }
+tenuo = { version = "0.3.2", default-features = false, features = ["sdk", "mcp-transport"] }
 
 [dependencies.tenuo-openshell-middleware]
 path = ".."
