@@ -68,7 +68,7 @@ CLI="$TARGET/tenuo-openshell"
 echo "INFO preparing a Python environment with NeMo Agent Toolkit 1.8"
 uv venv --quiet --python 3.12 "$WORK/py"
 uv pip install --quiet --python "$WORK/py/bin/python" \
-  'nvidia-nat-core==1.8.0' 'nvidia-nat-mcp==1.8.0' 'nvidia-nat-langchain==1.8.0' 'tenuo==0.3.1'
+  'nvidia-nat-core==1.8.0' 'nvidia-nat-mcp==1.8.0' 'nvidia-nat-langchain==1.8.0' 'tenuo==0.3.2'
 NAT="$WORK/py/bin/nat"
 
 # Issuer, orchestrator (task A), and approver keys, plus the trust policy.
@@ -134,7 +134,9 @@ echo "INFO approver reviews the pending request"
 "$AGENT" pending --json >"$WORK/pending.json"
 request="$(jq -er '.[0].request_hash' "$WORK/pending.json")"
 "$CLI" approve --pending "$WORK/pending.json" --request "$request" \
-  --approver-key "$WORK/fixture/signers/approver/key" --yes | "$AGENT" install-approval -
+  --approver-key "$WORK/fixture/signers/approver/key" \
+  --trusted-root "$(jq -er '.sandboxes.example.trusted_roots[0]' "$WORK/fixture/policy.json")" \
+  --yes | "$AGENT" install-approval -
 
 echo "INFO run 2: the same restart with the approval"
 run_agent run2

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tenuo::approval::SignedApproval;
+use tenuo::approval::{ApprovalRequest, SignedApproval};
 use tenuo::sdk::prelude::*;
 use tenuo::Warrant;
 
@@ -140,33 +140,32 @@ impl ApprovalStore {
         self.pending().join(format!("{}.json", hex::encode(hash)))
     }
 
-    /// Record what an approver needs to review this call.
+    /// Record what an approver needs to review this call: the request as
+    /// core produced it and the warrant chain it was checked against. The
+    /// approver verifies the chain and the request before showing either;
+    /// `tool` and `arguments` are for listing only.
     pub fn record_pending(
         &self,
-        hash: &[u8; 32],
-        leaf: &Warrant,
-        tool: &str,
+        request: &ApprovalRequest,
+        chain: &[Warrant],
         arguments: &Value,
     ) -> Result<(), String> {
-        let request = json!({
-            "request_hash": hex::encode(hash),
-            "warrant_id": leaf.id().to_string(),
-            "holder": hex::encode(leaf.authorized_holder().to_bytes()),
-            "tool": tool,
+        let warrant =
+            tenuo::meta_envelope::encode_warrant_chain(chain).map_err(|error| error.to_string())?;
+        let record = json!({
+            "request_hash": hex::encode(request.request_hash),
+            "tool": request.tool,
             "arguments": arguments,
-            "required_approvers": leaf
-                .required_approvers()
-                .map(|keys| keys.iter().map(|key| hex::encode(key.to_bytes())).collect::<Vec<_>>())
-                .unwrap_or_default(),
-            "min_approvals": leaf.approval_threshold(),
             "requested_at": now(),
+            "request": request,
+            "warrant": warrant,
         });
         fs::create_dir_all(self.pending()).map_err(|error| error.to_string())?;
-        let path = self.pending_path(hash);
+        let path = self.pending_path(&request.request_hash);
         let staging = path.with_extension("tmp");
         fs::write(
             &staging,
-            serde_json::to_vec_pretty(&request).unwrap_or_default(),
+            serde_json::to_vec_pretty(&record).unwrap_or_default(),
         )
         .and_then(|()| fs::rename(&staging, &path))
         .map_err(|error| error.to_string())

@@ -107,7 +107,7 @@ writes both logs as JSON lines to `results/evidence/openshell-receipts.json`
 and `results/evidence/openshell-results.json`, the format described in
 [Receipts](../../docs/receipts.md).
 
-The launcher installs Python package `tenuo` 0.3.1 into a temporary environment
+The launcher installs Python package `tenuo` 0.3.2 into a temporary environment
 for that server. Set `TENUO_DEMO_PYTHON` to an existing interpreter when that
 package is already installed.
 
