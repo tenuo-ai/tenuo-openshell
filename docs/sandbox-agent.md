@@ -29,6 +29,18 @@ Copy `target/release/tenuo-openshell-agent` into the sandbox image, for
 example at `/usr/local/bin/tenuo-openshell-agent`. The
 [demo image](../examples/demo/Dockerfile.sandbox) shows a two-stage build.
 
+The release workflow also builds both binaries, but no release has published
+them yet. Once a GitHub release lists them, a release archive replaces the
+source build. The agent archives are static Linux binaries for `x86_64` and
+`aarch64`; the `tenuo-openshell` archives cover Linux and macOS arm64. Verify
+the archive as described in [Verifying a release binary](releasing.md#verifying-a-release-binary),
+then install the agent into the image:
+
+```bash
+tar -xzf tenuo-openshell-agent-<tag>-x86_64-unknown-linux-musl.tar.gz \
+  -C /usr/local/bin tenuo-openshell-agent
+```
+
 ## 1. Trust policy
 
 Add the sandbox, the issuer that signs its warrants, and each MCP server it may
