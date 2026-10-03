@@ -21,12 +21,14 @@ no-default-features = false
 # the condition for removing the ignore.
 yanked = "deny"
 ignore = [
-    # rustls-pemfile is unmaintained, not vulnerable. It arrives only through
-    # tonic 0.12's `tls` feature, which reads the server certificate and key
-    # PEM at startup (`--tls-cert`, `--tls-key`); no request data reaches it.
-    # Current releases are thin wrappers over rustls-pki-types. Remove this
-    # entry when tonic is upgraded to a release that drops the dependency.
-    { id = "RUSTSEC-2025-0134", reason = "unmaintained, transitive via tonic 0.12 TLS; startup-only PEM parsing" },
+    # rsa (Marvin attack) has no fixed release. It arrives only through
+    # jsonwebtoken's rust_crypto backend. The middleware verifies OpenShell
+    # extension JWTs with EdDSA only: keys are loaded with from_ed_pem, any
+    # header that is not EdDSA is rejected, and Validation is EdDSA-only, so
+    # no RSA code runs and the middleware holds no RSA private key, which is
+    # what the attack targets. Remove this entry when rsa ships a fix or
+    # jsonwebtoken can be built without RSA.
+    { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken rust_crypto; JWT verification is EdDSA-only, no RSA keys" },
 ]
 
 [licenses]
@@ -43,6 +45,8 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Unlicense",
+    # foldhash (via hashbrown). Permissive and OSI-approved.
+    "Zlib",
 ]
 confidence-threshold = 0.9
 exceptions = []

@@ -35,6 +35,11 @@ cargo run --release -- \
   --admin-listen 0.0.0.0:9090
 ```
 
+Use a `rediss://` URL to connect to Redis over TLS. The server certificate
+is verified against the system trust store. Replay keys carry approval and
+proof identities, so use TLS whenever Redis is reachable from outside the
+middleware's network.
+
 For native Redis Cluster, replace `--replay-redis-url` with:
 
 ```bash

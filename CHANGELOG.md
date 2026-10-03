@@ -70,6 +70,12 @@ All notable changes will be documented here. The format follows
   `false` explicitly to keep the old behavior.
 - Deployment guide documents policy-file integrity: the file is unsigned and
   controls authorization.
+- Dependencies: tonic, prost, and their code generators 0.14 (codegen moved
+  to `tonic-prost-build`), OpenTelemetry 0.33, axum 0.8, Redis 1.7,
+  jsonwebtoken 11 (with its `rust_crypto` backend; without a backend every
+  OpenShell JWT check panics), and base64 0.23.
+- `--replay-redis-url` and `--replay-redis-cluster-urls` accept `rediss://`
+  for Redis over TLS.
 - Requires Tenuo 0.3.2. The integration now uses Tenuo core for warrant-chain
   encoding (`meta_envelope`), strict JSON parsing in the middleware
   (`parse_json_strict`), approval review and signing (`matches_warrant`,

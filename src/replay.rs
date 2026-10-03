@@ -508,6 +508,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn tls_redis_urls_are_supported() {
+        // rediss:// needs the redis crate's rustls features; without them the
+        // URL is rejected before any connection is attempted.
+        assert!(redis::Client::open("rediss://redis.example:6380/").is_ok());
+        assert!(redis::cluster::ClusterClient::new(vec!["rediss://redis.example:6380/"]).is_ok());
+    }
+
     #[tokio::test]
     async fn redis_reservation_is_global_and_shared_across_instances() {
         let Ok(url) = std::env::var("TENUO_TEST_REDIS_URL") else {
