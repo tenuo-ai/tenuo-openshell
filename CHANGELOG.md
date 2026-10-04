@@ -61,6 +61,11 @@ All notable changes will be documented here. The format follows
 - Helm values for result evaluation and OTLP export.
 - The sandbox proxy reports a withheld result as a call that already ran, so
   agents do not retry it as if it were denied.
+- The release workflow builds `tenuo-openshell-agent` as static musl binaries
+  for Linux x86_64 and aarch64, and `tenuo-openshell` for those targets and
+  macOS arm64. It smoke-tests each binary, lists the archives in `SHA256SUMS`,
+  attests their build provenance, and on publish signs them with keyless
+  cosign and attaches them to the GitHub release.
 
 ### Changed
 
@@ -76,6 +81,11 @@ All notable changes will be documented here. The format follows
   OpenShell JWT check panics), and base64 0.23.
 - `--replay-redis-url` and `--replay-redis-cluster-urls` accept `rediss://`
   for Redis over TLS.
+- `tenuo-openshell --version` prints `tenuo-openshell` instead of the package
+  name `tenuo-openshell-middleware`.
+- Release `SHA256SUMS` lists bare file names, so `sha256sum -c` works in the
+  directory the release files were downloaded to.
+- The release workflow checks that `agent/Cargo.toml` matches the tag.
 - Requires Tenuo 0.3.2. The integration now uses Tenuo core for warrant-chain
   encoding (`meta_envelope`), strict JSON parsing in the middleware
   (`parse_json_strict`), approval review and signing (`matches_warrant`,
