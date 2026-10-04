@@ -10,6 +10,7 @@ on:
       - src/policy.rs
       - src/evaluate.rs
       - fuzz/**
+      - Cargo.lock
       - .github/workflows/fuzz.yml
 
 permissions:
@@ -30,7 +31,7 @@ jobs:
           toolchain: nightly
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: fuzz
+          workspaces: . -> target
       # cargo-fuzz itself builds on stable; its pinned dependencies do not
       # always compile on the newest nightly. The targets still use nightly.
       - run: rustup toolchain install stable --profile minimal

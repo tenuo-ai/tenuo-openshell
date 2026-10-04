@@ -4,6 +4,10 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto ./proto
 COPY src ./src
 COPY agent ./agent
+# fuzz/ is a workspace member, so cargo needs its manifest and target sources
+# to load the workspace. Nothing from it is built here.
+COPY fuzz/Cargo.toml ./fuzz/
+COPY fuzz/fuzz_targets ./fuzz/fuzz_targets
 RUN cargo build --release --locked --bin tenuo-openshell-middleware
 
 FROM debian:bookworm-slim

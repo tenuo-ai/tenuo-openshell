@@ -1,7 +1,9 @@
 # cargo-deny policy for the middleware crate. Run `cargo deny check`.
 #
-# The fuzz crate is its own workspace and is not checked here; it adds only
-# libfuzzer-sys on top of these dependencies.
+# The fuzz crate is a workspace member but is excluded below, so the checked
+# graph is the shipped crates only. It is never built into a release artifact
+# and adds only libfuzzer-sys (which bundles NCSA-licensed libFuzzer),
+# arbitrary, and jobserver on top of these dependencies.
 
 [graph]
 # Release images are Linux; developers build on macOS. Windows-only crates
@@ -13,6 +15,7 @@ targets = [
     "x86_64-apple-darwin",
 ]
 all-features = false
+exclude = ["tenuo-openshell-middleware-fuzz"]
 no-default-features = false
 
 [advisories]
