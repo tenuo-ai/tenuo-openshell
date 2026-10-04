@@ -79,6 +79,9 @@ async def run(port: int) -> dict:
         else:
             raise RuntimeError("A2A server did not start")
 
+        # tenuo.a2a.A2AClient.send_task sends the same stack, but in 0.3.2 its
+        # proof-of-possession path imports tenuo_core.ConstraintValue, which
+        # does not exist. See README.md.
         async def send(warrant: Warrant, skill: str, arguments: dict, message: str) -> dict:
             stack = encode_warrant_stack([parent_warrant, warrant])
             signature = warrant.sign(worker, skill, arguments, int(time.time()))
