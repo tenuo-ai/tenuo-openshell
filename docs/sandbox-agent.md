@@ -19,7 +19,7 @@ Two binaries are involved:
 | `tenuo-openshell` | Operator machine or orchestrator | Edit the trust policy, print OpenShell configuration, issue and provision warrants. |
 | `tenuo-openshell-agent` | Inside the sandbox | Hold the key, hold the warrant, sign calls through a loopback MCP proxy. |
 
-Build both from source until release artifacts are published:
+Build both from a pinned revision:
 
 ```bash
 cargo build --release --locked --bins
@@ -32,9 +32,7 @@ The agent verifies the MCP server's TLS certificate against the system trust
 store, so the image needs CA certificates (for example the `ca-certificates`
 package). The demo image installs them.
 
-The release workflow also builds both binaries, but no release has published
-them yet. Once a GitHub release lists them, a release archive replaces the
-source build. The agent archives are static Linux binaries for `x86_64` and
+Tagged releases also publish both binaries. The agent archives are static Linux binaries for `x86_64` and
 `aarch64`; the `tenuo-openshell` archives cover Linux and macOS arm64. Verify
 the archive as described in [Verifying a release binary](releasing.md#verifying-a-release-binary),
 then install the agent into the image:

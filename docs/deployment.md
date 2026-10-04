@@ -1,7 +1,8 @@
 # Deploying Tenuo for NVIDIA OpenShell
 
-This guide contains the production configuration that is intentionally kept
-out of the project README. Read it with the [architecture](architecture.md),
+This guide covers production configuration: registration, the trust policy,
+replay protection, revocation, result evidence, traces, and Kubernetes. Read
+it with the [architecture](architecture.md),
 [operations runbook](operations.md), and
 [pinned upstream contract](upstream-verification.md).
 
