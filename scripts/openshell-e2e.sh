@@ -864,7 +864,7 @@ PY
   control_allow "approval does not cover replicas 5" "$FIXTURE_DIR/task-a-approval-mismatch.json" "restarted payments in staging"
   control_allow "task B restart" "$FIXTURE_DIR/task-b-restart.json" "restarted payments in staging"
   control_allow "copied warrant" "$FIXTURE_DIR/copied-warrant.json" "restarted payments in staging"
-  control_allow "production read" "$FIXTURE_DIR/task-a-constraint.json" "read payments logs in staging"
+  control_allow "production read" "$FIXTURE_DIR/task-a-constraint.json" "read identity logs in production"
   control_allow "replicas 8" "$FIXTURE_DIR/task-a-replicas.json" "restarted payments in staging"
   control_allow "restart other service" "$FIXTURE_DIR/task-a-other-service.json" "restarted auth in staging"
   control_allow "missing warrant" "$FIXTURE_DIR/missing-warrant.json" "restarted payments in staging"
