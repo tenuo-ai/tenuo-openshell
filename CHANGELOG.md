@@ -8,6 +8,9 @@ All notable changes will be documented here. The format follows
 
 ### Added
 
+- Demo row "restart other service": the OpenShell policy admits
+  `restart_service` and task A's warrant names it for `payments`, so a restart
+  of `auth` is denied by Tenuo and reaches the effect under OpenShell alone.
 - OpenShell `HTTP_REQUEST / PRE_CREDENTIALS` supervisor middleware with secure
   TLS and JWT defaults.
 - Tenuo warrant, proof-of-possession, constraint, approval, and replay checks.
