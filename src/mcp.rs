@@ -4,9 +4,7 @@
 //! otherwise keep the last occurrence.
 
 use crate::policy::McpOptions;
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
-use std::fmt;
 
 const PASS_THROUGH_METHODS: &[&str] = &[
     "initialize",
@@ -43,7 +41,6 @@ pub enum McpRequest {
 pub enum McpError {
     NotJson,
     DuplicateKey,
-    TrailingData,
     Batch,
     NotAnObject,
     UnsupportedMethod,
@@ -135,87 +132,13 @@ pub fn strip_tenuo(document: &Value) -> Result<Vec<u8>, McpError> {
     serde_json::to_vec(&document).map_err(|_| McpError::NotJson)
 }
 
+/// Parse with Tenuo core's strict parser: a repeated object key is an error
+/// rather than letting the last occurrence win, so the proof covers the
+/// arguments the tool receives.
 fn parse_json(body: &[u8]) -> Result<Value, McpError> {
-    let mut deserializer = serde_json::Deserializer::from_slice(body);
-    let value = ValueSeed.deserialize(&mut deserializer).map_err(|error| {
-        if error.to_string().contains("duplicate key") {
-            McpError::DuplicateKey
-        } else {
-            McpError::NotJson
-        }
-    })?;
-    deserializer.end().map_err(|_| McpError::TrailingData)?;
-    Ok(value)
-}
-
-struct ValueSeed;
-
-impl<'de> DeserializeSeed<'de> for ValueSeed {
-    type Value = Value;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(JsonVisitor)
-    }
-}
-
-struct JsonVisitor;
-
-impl<'de> Visitor<'de> for JsonVisitor {
-    type Value = Value;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a JSON value")
-    }
-
-    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(Value::Bool(value))
-    }
-
-    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
-        serde_json::Number::from_f64(value)
-            .map(Value::Number)
-            .ok_or_else(|| de::Error::custom("non-finite number"))
-    }
-
-    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(Value::String(value.to_string()))
-    }
-
-    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
-        Ok(Value::String(value))
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-        let mut items = Vec::new();
-        while let Some(item) = seq.next_element_seed(ValueSeed)? {
-            items.push(item);
-        }
-        Ok(Value::Array(items))
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut object = serde_json::Map::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if object.contains_key(&key) {
-                return Err(de::Error::custom(format!("duplicate key {key}")));
-            }
-            object.insert(key, map.next_value_seed(ValueSeed)?);
-        }
-        Ok(Value::Object(object))
-    }
+    let text = std::str::from_utf8(body).map_err(|_| McpError::NotJson)?;
+    tenuo::parse_json_strict(text).map_err(|error| match error {
+        tenuo::StrictJsonError::DuplicateKey => McpError::DuplicateKey,
+        _ => McpError::NotJson,
+    })
 }

@@ -64,6 +64,21 @@ All notable changes will be documented here. The format follows
 
 ### Changed
 
+- Requires Tenuo 0.3.2. The integration now uses Tenuo core for warrant-chain
+  encoding (`meta_envelope`), strict JSON parsing in the middleware
+  (`parse_json_strict`), approval review and signing (`matches_warrant`,
+  `approve_request`), and authorization-receipt chain verification
+  (`receipt::verify_chain`), instead of its own copies.
+- `tenuo-openshell approve` requires `--trusted-root`. It verifies the pending
+  warrant chain to that root and checks the recorded request against the
+  warrant before showing anything. Pending requests now carry the request
+  Tenuo produced and the warrant chain.
+- Receipt export rejects an authorization log signed by more than one key,
+  even without `--verify-with`.
+- Proofs from Tenuo 0.3.2 cover null argument values. Calls signed by older
+  clients that drop `null` arguments are denied; upgrade those clients.
+- The demo MCP server no longer rewrites `_meta.tenuo` to standard base64;
+  Tenuo 0.3.2 verifiers accept either alphabet.
 - GitHub Actions in every workflow are pinned by commit SHA.
 - Requests rejected before evaluation (oversized body, invalid binding config,
   missing target) now count in the decision metrics.

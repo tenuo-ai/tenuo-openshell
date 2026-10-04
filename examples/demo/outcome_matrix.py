@@ -166,13 +166,11 @@ def check_pairs(paired: dict[str, dict[str, dict]]) -> list[dict]:
 
 
 def destination_samples(policy: Path, request_dir: Path, iterations: int) -> list[int]:
-    from mcp_server import normalize_meta
-
     roots = load_roots(policy)
     verifier = MCPVerifier(authorizer=Authorizer(trusted_roots=roots))
     body = json.loads((request_dir / "task-a-read.json").read_text(encoding="utf-8"))
     params = body["params"]
-    meta = normalize_meta(params.get("_meta"))
+    meta = params.get("_meta")
     samples = []
     for _ in range(iterations):
         started = time.perf_counter()

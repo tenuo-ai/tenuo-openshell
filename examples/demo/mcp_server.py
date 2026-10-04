@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """MCP effect server that verifies `_meta.tenuo` before running a tool.
 
-The MCP wire encoding is unpadded URL-safe base64. ``MCPVerifier`` decodes a
-raw warrant stack from standard base64, so this server normalizes those fields
-and then calls ``MCPVerifier``. A failed check returns JSON-RPC ``-32001`` or
-``-32002`` and does not run the tool.
+``MCPVerifier`` (tenuo 0.3.2 or later) decodes ``_meta.tenuo`` in either base64
+alphabet, so the envelope is passed through as received. A failed check
+returns JSON-RPC ``-32001`` or ``-32002`` and does not run the tool.
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import contextvars
 import json
 import os
@@ -31,39 +29,10 @@ def require_tenuo() -> None:
     except ImportError as exc:
         raise SystemExit("the destination verifier requires the tenuo package") from exc
     parts = tuple(int(piece) for piece in tenuo.__version__.split(".")[:3])
-    if parts < (0, 3, 1):
+    if parts < (0, 3, 2):
         raise SystemExit(
-            f"the destination verifier requires tenuo>=0.3.1, found {tenuo.__version__}"
+            f"the destination verifier requires tenuo>=0.3.2, found {tenuo.__version__}"
         )
-
-
-def standard_b64(value: str) -> str:
-    text = value.strip()
-    padding = "=" * ((4 - len(text) % 4) % 4)
-    raw = base64.urlsafe_b64decode(text + padding)
-    return base64.b64encode(raw).decode("ascii")
-
-
-def normalize_meta(meta: object) -> dict[str, Any] | None:
-    """Return `_meta` with Tenuo fields in standard base64, or None when absent."""
-    if not isinstance(meta, dict):
-        return None
-    tenuo = meta.get("tenuo")
-    if not isinstance(tenuo, dict):
-        return meta
-    normalized = dict(tenuo)
-    for field in ("warrant", "signature"):
-        value = normalized.get(field)
-        if isinstance(value, str):
-            normalized[field] = standard_b64(value)
-    approvals = normalized.get("approvals")
-    if isinstance(approvals, list):
-        normalized["approvals"] = [
-            standard_b64(item) if isinstance(item, str) else item for item in approvals
-        ]
-    copied = dict(meta)
-    copied["tenuo"] = normalized
-    return copied
 
 
 def load_roots(path: Path) -> list[Any]:
@@ -223,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             with self.receipt_lock:
                 try:
                     started = time.perf_counter()
-                    meta = normalize_meta(params.get("_meta"))
+                    meta = params.get("_meta")
                     result = self.verifier.verify(name, arguments, meta=meta)
                     decision_us = int((time.perf_counter() - started) * 1_000_000)
                     if result.allowed:

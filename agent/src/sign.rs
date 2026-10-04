@@ -158,12 +158,19 @@ fn authorize(holder: &Holder, name: &str, arguments: &Value) -> Result<Value, Si
             }
             Ok(guarded.into_inner())
         }
-        Err(tenuo::sdk::GuardError::Denied(denied)) if denied.needs_approval() => match store {
-            Some(store) if store.record_pending(&hash, leaf, name, arguments).is_ok() => {
+        Err(tenuo::sdk::GuardError::Denied(denied)) if denied.needs_approval() => {
+            let recorded = match (store, denied.approval_request()) {
+                (Some(store), Some(request)) => store
+                    .record_pending(request, presented.authority.chain(), arguments)
+                    .is_ok(),
+                _ => false,
+            };
+            if recorded {
                 Err(SignError::ApprovalPending(hash))
+            } else {
+                Err(SignError::Denied(denied))
             }
-            _ => Err(SignError::Denied(denied)),
-        },
+        }
         Err(tenuo::sdk::GuardError::Denied(denied)) => Err(SignError::Denied(denied)),
         Err(_) => Err(SignError::Encoding),
     }
@@ -353,6 +360,13 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0]["request_hash"], hash);
         assert_eq!(pending[0]["arguments"], json!({"service": "payments"}));
+        let recorded: tenuo::approval::ApprovalRequest =
+            serde_json::from_value(pending[0]["request"].clone()).unwrap();
+        assert_eq!(hex::encode(recorded.request_hash), hash);
+        let chain =
+            tenuo::meta_envelope::decode_warrant_chain(pending[0]["warrant"].as_str().unwrap())
+                .unwrap();
+        assert!(recorded.matches_warrant(chain.last().unwrap()).unwrap());
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

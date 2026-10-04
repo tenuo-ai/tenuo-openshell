@@ -14,11 +14,13 @@ The example also shows a human approval step:
 3. An approver reviews the exact tool and arguments and approves them:
 
    ```bash
-   tenuo-openshell approve --sandbox my-sandbox --request <hash> --approver-key approver.key
+   tenuo-openshell approve --sandbox my-sandbox --request <hash> \
+     --approver-key approver.key --trusted-root issuer.pub
    ```
 
-   `approve` recomputes the request hash from the tool, arguments, warrant,
-   and holder it shows, so the signature covers exactly what was reviewed.
+   `approve` verifies the pending warrant chain to the trusted root and checks
+   the request against that warrant before it shows anything, so the
+   signature covers exactly what was reviewed.
 4. The agent runs again. The restart goes through, and the MCP server verifies
    the warrant and approval again before acting.
 5. A later restart needs a new approval: each one authorizes one call.

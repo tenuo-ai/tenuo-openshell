@@ -6,7 +6,6 @@
 //! while the proxy runs.
 
 use crate::approvals::ApprovalStore;
-use base64::Engine;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -95,36 +94,29 @@ fn create_private_dir(path: &Path) -> Result<(), AuthorityError> {
 
 /// Decode a warrant or warrant stack.
 ///
-/// Accepts the `_meta.tenuo.warrant` encoding (URL-safe base64 of a CBOR
-/// stack), padded URL-safe or standard base64, and raw CBOR bytes.
+/// Text in any form Tenuo produces (base64 in either alphabet, PEM, a stack or
+/// a single warrant) is decoded by the core envelope codec. Raw CBOR bytes, as
+/// written by tools that save a stack to a file, are also accepted.
 pub fn decode_chain(bytes: &[u8]) -> Result<Vec<Warrant>, AuthorityError> {
-    let text = std::str::from_utf8(bytes).ok().map(str::trim);
-    let decoded = text.and_then(|text| {
-        [
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &base64::engine::general_purpose::URL_SAFE,
-            &base64::engine::general_purpose::STANDARD,
-        ]
-        .into_iter()
-        .find_map(|engine| engine.decode(text).ok())
-    });
-    let raw = decoded.as_deref().unwrap_or(bytes);
-    if let Ok(stack) = tenuo::wire::decode_stack(raw) {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if let Ok(chain) = tenuo::meta_envelope::decode_warrant_chain(text) {
+            return Ok(chain);
+        }
+    }
+    if let Ok(stack) = tenuo::wire::decode_stack(bytes) {
         if !stack.0.is_empty() {
             return Ok(stack.0);
         }
     }
-    tenuo::wire::decode(raw)
+    tenuo::wire::decode(bytes)
         .map(|warrant| vec![warrant])
         .map_err(|_| AuthorityError::Warrant("not a Tenuo warrant or warrant stack".to_string()))
 }
 
 /// Encode a chain the way `_meta.tenuo.warrant` carries it.
 pub fn encode_chain(chain: &[Warrant]) -> Result<String, AuthorityError> {
-    let stack = tenuo::wire::WarrantStack::new(chain.to_vec());
-    let bytes = tenuo::wire::encode_stack(&stack)
-        .map_err(|error| AuthorityError::Warrant(error.to_string()))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    tenuo::meta_envelope::encode_warrant_chain(chain)
+        .map_err(|error| AuthorityError::Warrant(error.to_string()))
 }
 
 /// Validate `encoded` against the holder key and write it atomically.
@@ -238,6 +230,7 @@ impl Holder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use tenuo::ConstraintSet;
 
     fn warrant_for(holder: &PublicKey) -> Warrant {

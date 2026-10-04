@@ -226,7 +226,7 @@ Internet-Draft, authored by Tenuo for interoperable agent delegation.
 | NVIDIA OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` |
 | Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` |
 | NVIDIA NeMo Agent Toolkit | `nvidia-nat-core` 1.8.x |
-| Tenuo Rust and Python packages | 0.3.x, tested with 0.3.1 |
+| Tenuo Rust and Python packages | 0.3.x, tested with 0.3.2 |
 
 Compatibility ranges move only after the unit, plugin-discovery, container,
 and real-gateway suites pass against the new version.

@@ -351,7 +351,7 @@ prepare_destination_python() {
     return
   fi
   python3 -m venv "$RUN_DIR/py"
-  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo[a2a]==0.3.1' 'uvicorn>=0.30,<1' 'nvidia-nat-core>=1.8,<1.9'
+  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo[a2a]==0.3.2' 'uvicorn>=0.30,<1' 'nvidia-nat-core>=1.8,<1.9'
   "$RUN_DIR/py/bin/python" -m pip install -q --no-deps "$ROOT/python/nemo-agent-toolkit-tenuo"
   DEMO_PYTHON="$RUN_DIR/py/bin/python"
 }
@@ -497,6 +497,7 @@ mcp_client_approved_run() {
       --sandbox "$sandbox" \
       --request "$request" \
       --approver-key "$FIXTURE_DIR/signers/approver/key" \
+      --trusted-root "$(jq -er --arg sandbox "$SANDBOX_ID" '.sandboxes[$sandbox].trusted_roots[0]' "$FIXTURE_DIR/policy.json")" \
       --yes \
       --openshell "$CLI_BIN" \
       --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "approve the pending restart"

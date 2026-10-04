@@ -193,15 +193,21 @@ without one, the proxy records the pending request in the sandbox and returns
 An approver reviews and signs it from outside the sandbox:
 
 ```bash
-tenuo-openshell approve --sandbox my-sandbox --request 88c676b2 --approver-key approver.key
+tenuo-openshell approve --sandbox my-sandbox --request 88c676b2 \
+  --approver-key approver.key --trusted-root issuer.pub
 ```
 
-`approve` reads the pending request from the sandbox, shows the tool,
-arguments, and warrant, and recomputes the request hash from them before
-signing, so the approval covers exactly what was shown. It refuses a key the
-warrant does not list as an approver and asks for confirmation unless `--yes`
-is passed. The approval is installed in the sandbox, valid for `--ttl` seconds
-(300 by default).
+The sandbox wrote the pending request, so `approve` trusts none of it until it
+checks it. The request records the approval request Tenuo produced and the
+warrant chain it was checked against. `approve` verifies that chain to a
+`--trusted-root` (usually the sandbox's `trusted_roots`), then checks the
+request against that warrant: hash, holder, approval message, approvers,
+threshold, and expiry. Only then does it show the tool, arguments, and
+message, all taken from the verified request. It refuses a key the warrant
+does not list as an approver and asks for confirmation unless `--yes` is
+passed. Tenuo core signs the approval with a random nonce, valid for `--ttl`
+seconds (300 by default) and never past the warrant's expiry, and it is
+installed in the sandbox.
 
 The agent retries the same call. The proxy attaches the approval, removes it,
 and the middleware accepts its nonce once. A second identical call needs a new

@@ -80,6 +80,7 @@ pub fn export(
     let mut objects = Vec::new();
     let mut previous: Option<[u8; 32]> = None;
     let mut kind = None;
+    let mut authorizations = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let number = index + 1;
         let line = line.trim();
@@ -87,13 +88,17 @@ pub fn export(
             continue;
         }
         let bytes = hex::decode(line).map_err(|_| format!("line {number}: not hex"))?;
-        let record = decode(&bytes).map_err(|error| format!("line {number}: {error}"))?;
+        let (record, receipt) =
+            decode(&bytes).map_err(|error| format!("line {number}: {error}"))?;
         if *kind.get_or_insert(record.kind()) != record.kind() {
             return Err(format!(
                 "line {number}: a {} receipt in a log of {} receipts",
                 record.kind(),
                 kind.unwrap_or_default()
             ));
+        }
+        if let Some(receipt) = receipt {
+            authorizations.push((number, receipt));
         }
         if let Some(expected) = verify_with {
             if record.signer() != expected {
@@ -104,8 +109,9 @@ pub fn export(
             }
         }
         // The first line anchors the file. Its link is reported, not checked,
-        // so a rotated segment still exports.
-        if let Some(previous) = previous {
+        // so a rotated segment still exports. Authorization receipts are
+        // checked by Tenuo core below.
+        if let (Some(previous), Record::Result(..)) = (previous, &record) {
             if record.prev_receipt_hash() != Some(previous) {
                 return Err(format!("line {number}: hash chain is broken"));
             }
@@ -114,6 +120,16 @@ pub fn export(
         objects.push(to_json(number, &record, &digest));
         previous = Some(digest);
     }
+    if !authorizations.is_empty() {
+        let receipts: Vec<Receipt> = authorizations
+            .iter()
+            .map(|(_, receipt)| receipt.clone())
+            .collect();
+        tenuo::receipt::verify_chain(&receipts, verify_with).map_err(|error| {
+            let first = authorizations[0].0;
+            format!("authorization receipt hash chain does not verify (from line {first}): {error}")
+        })?;
+    }
     for object in &objects {
         serde_json::to_writer(&mut *out, object).map_err(|error| error.to_string())?;
         out.write_all(b"\n").map_err(|error| error.to_string())?;
@@ -121,7 +137,9 @@ pub fn export(
     Ok(objects.len())
 }
 
-fn decode(bytes: &[u8]) -> Result<Record, String> {
+/// Decode one line. Authorization receipts are returned too, for the chain
+/// check in core.
+fn decode(bytes: &[u8]) -> Result<(Record, Option<Receipt>), String> {
     let value: ciborium::Value =
         ciborium::from_reader(bytes).map_err(|_| "not CBOR".to_string())?;
     let is_result = value.as_map().is_some_and(|entries| {
@@ -132,14 +150,18 @@ fn decode(bytes: &[u8]) -> Result<Record, String> {
     if is_result {
         let receipt = ResultReceipt::from_bytes(bytes)?;
         let payload = receipt.verify()?;
-        return Ok(Record::Result(Box::new(payload), receipt.signer_key));
+        return Ok((Record::Result(Box::new(payload), receipt.signer_key), None));
     }
     let receipt: Receipt =
         ciborium::from_reader(bytes).map_err(|_| "not a Tenuo receipt".to_string())?;
     let payload = receipt
         .verify_signature()
         .map_err(|error| format!("receipt does not verify: {error}"))?;
-    Ok(Record::Authorization(Box::new(payload), receipt.signer_key))
+    let signer = receipt.signer_key.clone();
+    Ok((
+        Record::Authorization(Box::new(payload), signer),
+        Some(receipt),
+    ))
 }
 
 fn to_json(line: usize, record: &Record, digest: &[u8; 32]) -> Value {

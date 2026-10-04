@@ -141,8 +141,7 @@ async fn decide(
             | McpError::UnsupportedMethod
             | McpError::InvalidToolCall
             | McpError::NotAnObject
-            | McpError::NotJson
-            | McpError::TrailingData,
+            | McpError::NotJson,
         ) => {
             return deny(reason::INVALID_REQUEST);
         }

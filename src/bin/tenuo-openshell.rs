@@ -9,13 +9,13 @@
 //!     --capabilities caps.json --ttl 3600
 //! ```
 
-use base64::Engine;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 use std::time::Duration;
+use tenuo::approval::ApprovalRequest;
 use tenuo::{
     ConstraintSet, ConstraintValue, Exact, OneOf, Pattern, PublicKey, Range, SigningKey, Warrant,
     Wildcard,
@@ -159,6 +159,11 @@ struct ApproveArgs {
     /// Approver private key (32 raw bytes or 64 hex characters).
     #[arg(long)]
     approver_key: PathBuf,
+    /// Issuer public key the pending warrant chain must verify to (64 hex
+    /// characters or a file). Repeatable; usually the sandbox's
+    /// `trusted_roots`.
+    #[arg(long = "trusted-root", required = true)]
+    trusted_root: Vec<String>,
     /// Seconds the approval stays valid.
     #[arg(long, default_value_t = 300)]
     ttl: u64,
@@ -464,29 +469,48 @@ fn approve(args: &ApproveArgs) -> Result<()> {
         (None, None) => return Err("pass --sandbox or --pending".into()),
     };
     let listing: Value = serde_json::from_str(listing.lines().last().unwrap_or("[]"))?;
-    let request = find_request(&listing, &args.request)?;
+    let record = find_request(&listing, &args.request)?;
+    let roots = args
+        .trusted_root
+        .iter()
+        .map(|root| read_public(root))
+        .collect::<Result<Vec<_>>>()?;
+    let (request, leaf) = review(record, &roots)?;
     let approver = read_secret(&args.approver_key)?;
-    let hash = verified_request_hash(request, &approver.public_key())?;
+    let listed = leaf
+        .required_approvers()
+        .is_some_and(|keys| keys.contains(&approver.public_key()));
+    if !listed {
+        return Err("this approver key is not one the warrant accepts".into());
+    }
 
-    eprintln!("tool      {}", request["tool"].as_str().unwrap_or_default());
-    eprintln!("arguments {}", request["arguments"]);
-    eprintln!(
-        "warrant   {}",
-        request["warrant_id"].as_str().unwrap_or_default()
-    );
-    eprintln!("request   {}", hex::encode(hash));
+    // Everything shown here comes from the verified request and warrant.
+    eprintln!("tool      {}", request.tool);
+    eprintln!("arguments {}", serde_json::to_string(&request.args)?);
+    eprintln!("message   {}", request.message);
+    eprintln!("warrant   {}", leaf.id());
+    eprintln!("request   {}", hex::encode(request.request_hash));
     eprintln!("expires   in {} seconds", args.ttl);
     if !args.yes && !confirm()? {
         return Err("not approved".into());
     }
 
-    let approval = sign_approval(&approver, hash, args.ttl)?;
+    let who = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
+    let approval = tenuo::sdk::approve_request(
+        &request,
+        &leaf,
+        &approver,
+        format!("tenuo-openshell:{who}"),
+        Duration::from_secs(args.ttl.max(1)),
+    )
+    .map_err(|error| format!("approval refused: {error}"))?
+    .to_cbor_b64()?;
     match &sandbox {
         Some(sandbox) => {
             openshell_exec(sandbox, &[AGENT, "install-approval", &approval])?;
             println!(
                 "approved {} in sandbox {}",
-                hex::encode(hash),
+                hex::encode(request.request_hash),
                 sandbox.sandbox
             );
         }
@@ -517,58 +541,35 @@ fn find_request<'a>(listing: &'a Value, wanted: &str) -> Result<&'a Value> {
     }
 }
 
-/// Recompute the hash from what the approver is shown, so the signature
-/// covers exactly that tool, those arguments, that warrant, and that holder.
-fn verified_request_hash(request: &Value, approver: &PublicKey) -> Result<[u8; 32]> {
-    let tool = request["tool"]
-        .as_str()
-        .ok_or("pending request has no tool")?;
-    let warrant_id = request["warrant_id"]
-        .as_str()
-        .ok_or("pending request has no warrant")?;
-    let holder = read_public(
-        request["holder"]
+/// Verify a pending record before anything in it is shown.
+///
+/// The sandbox wrote the record, so none of it is trusted: the warrant chain
+/// must verify to one of `roots`, and the request core produced must match
+/// that warrant (hash, holder, gate message, approvers, threshold, expiry).
+fn review(record: &Value, roots: &[PublicKey]) -> Result<(ApprovalRequest, Warrant)> {
+    let request: ApprovalRequest = serde_json::from_value(record["request"].clone())
+        .map_err(|_| "pending record has no approval request")?;
+    let chain = tenuo::meta_envelope::decode_warrant_chain(
+        record["warrant"]
             .as_str()
-            .ok_or("pending request has no holder")?,
-    )?;
-    let arguments = &request["arguments"];
-    let call = tenuo::sdk::prelude::Call::try_from_json(tool, arguments)
-        .map_err(|_| "pending request arguments cannot be hashed")?;
-    let hash =
-        tenuo::approval::compute_request_hash(warrant_id, tool, call.pop_args(), Some(&holder));
-    if request["request_hash"].as_str() != Some(hex::encode(hash).as_str()) {
-        return Err("pending request hash does not match its tool and arguments".into());
+            .ok_or("pending record has no warrant")?,
+    )
+    .map_err(|error| format!("pending warrant: {error}"))?;
+    let mut authorizer = tenuo::Authorizer::new();
+    for root in roots {
+        authorizer.add_trusted_root(root.clone());
     }
-    let approvers = request["required_approvers"]
-        .as_array()
-        .map(|keys| keys.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
-    if !approvers.is_empty() && !approvers.contains(&hex::encode(approver.to_bytes()).as_str()) {
-        return Err("this approver key is not one the warrant accepts".into());
+    authorizer
+        .verify_chain(&chain)
+        .map_err(|error| format!("pending warrant does not verify to a trusted root: {error}"))?;
+    let leaf = chain.last().ok_or("pending warrant is empty")?.clone();
+    if !request.matches_warrant(&leaf)? {
+        return Err("pending request does not match its warrant".into());
     }
-    Ok(hash)
-}
-
-fn sign_approval(approver: &SigningKey, hash: [u8; 32], ttl: u64) -> Result<String> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    let mut nonce = [0u8; 16];
-    nonce.copy_from_slice(&SigningKey::generate().public_key().to_bytes()[..16]);
-    let who = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
-    let approval = tenuo::approval::SignedApproval::create(
-        tenuo::approval::ApprovalPayload {
-            version: 1,
-            request_hash: hash,
-            nonce,
-            external_id: format!("tenuo-openshell:{who}"),
-            approved_at: now,
-            expires_at: now + ttl.max(1),
-            extensions: None,
-        },
-        approver,
-    );
-    Ok(approval.to_cbor_b64()?)
+    if record["request_hash"].as_str() != Some(hex::encode(request.request_hash).as_str()) {
+        return Err("pending record hash does not match its request".into());
+    }
+    Ok((request, leaf))
 }
 
 fn confirm() -> Result<bool> {
@@ -700,28 +701,21 @@ fn read_secret(path: &Path) -> Result<SigningKey> {
 }
 
 fn decode_chain(bytes: &[u8]) -> Result<Vec<Warrant>> {
-    let text = std::str::from_utf8(bytes).ok().map(str::trim);
-    let decoded = text.and_then(|text| {
-        [
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &base64::engine::general_purpose::URL_SAFE,
-            &base64::engine::general_purpose::STANDARD,
-        ]
-        .into_iter()
-        .find_map(|engine| engine.decode(text).ok())
-    });
-    let raw = decoded.as_deref().unwrap_or(bytes);
-    if let Ok(stack) = tenuo::wire::decode_stack(raw) {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if let Ok(chain) = tenuo::meta_envelope::decode_warrant_chain(text) {
+            return Ok(chain);
+        }
+    }
+    if let Ok(stack) = tenuo::wire::decode_stack(bytes) {
         if !stack.0.is_empty() {
             return Ok(stack.0);
         }
     }
-    Ok(vec![tenuo::wire::decode(raw)?])
+    Ok(vec![tenuo::wire::decode(bytes)?])
 }
 
 fn encode_chain(chain: &[Warrant]) -> Result<String> {
-    let bytes = tenuo::wire::encode_stack(&tenuo::wire::WarrantStack::new(chain.to_vec()))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    Ok(tenuo::meta_envelope::encode_warrant_chain(chain)?)
 }
 
 #[cfg(test)]
@@ -886,39 +880,87 @@ mod tests {
         assert_eq!(chain[1].authorized_holder(), &child.public_key());
     }
 
-    #[test]
-    fn approvals_cover_exactly_what_the_approver_sees() {
-        let holder = SigningKey::generate().public_key();
-        let approver = SigningKey::generate();
-        let arguments = json!({"service": "payments", "replicas": 3});
-        let call = tenuo::sdk::prelude::Call::try_from_json("restart_service", &arguments).unwrap();
-        let hash = tenuo::approval::compute_request_hash(
-            "tnu_wrt_1",
-            "restart_service",
-            call.pop_args(),
-            Some(&holder),
+    fn gated_warrant(issuer: &SigningKey, holder: &SigningKey, approver: &SigningKey) -> Warrant {
+        let mut gates = tenuo::ApprovalGateMap::new();
+        gates.insert(
+            "restart_service".to_string(),
+            tenuo::ToolApprovalGate::whole_tool(),
         );
-        let request = json!({
-            "request_hash": hex::encode(hash),
-            "warrant_id": "tnu_wrt_1",
-            "holder": hex::encode(holder.to_bytes()),
+        Warrant::builder()
+            .capability("restart_service", ConstraintSet::new())
+            .holder(holder.public_key())
+            .required_approvers(vec![approver.public_key()])
+            .min_approvals(1)
+            .extension(
+                tenuo::APPROVAL_GATE_EXTENSION_KEY,
+                tenuo::encode_approval_gate_map(&gates).unwrap(),
+            )
+            .ttl(Duration::from_secs(300))
+            .build(issuer)
+            .unwrap()
+    }
+
+    #[test]
+    fn review_shows_only_a_request_that_matches_a_trusted_warrant() {
+        use std::sync::Arc;
+        use tenuo::sdk::prelude::*;
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let approver = SigningKey::generate();
+        let warrant = gated_warrant(&issuer, &holder, &approver);
+        let authority =
+            PresentedAuthority::new(vec![warrant.clone()], Arc::new(LocalSigner::new(holder)))
+                .unwrap();
+        let mut authorizer = tenuo::Authorizer::new();
+        authorizer.add_trusted_root(issuer.public_key());
+        let guard = Guard::builder()
+            .authorizer(authorizer)
+            .revocation(RevocationMode::TtlOnly {
+                max_lifetime: Duration::from_secs(3600),
+            })
+            .build()
+            .unwrap();
+        let arguments = json!({"service": "payments", "replicas": 3});
+        let call = Call::try_from_json("restart_service", &arguments).unwrap();
+        let Err(denial) = guard.check(&authority, &call) else {
+            panic!("a gated call was allowed without an approval");
+        };
+        let request = denial.approval_request().unwrap().clone();
+        let record = json!({
+            "request_hash": hex::encode(request.request_hash),
             "tool": "restart_service",
             "arguments": arguments,
-            "required_approvers": [hex::encode(approver.public_key().to_bytes())],
+            "request": request,
+            "warrant": encode_chain(std::slice::from_ref(&warrant)).unwrap(),
         });
+        let roots = [issuer.public_key()];
+
+        let (reviewed, leaf) = review(&record, &roots).unwrap();
+        let approval =
+            tenuo::sdk::approve_request(&reviewed, &leaf, &approver, "t", Duration::from_secs(60))
+                .unwrap();
         assert_eq!(
-            verified_request_hash(&request, &approver.public_key()).unwrap(),
-            hash
+            approval.verify().unwrap().request_hash,
+            request.request_hash
         );
 
-        let mut tampered = request.clone();
-        tampered["arguments"]["replicas"] = json!(5);
-        assert!(verified_request_hash(&tampered, &approver.public_key()).is_err());
-        let stranger = SigningKey::generate().public_key();
-        assert!(verified_request_hash(&request, &stranger).is_err());
+        assert!(review(&record, &[SigningKey::generate().public_key()]).is_err());
+        let mut tampered = record.clone();
+        tampered["request"]["args"]["replicas"] = json!(30);
+        assert!(review(&tampered, &roots).is_err());
+        let mut message = record.clone();
+        message["request"]["message"] = json!("Approve a harmless read");
+        assert!(review(&message, &roots).is_err());
+        let other = gated_warrant(&issuer, &SigningKey::generate(), &approver);
+        let mut swapped = record.clone();
+        swapped["warrant"] = json!(encode_chain(&[other]).unwrap());
+        assert!(review(&swapped, &roots).is_err());
+        let mut listed = record.clone();
+        listed["request_hash"] = json!("00".repeat(32));
+        assert!(review(&listed, &roots).is_err());
 
-        let listing = json!([request, {"request_hash": "ffff0000aaaa"}]);
-        let prefix = &hex::encode(hash)[..10];
+        let listing = json!([record, {"request_hash": "ffff0000aaaa"}]);
+        let prefix = &hex::encode(request.request_hash)[..10];
         assert_eq!(
             find_request(&listing, prefix).unwrap()["tool"],
             "restart_service"
