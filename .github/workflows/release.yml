@@ -102,6 +102,10 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.18.4
+      - name: Require release notes in CHANGELOG.md
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ci/release-notes.sh "$TAG" > /dev/null
       - run: make check
       - run: mkdir -p dist python-dist
       - run: uv build --project python/nemo-agent-toolkit-tenuo --out-dir python-dist
@@ -173,4 +177,7 @@ jobs:
       - if: inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ inputs.tag }}" dist/* --verify-tag --generate-notes
+          TAG: ${{ inputs.tag }}
+        run: |
+          ci/release-notes.sh "$TAG" > release-notes.md
+          gh release create "$TAG" dist/* --verify-tag --title "$TAG" --notes-file release-notes.md

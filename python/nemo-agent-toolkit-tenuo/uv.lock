@@ -1079,6 +1079,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "nvidia-nat-core" },
+    { name = "packaging" },
     { name = "tenuo" },
 ]
 
@@ -1093,6 +1094,7 @@ test = [
 requires-dist = [
     { name = "nvidia-nat-core", specifier = ">=1.8,<1.9" },
     { name = "nvidia-nat-test", marker = "extra == 'test'", specifier = ">=1.8,<1.9" },
+    { name = "packaging", specifier = ">=23" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24" },
     { name = "tenuo", specifier = ">=0.3.2,<0.4" },

@@ -28,6 +28,9 @@ classifiers = [
 ]
 dependencies = [
     "nvidia-nat-core>=1.8,<1.9",
+    # nvidia-nat-core 1.8 imports packaging (nat info, the registry handlers)
+    # without declaring it, so a fresh environment cannot list plugins.
+    "packaging>=23",
     "tenuo>=0.3.2,<0.4",
 ]
 

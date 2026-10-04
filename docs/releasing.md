@@ -1,15 +1,45 @@
-# Release and distribution gate
+# Releasing
 
-This repository has a manually dispatched, environment-gated release workflow.
-Its default `publish=false` mode verifies an existing signed version tag,
-builds the Python and Helm artifacts, the operator and sandbox binaries, and
-the multi-platform image, and attaches provenance without publishing to
-registries; the results stay in the workflow run's artifacts. `publish=true`
-additionally publishes to PyPI and GHCR, signs the image and the binary
-archives, and creates the GitHub release with the binaries attached.
-Protect the `release` environment and enable publishing only after package
-ownership, trusted publishing, artifact names, support policy, and rollback
-ownership are agreed.
+Releases are cut by `.github/workflows/release.yml`, a manually dispatched
+workflow that runs in the protected `release` environment. It checks out an
+existing version tag and requires the tag to match the Rust versions and to
+have notes in `CHANGELOG.md`. It then runs `make check` and builds:
+
+- the Python wheel and sdist;
+- the Helm chart;
+- the operator and sandbox binaries; and
+- the multi-platform image.
+
+It attests the build provenance of all of them.
+
+- `publish=false` is a dry run. The artifacts stay in the workflow run.
+- `publish=true` also pushes the image to GHCR and signs it, signs the binary
+  archives, publishes the Python package to PyPI, and creates the GitHub
+  release from the `CHANGELOG.md` section.
+
+## One-time setup
+
+Before the first `publish=true` run:
+
+1. **PyPI trusted publisher.** Add a pending publisher for
+   `nemo-agent-toolkit-tenuo` with these values:
+   - owner `tenuo-ai`
+   - repository `tenuo-openshell`
+   - workflow `release.yml`
+   - environment `release`
+
+   The workflow uses no PyPI token.
+2. **`release` environment.** It requires a reviewer, so every publish waits
+   for approval.
+3. **Tag signing.** Configure a key for signed tags, for example an SSH
+   signing key registered with GitHub:
+   `git config gpg.format ssh`, `git config user.signingkey <key>`.
+4. **GHCR package.** After the first push, open the
+   `ghcr.io/tenuo-ai/tenuo-openshell` package settings:
+   - link the package to this repository;
+   - set it to public when the repository is public.
+
+   New packages start private.
 
 ## Pre-release checklist
 
@@ -34,7 +64,10 @@ ownership are agreed.
    unless a supported library interface is deliberately introduced. Image tags
    include the Git tag's `v` prefix, matching the Helm value (for example,
    `v0.1.0`).
-8. Repeat the quickstart using only public artifacts, then verify signatures,
+8. Download the dry run's `release-artifacts`, and check the wheel, chart, and
+   archives. Then dispatch again with `-f publish=true` and approve the
+   `release` environment.
+9. Repeat the quickstart using only public artifacts, then verify signatures,
    checksums, plugin discovery, secure startup, one allowed call, and negative
    authorization cases.
 
@@ -102,6 +135,32 @@ the archive name and `--version`. On macOS, use
 `gh attestation verify` command accepts an extracted binary, such as one
 already copied into a sandbox image.
 
-Do not advertise `pip install`, a container tag, or a support window until the
-corresponding artifact and ownership process exist. Release tags must be
-immutable; fixes ship as a new version.
+## Verifying the image, chart, and package
+
+```bash
+tag=v0.1.0
+
+cosign verify "ghcr.io/tenuo-ai/tenuo-openshell:$tag" \
+  --certificate-identity "https://github.com/tenuo-ai/tenuo-openshell/.github/workflows/release.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+gh attestation verify "tenuo-openshell-${tag#v}.tgz" \
+  --repo tenuo-ai/tenuo-openshell \
+  --signer-workflow tenuo-ai/tenuo-openshell/.github/workflows/release.yml \
+  --source-ref "refs/heads/main"
+helm install tenuo-openshell "tenuo-openshell-${tag#v}.tgz" -f my-values.yaml
+
+python -m pip install "nemo-agent-toolkit-tenuo==${tag#v}"
+nat info components
+```
+
+The chart's default image is the release image for the chart's version, so
+`helm install` needs no image override. Pin by digest in production;
+`cosign verify` prints it.
+
+## After a release
+
+- Run `make demo` and the README quickstart against the public artifacts
+  only.
+- Release tags are immutable. Fixes ship as a new version, with a new
+  `CHANGELOG.md` section.
