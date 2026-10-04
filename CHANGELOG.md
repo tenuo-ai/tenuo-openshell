@@ -111,6 +111,9 @@ All notable changes will be documented here. The format follows
   `tenuo_meta: preserve`.
 - Bodyless Streamable HTTP `GET` and `DELETE` requests are forwarded; other
   bodyless or non-`POST` requests deny.
+- The A2A example docs give the actual reason the example builds its own
+  request. The Tenuo 0.3.2 A2A client does send warrant stacks, but its
+  proof-of-possession signing fails on a missing `tenuo_core.ConstraintValue`.
 
 ### Fixed
 
