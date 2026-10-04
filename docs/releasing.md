@@ -109,7 +109,8 @@ attaches the archives, `SHA256SUMS`, and bundles to the GitHub release.
 
 Download the archive, `SHA256SUMS`, and the archive's `.sigstore.json` bundle
 from the GitHub release into one directory, then check the checksum, the
-signature, and the provenance:
+signature, and the provenance. The bundles use the Sigstore bundle format
+that cosign 3 writes. cosign 2 cannot read them.
 
 ```bash
 tag=v0.1.0
