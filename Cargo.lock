@@ -2363,7 +2363,7 @@ name = "tenuo-openshell-agent"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "ciborium",
  "clap",
  "futures-util",
@@ -2382,7 +2382,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ciborium",
  "clap",
