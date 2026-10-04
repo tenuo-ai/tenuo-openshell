@@ -6,147 +6,94 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
-### Added
+## [0.1.0] - 2026-10-04
 
+First release.
+
+### Supervisor middleware
+
+- OpenShell `HTTP_REQUEST / PRE_CREDENTIALS` supervisor middleware for MCP
+  Streamable HTTP. It verifies each `tools/call` against a Tenuo warrant chain
+  before credential injection. It checks the destination, the holder's proof
+  of possession, argument constraints, signed approvals, and revocation.
+- Production by default: server TLS and OpenShell extension JWT verification
+  are required, and partial security configuration refuses to start.
+- Trust policy keyed by OpenShell's authenticated `sandbox_id`. Each sandbox
+  lists its trusted roots, and the MCP destinations it may reach with the
+  tools each serves. Other destinations deny `tenuo_destination_denied`.
+- Single-use approvals across replicas, backed by Redis or Redis Cluster
+  (`redis://` or `rediss://`). `single_use_tools` accepts each proof for a
+  listed tool once.
+- Versioned policy hot reload that keeps the last valid snapshot. Signed
+  revocation lists with freshness bounds and persistent rollback floors.
+- Strict MCP parsing. Lifecycle methods pass through an allowlist, other
+  methods deny, and `mcp.passthrough_methods` and `mcp.allow_client_responses`
+  are per-sandbox opt-ins. `params._meta.tenuo` is stripped on allow unless
+  the binding sets `tenuo_meta: preserve`.
+- Signed, hash-chained authorization receipts, which can be required before an
+  allow (`--require-receipts`). With `--evaluate-results`, the optional
+  `HTTP_RESPONSE / PRE_RETURN` binding adds signed result receipts and a
+  per-sandbox `max_result_bytes` limit. `receipts export` verifies receipt
+  logs and writes them as JSON lines.
+- `/live` and `/ready` endpoints, Prometheus metrics, and optional
+  OpenTelemetry traces. Logs never contain argument values, and log lines
+  cannot be forged through JSON-RPC ids.
+
+### Sandbox agent and operator CLI
+
+- `tenuo-openshell-agent` runs inside the sandbox. It generates and holds the
+  task's key and holds its warrant, from a file or `TENUO_WARRANT`. A
+  loopback MCP proxy signs each `tools/call`, so the agent's MCP client needs
+  no changes. Out-of-warrant calls are denied locally, and middleware denials
+  come back as JSON-RPC errors.
+- Approvals: pending requests are recorded in the sandbox.
+  `tenuo-openshell approve` verifies the request against the warrant and a
+  trusted root, shows the exact tool and arguments, and signs them. Each
+  approval authorizes one call.
 - Sub-agent delegation: `tenuo-openshell-agent delegate` attenuates the
-  sandbox's warrant to a sub-agent's key, keeping the parent's constraints per
-  tool, with `--terminal` capping chain depth. `tenuo-openshell delegate` does
-  the same across two sandboxes. The demo shows a terminal sub-agent, a
-  cross-sandbox read, and a running child denied after its ancestor is revoked.
-- Demo row "restart other service": the OpenShell policy admits
-  `restart_service` and task A's warrant names it for `payments`, so a restart
-  of `auth` is denied by Tenuo and reaches the effect under OpenShell alone.
-- OpenShell `HTTP_REQUEST / PRE_CREDENTIALS` supervisor middleware with secure
-  TLS and JWT defaults.
-- Tenuo warrant, proof-of-possession, constraint, approval, and replay checks.
-- NeMo Agent Toolkit 1.8 middleware plugin with application-scoped authority.
-- Authenticated real-gateway demo, offline signed receipt audit, baseline
-  comparison, and A2A interoperability proof.
-- Redis-backed atomic cross-replica approval replay protection.
-- Atomic versioned policy reload, signed revocation enforcement with persistent
-  rollback floors, health/readiness endpoints, and Prometheus metrics.
-- Hardened HA Helm deployment with required receipt persistence and network
-  isolation.
-- Native Redis Cluster replay support and provider-neutral policy readiness.
-- `single_use_tools` accepts each proof of possession for a listed tool once
-  across the deployment; resends deny `tenuo_pop_replayed`.
-- Per-sandbox `mcp.passthrough_methods` and `mcp.allow_client_responses`.
-- `tenuo-openshell-agent`: in-sandbox holder key, warrant from a file or
-  `TENUO_WARRANT`, and a loopback MCP proxy that signs `tools/call`, denies
-  out-of-warrant calls locally, and turns OpenShell denials into JSON-RPC
-  errors.
-- `tenuo-openshell`: `policy add`, `register`, `warrant issue`, and
-  `provision` operator commands.
-- Demo scenario with an unmodified MCP Python SDK client through the signing
-  proxy.
-- Approvals through the sandbox proxy: pending requests recorded in the
-  sandbox, `tenuo-openshell approve` to review and sign them (hash recomputed
-  from what the approver sees), and single-use attachment on retry.
-- NeMo Agent Toolkit 1.8 ReAct agent example with a human approval step,
-  runnable without a model key, and an in-sandbox approval scenario in the
-  OpenShell demo.
-- Demo scenario where the sandbox generates its holder key and signs calls at
-  run time; documented holder-key custody model.
-- Threat model covering assets, trust boundaries, attackers, controls, and
-  residual risks.
-- cargo-fuzz targets for MCP body parsing, policy loading, and the full
-  decision, with committed seeds and a daily and pull-request Fuzz workflow.
-- `cargo deny` policy for advisories, licenses, and sources, a Supply chain
-  workflow, and Dependabot for Cargo, uv, GitHub Actions, and Docker.
-- Optional `HTTP_RESPONSE / PRE_RETURN` binding (`--evaluate-results`): signed
-  result receipts with the SHA-256, size, and status of each allowed call's
-  result, linked to its authorization receipt, in `<log>.results.jsonl`.
-- Per-sandbox `max_result_bytes` withholds larger results with
-  `tenuo_result_too_large`, or `tenuo_result_unmeasurable` when a limited
-  result cannot be measured.
-- Optional OpenTelemetry traces over OTLP gRPC, one span per decision,
-  configured by the standard `OTEL_*` variables and off by default.
-- `receipts export` verifies a receipt log's signatures and hash chain and
-  writes one JSON object per receipt for log pipelines.
-- Result metrics: `tenuo_openshell_results_total`,
-  `tenuo_openshell_result_receipt_failures_total`, and
-  `tenuo_openshell_result_correlation_evictions_total`.
-- Helm values for result evaluation and OTLP export.
-- The sandbox proxy reports a withheld result as a call that already ran, so
-  agents do not retry it as if it were denied.
-- The release workflow builds `tenuo-openshell-agent` as static musl binaries
-  for Linux x86_64 and aarch64, and `tenuo-openshell` for those targets and
-  macOS arm64. It smoke-tests each binary, lists the archives in `SHA256SUMS`,
-  attests their build provenance, and on publish signs them with keyless
-  cosign and attaches them to the GitHub release.
+  warrant to a sub-agent's key, and `tenuo-openshell delegate` does the same
+  across sandboxes. `--terminal` prevents further delegation. Revoking any
+  warrant in a chain denies every call that carries it.
+- `tenuo-openshell` also provides `policy add`, `register`, `warrant issue`,
+  `provision`, and `receipts export`.
 
-### Changed
+### NeMo Agent Toolkit
 
-- `approval_replay_protection` defaults to `true`. A policy that omits it
-  now makes approvals single-use, which needs Redis in production or
-  `--allow-in-memory-replay` for a single-instance evaluation. Set it to
-  `false` explicitly to keep the old behavior.
-- Deployment guide documents policy-file integrity: the file is unsigned and
-  controls authorization.
-- Dependencies: tonic, prost, and their code generators 0.14 (codegen moved
-  to `tonic-prost-build`), OpenTelemetry 0.33, axum 0.8, Redis 1.7,
-  jsonwebtoken 11 (with its `rust_crypto` backend; without a backend every
-  OpenShell JWT check panics), and base64 0.23.
-- The fuzz crate is a member of the root workspace and shares its
-  `Cargo.lock`, so Dependabot Cargo updates no longer leave a stale
-  `fuzz/Cargo.lock` behind. It is not a default member: `cargo test` and
-  `cargo build` skip it, and `cargo clippy --workspace` and `cargo fmt --all`
-  cover it.
-- `--replay-redis-url` and `--replay-redis-cluster-urls` accept `rediss://`
-  for Redis over TLS.
-- `tenuo-openshell --version` prints `tenuo-openshell` instead of the package
-  name `tenuo-openshell-middleware`.
-- Release `SHA256SUMS` lists bare file names, so `sha256sum -c` works in the
-  directory the release files were downloaded to.
-- The release workflow checks that `agent/Cargo.toml` matches the tag.
-- Requires Tenuo 0.3.2. The integration now uses Tenuo core for warrant-chain
-  encoding (`meta_envelope`), strict JSON parsing in the middleware
-  (`parse_json_strict`), approval review and signing (`matches_warrant`,
-  `approve_request`), and authorization-receipt chain verification
-  (`receipt::verify_chain`), instead of its own copies.
-- `tenuo-openshell approve` requires `--trusted-root`. It verifies the pending
-  warrant chain to that root and checks the recorded request against the
-  warrant before showing anything. Pending requests now carry the request
-  Tenuo produced and the warrant chain.
-- Receipt export rejects an authorization log signed by more than one key,
-  even without `--verify-with`.
-- Proofs from Tenuo 0.3.2 cover null argument values. Calls signed by older
-  clients that drop `null` arguments are denied; upgrade those clients.
-- The demo MCP server no longer rewrites `_meta.tenuo` to standard base64;
-  Tenuo 0.3.2 verifiers accept either alphabet.
-- GitHub Actions in every workflow are pinned by commit SHA.
-- Requests rejected before evaluation (oversized body, invalid binding config,
-  missing target) now count in the decision metrics.
-- Sandbox policies must list `destinations`: the MCP host, port, optional
-  path, and tools each serves. Other destinations, and tools a destination
-  does not serve, deny `tenuo_destination_denied`.
-- The middleware strips `params._meta.tenuo` on allow unless the binding sets
-  `tenuo_meta: preserve`.
-- Bodyless Streamable HTTP `GET` and `DELETE` requests are forwarded; other
-  bodyless or non-`POST` requests deny.
-- The A2A example docs give the actual reason the example builds its own
-  request. The Tenuo 0.3.2 A2A client does send warrant stacks, but its
-  proof-of-possession signing fails on a missing `tenuo_core.ConstraintValue`.
+- `nemo-agent-toolkit-tenuo`, an Agent Toolkit 1.8 middleware plugin that
+  denies unauthorized function calls before `call_next`, using
+  application-scoped authority.
+- A ReAct agent example with a human approval step that runs without a model
+  key.
 
-### Fixed
+### Deployment and supply chain
 
-- The middleware and the in-sandbox agent no longer write Tenuo's per-denial
-  message, which can quote argument values, to stderr.
-- Denial receipts commit to the sandbox's trusted-roots digest when they are
-  built.
-- `TENUO_DECISION_LOG` is read once rather than on every decision.
-- Decision and replay-cleanup log lines write a JSON-RPC id outside
-  `[A-Za-z0-9-_.:/+@]` (or longer than 128 bytes) as `hex:` plus its bytes, so
-  a sandbox-chosen id cannot add log lines or fields.
-- Unified approval replay semantics across in-memory, standalone Redis, and
-  Redis Cluster backends; approval nonces are single-use per deployment.
-- Release approval reservations when required receipt persistence prevents an
-  effect from being allowed. Unconfirmed cleanup remains a bounded pending
-  lease instead of being reported as a consumed approval replay. An allow
-  receipt is written only after the approval nonce commit succeeds.
-- Label enforcement-decision timing accurately when it includes replay and
-  receipt I/O.
-- Restricted admin and DNS NetworkPolicy rules, made DNS selectors configurable,
-  aligned Helm and release image tags, and scaled voluntary disruption policy.
+- HA Helm chart with Redis replay, persistent receipts and rollback floors,
+  probes, a pod disruption budget, a default-deny NetworkPolicy, and a
+  read-only root filesystem.
+- Non-root container image for `linux/amd64` and `linux/arm64`, with SBOM and
+  build provenance, signed with keyless cosign.
+- Static musl binaries of `tenuo-openshell-agent` and `tenuo-openshell` for
+  Linux x86_64 and aarch64, and `tenuo-openshell` for macOS arm64. They are
+  signed with keyless cosign, listed in `SHA256SUMS`, and attested.
+- Threat model, architecture, deployment, operations, receipts, and provider
+  documentation.
+- cargo-fuzz targets for MCP parsing, policy loading, and the full decision.
+  cargo-deny checks advisories, licenses, and sources. GitHub Actions are
+  pinned by commit.
 
-There has not yet been a public release.
+### Demo
+
+- An authenticated demo against a pinned, real OpenShell v0.1.2 gateway. It
+  compares every scenario with and without Tenuo, confirms that denied calls
+  never reach the tool, and verifies every receipt offline. It also covers an
+  A2A handoff and an unmodified MCP SDK client.
+
+### Compatibility
+
+- NVIDIA OpenShell v0.1.2 (`6648bd0c290efbc41ba131ee9831ee45cd431f94`),
+  supervisor middleware protocol `openshell.middleware.v1` 1.0.
+- NVIDIA NeMo Agent Toolkit `nvidia-nat-core` 1.8.x.
+- Tenuo 0.3.2 or later within 0.3.
+
+[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tenuo-ai/tenuo-openshell/releases/tag/v0.1.0
