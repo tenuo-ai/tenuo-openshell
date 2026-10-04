@@ -225,9 +225,10 @@ impl PolicySet {
             .and_then(Value::as_u64)
             .filter(|secs| *secs > 0)
             .ok_or(PolicyError::Invalid)?;
+        // Approvals are single-use unless a policy explicitly opts out.
         let approval_replay = match object.get("approval_replay_protection") {
             Some(value) => value.as_bool().ok_or(PolicyError::Invalid)?,
-            None => false,
+            None => true,
         };
         let sandboxes = object
             .get("sandboxes")
@@ -884,6 +885,25 @@ mod tests {
             "sandboxes": { "sandbox": sandbox }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn approval_replay_protection_is_on_unless_disabled() {
+        let root = SigningKey::generate();
+        let destinations = json!([{"host": "mcp.test", "port": 443, "tools": ["*"]}]);
+        let unset = sandbox_document(&root, json!({"destinations": destinations}));
+        assert!(PolicySet::from_json(&unset)
+            .unwrap()
+            .replay_store()
+            .is_some());
+
+        let mut disabled: Value = serde_json::from_slice(&unset).unwrap();
+        disabled["approval_replay_protection"] = json!(false);
+        let disabled = serde_json::to_vec(&disabled).unwrap();
+        assert!(PolicySet::from_json(&disabled)
+            .unwrap()
+            .replay_store()
+            .is_none());
     }
 
     #[test]

@@ -35,6 +35,11 @@ cargo run --release -- \
   --admin-listen 0.0.0.0:9090
 ```
 
+Use a `rediss://` URL to connect to Redis over TLS. The server certificate
+is verified against the system trust store. Replay keys carry approval and
+proof identities, so use TLS whenever Redis is reachable from outside the
+middleware's network.
+
 For native Redis Cluster, replace `--replay-redis-url` with:
 
 ```bash
@@ -128,6 +133,25 @@ A missing sandbox, missing root, unlisted destination, unreadable policy, or
 unavailable verifier denies the request. See
 [Architecture](architecture.md#destination-binding) for why destinations are
 required.
+
+Top-level `approval_replay_protection` defaults to `true`: each approval nonce
+is accepted once across the deployment, which requires Redis in production
+(see [Replay protection](#replay-protection)). Setting it to `false` makes an
+approval reusable until it expires; do that only for single-call evaluation.
+
+### Policy integrity
+
+The policy file is not signed. Whoever can write it chooses the trusted issuers
+for every sandbox, so it is as sensitive as the issuer keys:
+
+- Mount it read-only into the middleware, and limit who can change its source
+  (for example the ConfigMap and the RBAC that can edit it).
+- Review policy changes like code: a new trusted root or a wider destination
+  grants authority.
+- A provider that fetches snapshots must authenticate them before returning
+  them; see [Provider integration](providers.md).
+- Keep `version` monotonic. The middleware refuses a lower version, so an old
+  file cannot be replayed onto a running replica.
 
 Policy files are versioned and polled. A valid higher version replaces the
 active snapshot atomically. Invalid or rolled-back updates preserve the last
