@@ -48,6 +48,9 @@ enum Command {
     Warrant(WarrantCommand),
     /// Generate a holder key in a sandbox, issue a warrant to it, and install it.
     Provision(ProvisionArgs),
+    /// Delegate part of one sandbox's authority to another sandbox. The parent
+    /// sandbox signs the child warrant; only public keys and warrants cross.
+    Delegate(DelegateArgs),
     /// Review a pending approval request, sign it, and install it.
     Approve(ApproveArgs),
 }
@@ -155,6 +158,31 @@ struct SandboxArgs {
 }
 
 #[derive(Args)]
+struct DelegateArgs {
+    /// Sandbox whose agent holds the parent warrant and signs the delegation.
+    #[arg(long)]
+    from_sandbox: String,
+    /// Sandbox that receives a new holder key and the narrowed warrant.
+    #[arg(long)]
+    to_sandbox: String,
+    /// Tools to pass on, comma-separated. Each keeps the parent's constraints.
+    #[arg(long, value_delimiter = ',', required = true)]
+    tools: Vec<String>,
+    /// Child lifetime in seconds, never longer than the parent's.
+    #[arg(long, default_value_t = 300)]
+    ttl: u64,
+    /// The child sandbox may not delegate further.
+    #[arg(long)]
+    terminal: bool,
+    /// OpenShell CLI to run.
+    #[arg(long, default_value = "openshell")]
+    openshell: String,
+    /// Passed to the OpenShell CLI as `--gateway-endpoint`.
+    #[arg(long)]
+    gateway_endpoint: Option<String>,
+}
+
+#[derive(Args)]
 struct ApproveArgs {
     /// Request hash from the agent's `-32002` error or `tenuo-openshell-agent
     /// pending`. A unique prefix is enough.
@@ -215,6 +243,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Provision(args) => provision(&args),
         Command::Approve(args) => approve(&args),
+        Command::Delegate(args) => delegate(&args),
     }
 }
 
@@ -421,6 +450,53 @@ fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
     let child = builder.build(&parent_key)?;
     chain.push(child);
     Ok(chain)
+}
+
+/// Relay a delegation between two sandboxes.
+///
+/// OpenShell has no sandbox-to-sandbox channel, so this moves the public
+/// material: the child's public key to the parent, and the child chain the
+/// parent's agent signs back to the child. No private key leaves a sandbox.
+fn delegate(args: &DelegateArgs) -> Result<()> {
+    let sandbox = |name: &str| SandboxArgs {
+        sandbox: name.to_string(),
+        openshell: args.openshell.clone(),
+        gateway_endpoint: args.gateway_endpoint.clone(),
+    };
+    let (parent, child) = (sandbox(&args.from_sandbox), sandbox(&args.to_sandbox));
+    let public = openshell_exec(&child, &[AGENT, "keygen"])?;
+    let public = public.lines().last().unwrap_or_default().trim().to_string();
+    read_public(&public)?;
+    let tools = args.tools.join(",");
+    let ttl = args.ttl.to_string();
+    let mut command = vec![
+        AGENT,
+        "delegate",
+        "--child-pub",
+        &public,
+        "--tools",
+        &tools,
+        "--ttl",
+        &ttl,
+    ];
+    if args.terminal {
+        command.push("--terminal");
+    }
+    let chain = openshell_exec(&parent, &command)?;
+    let chain = chain.lines().last().unwrap_or_default().trim().to_string();
+    let decoded = decode_chain(chain.as_bytes())?;
+    let leaf = decoded.last().ok_or("empty delegated chain")?;
+    if leaf.authorized_holder() != &read_public(&public)? {
+        return Err("the parent returned a warrant for a different holder".into());
+    }
+    openshell_exec(&child, &[AGENT, "install-warrant", &chain])?;
+    println!("from    {}", args.from_sandbox);
+    println!("to      {}", args.to_sandbox);
+    println!("holder  {public}");
+    println!("warrant {}", leaf.id());
+    println!("depth   {}", decoded.len());
+    println!("tools   {}", leaf.tools().join(", "));
+    Ok(())
 }
 
 fn provision(args: &ProvisionArgs) -> Result<()> {

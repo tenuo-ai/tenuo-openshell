@@ -660,6 +660,17 @@ fn issue(
         .ttl(Duration::from_secs(300))
         .build(&issuer)?;
 
+    // A signed revocation list naming Task A's warrant. The demo applies it
+    // late in the run to show that revoking an ancestor reaches a running
+    // descendant. The issuer secret is discarded below, so it is signed now.
+    let revocations = output.join("revocations");
+    fs::create_dir_all(&revocations)?;
+    let srl = tenuo::SignedRevocationList::builder()
+        .revoke(warrant_a.id().to_string())
+        .version(1)
+        .build(&issuer)?;
+    fs::write(revocations.join("task-a.srl"), srl.to_base64()?)?;
+
     let warrants = output.join("warrants");
     fs::create_dir_all(&warrants)?;
     fs::write(

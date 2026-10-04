@@ -76,10 +76,25 @@ private key never leaves the sandbox. See
     `tenuo_result_too_large`. The block happens after the call, so it limits
     what reaches the agent; it does not undo the read.
 
+19. The provisioned agent delegates `read_logs`, terminally, to a sub-agent
+    with its own key in the same sandbox. The sub-agent's read, JSON-RPC id
+    19, is allowed with a three-link chain. Its restart is refused inside the
+    sandbox with `tool-not-authorized`, and its attempt to delegate further is
+    refused by attenuation.
+
+20. `tenuo-openshell delegate` has the first sandbox's agent delegate
+    `read_logs` to a key generated in the second sandbox. The second sandbox
+    reads with it as JSON-RPC id 21. Only public keys and warrants cross.
+
+21. After the approval flow, a policy update installs a signed revocation list
+    that names only Task A's warrant. The second sandbox's next read, id 22,
+    carries Task A's warrant as an ancestor and is denied `tenuo_revoked`.
+
 The middleware runs with `--evaluate-results`. Each allowed call through
 OpenShell also gets a result receipt: the status, byte count, and SHA-256 of
 the returned body, linked to the call's allow receipt by hash. Step 18's
-receipt records the block instead of a digest.
+receipt records the block instead of a digest. Steps 19 and 20 add result
+receipts for ids 19 and 21.
 
 The A2A step is maintained under
 [`examples/interoperability`](../interoperability/README.md). It is an

@@ -637,6 +637,77 @@ mod tests {
     }
 
     #[test]
+    fn revoking_an_ancestor_denies_a_running_child() {
+        let issuer = SigningKey::generate();
+        let parent_holder = SigningKey::generate();
+        let child_holder = SigningKey::generate();
+        let parent = warrant(&issuer, &parent_holder, "read_logs");
+        let child = parent
+            .attenuate()
+            .holder(child_holder.public_key())
+            .tool("read_logs", ConstraintSet::new())
+            .ttl(std::time::Duration::from_secs(60))
+            .build(&parent_holder)
+            .expect("child");
+        let chain = [parent.clone(), child.clone()];
+        let arguments = json!({"service": "payments"});
+        let body = tools_call(
+            "read_logs",
+            arguments.clone(),
+            Some(sign_chain(&chain, &child_holder, "read_logs", &arguments)),
+        );
+        let directory = tempfile::tempdir().expect("tempdir");
+        let policy_with = |srl: &tenuo::SignedRevocationList| {
+            let document = json!({
+                "version": 1,
+                "max_warrant_lifetime_secs": 3600,
+                "sandboxes": {
+                    "sbx": {
+                        "trusted_roots": [hex::encode(issuer.public_key().to_bytes())],
+                        "destinations": destinations(),
+                        "revocation": {
+                            "signed_list_base64": srl.to_base64().expect("encoded srl"),
+                            "max_staleness_secs": 300,
+                            "rollback_floor_path": directory.path().join(format!("floor-{}.json", srl.version()))
+                        }
+                    }
+                }
+            });
+            PolicySet::from_json(document.to_string().as_bytes()).expect("policy")
+        };
+        let empty = tenuo::SignedRevocationList::builder()
+            .version(1)
+            .build(&issuer)
+            .expect("srl");
+        let before = evaluate(
+            &policy_with(&empty),
+            "sbx",
+            true,
+            &body,
+            MetaMode::Strip,
+            None,
+        );
+        assert!(before.allow, "{}", before.reason_code);
+
+        // The list names only the parent. The child, still in use, is denied.
+        let revoked = tenuo::SignedRevocationList::builder()
+            .revoke(parent.id().to_string())
+            .version(2)
+            .build(&issuer)
+            .expect("srl");
+        let after = evaluate(
+            &policy_with(&revoked),
+            "sbx",
+            true,
+            &body,
+            MetaMode::Strip,
+            None,
+        );
+        assert!(!after.allow);
+        assert_eq!(after.reason_code, reason::REVOKED);
+    }
+
+    #[test]
     fn matching_tool_is_allowed_and_can_strip_meta() {
         let issuer = SigningKey::generate();
         let holder = SigningKey::generate();

@@ -147,6 +147,52 @@ fn check_holder(chain: &[Warrant], holder: &PublicKey) -> Result<(), AuthorityEr
     Ok(())
 }
 
+/// Attenuate the holder's warrant to a child holder.
+///
+/// The child gets `tools`, each with exactly the parent's constraints, and a
+/// lifetime of at most `ttl`. A tool the parent does not hold is refused here
+/// with a clear message; Tenuo core refuses any widening independently when
+/// the child is built and again when the chain is verified. The parent signs
+/// with its own key, which never leaves this process.
+///
+/// `terminal` sets the child's maximum depth to its own depth, so Tenuo core
+/// refuses any further delegation from it (`Warrant::is_terminal`).
+pub fn delegate(
+    key: &SigningKey,
+    chain: &[Warrant],
+    child: &PublicKey,
+    tools: &[String],
+    ttl: Duration,
+    terminal: bool,
+) -> Result<Vec<Warrant>, AuthorityError> {
+    let leaf = chain.last().ok_or(AuthorityError::NoWarrant)?;
+    check_holder(chain, &key.public_key())?;
+    if tools.is_empty() {
+        return Err(AuthorityError::Warrant(
+            "name at least one tool to delegate".to_string(),
+        ));
+    }
+    let granted = leaf
+        .capabilities()
+        .ok_or_else(|| AuthorityError::Warrant("the warrant grants no tools".to_string()))?;
+    let mut builder = leaf.attenuate().holder(child.clone()).ttl(ttl);
+    if terminal {
+        builder = builder.max_depth(leaf.depth() + 1);
+    }
+    for tool in tools {
+        let constraints = granted.get(tool).ok_or_else(|| {
+            AuthorityError::Warrant(format!("the parent warrant does not grant {tool}"))
+        })?;
+        builder = builder.tool(tool.clone(), constraints.clone());
+    }
+    let child = builder
+        .build(key)
+        .map_err(|error| AuthorityError::Warrant(format!("attenuation refused: {error}")))?;
+    let mut delegated = chain.to_vec();
+    delegated.push(child);
+    Ok(delegated)
+}
+
 /// The key plus the source of the current warrant.
 pub struct Holder {
     key: SigningKey,
@@ -306,6 +352,109 @@ mod tests {
             WarrantSource::File(warrant_path),
         );
         assert_eq!(reader.chain().unwrap()[0].id(), mine.id());
+    }
+
+    #[test]
+    fn delegation_narrows_to_named_tools_with_the_parents_constraints() {
+        use tenuo::Exact;
+        let issuer = SigningKey::generate();
+        let parent = SigningKey::generate();
+        let child = SigningKey::generate();
+        let mut read = ConstraintSet::new();
+        read.insert("service", Exact::new("payments"));
+        let root = Warrant::builder()
+            .capability("read_logs", read)
+            .capability("restart_service", ConstraintSet::new())
+            .holder(parent.public_key())
+            .ttl(Duration::from_secs(300))
+            .build(&issuer)
+            .unwrap();
+        let chain = delegate(
+            &parent,
+            std::slice::from_ref(&root),
+            &child.public_key(),
+            &["read_logs".to_string()],
+            Duration::from_secs(60),
+            false,
+        )
+        .unwrap();
+        assert_eq!(chain.len(), 2);
+        let leaf = &chain[1];
+        assert_eq!(leaf.tools(), vec!["read_logs".to_string()]);
+        assert_eq!(leaf.authorized_holder(), &child.public_key());
+        let mut authorizer = tenuo::Authorizer::new();
+        authorizer.add_trusted_root(issuer.public_key());
+        authorizer.verify_chain(&chain).unwrap();
+        let other: std::collections::HashMap<String, tenuo::ConstraintValue> = [(
+            "service".to_string(),
+            tenuo::ConstraintValue::String("auth".into()),
+        )]
+        .into();
+        assert!(
+            leaf.check_constraints("read_logs", &other).is_err(),
+            "constraint was inherited"
+        );
+
+        // A child cannot hand out what it does not hold, and only the holder signs.
+        let grandchild = SigningKey::generate().public_key();
+        let refused = delegate(
+            &child,
+            &chain,
+            &grandchild,
+            &["restart_service".to_string()],
+            Duration::from_secs(30),
+            false,
+        );
+        assert!(
+            matches!(refused, Err(AuthorityError::Warrant(message)) if message.contains("restart_service"))
+        );
+        assert!(matches!(
+            delegate(
+                &parent,
+                &chain,
+                &grandchild,
+                &["read_logs".to_string()],
+                Duration::from_secs(30),
+                false
+            ),
+            Err(AuthorityError::WrongHolder)
+        ));
+    }
+
+    #[test]
+    fn a_terminal_child_cannot_delegate_further() {
+        let issuer = SigningKey::generate();
+        let parent = SigningKey::generate();
+        let child = SigningKey::generate();
+        let root = Warrant::builder()
+            .capability("read_logs", ConstraintSet::new())
+            .holder(parent.public_key())
+            .ttl(Duration::from_secs(300))
+            .build(&issuer)
+            .unwrap();
+        let tools = ["read_logs".to_string()];
+        let chain = delegate(
+            &parent,
+            std::slice::from_ref(&root),
+            &child.public_key(),
+            &tools,
+            Duration::from_secs(60),
+            true,
+        )
+        .unwrap();
+        assert!(chain[1].is_terminal());
+        assert!(!chain[0].is_terminal());
+        let refused = delegate(
+            &child,
+            &chain,
+            &SigningKey::generate().public_key(),
+            &tools,
+            Duration::from_secs(30),
+            false,
+        );
+        assert!(
+            matches!(refused, Err(AuthorityError::Warrant(message)) if message.contains("attenuation refused"))
+        );
     }
 
     #[test]
