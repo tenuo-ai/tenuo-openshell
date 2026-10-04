@@ -79,6 +79,11 @@ All notable changes will be documented here. The format follows
   to `tonic-prost-build`), OpenTelemetry 0.33, axum 0.8, Redis 1.7,
   jsonwebtoken 11 (with its `rust_crypto` backend; without a backend every
   OpenShell JWT check panics), and base64 0.23.
+- The fuzz crate is a member of the root workspace and shares its
+  `Cargo.lock`, so Dependabot Cargo updates no longer leave a stale
+  `fuzz/Cargo.lock` behind. It is not a default member: `cargo test` and
+  `cargo build` skip it, and `cargo clippy --workspace` and `cargo fmt --all`
+  cover it.
 - `--replay-redis-url` and `--replay-redis-cluster-urls` accept `rediss://`
   for Redis over TLS.
 - `tenuo-openshell --version` prints `tenuo-openshell` instead of the package

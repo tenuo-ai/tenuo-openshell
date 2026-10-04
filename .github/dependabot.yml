@@ -8,14 +8,6 @@ updates:
       cargo-minor:
         update-types: [minor, patch]
 
-  - package-ecosystem: cargo
-    directory: /fuzz
-    schedule:
-      interval: monthly
-    groups:
-      fuzz:
-        patterns: ["*"]
-
   # The Agent Toolkit plugin is locked with uv; the uv ecosystem updates
   # uv.lock together with pyproject.toml.
   - package-ecosystem: uv

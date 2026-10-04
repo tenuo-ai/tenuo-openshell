@@ -11,7 +11,13 @@ homepage = "https://tenuo.ai"
 publish = false
 
 [workspace]
-members = [".", "agent"]
+members = [".", "agent", "fuzz"]
+# The fuzz targets are libFuzzer mains that never exit, and `cargo test
+# --all-targets` selects bins even when they set `test = false`, so plain
+# `cargo test` and `cargo build` leave them out. `cargo clippy --workspace` and
+# `cargo fmt --all` still cover them, and they share this lockfile so a
+# dependency update cannot leave a second lockfile behind.
+default-members = [".", "agent"]
 
 [[bin]]
 name = "tenuo-openshell-middleware"

@@ -22,7 +22,7 @@ Two binaries are involved:
 Build both from source until release artifacts are published:
 
 ```bash
-cargo build --release --locked --workspace --bins
+cargo build --release --locked --bins
 ```
 
 Copy `target/release/tenuo-openshell-agent` into the sandbox image, for

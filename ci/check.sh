@@ -6,10 +6,10 @@ cd "$ROOT"
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --all-targets --locked
-cargo build --release --locked --workspace
-cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
-cargo clippy --manifest-path fuzz/Cargo.toml --bins --locked -- -D warnings
+# fmt and clippy cover the fuzz crate; test and build use the default members,
+# which leave out its libFuzzer mains.
+cargo test --all-targets --locked
+cargo build --release --locked
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny check --hide-inclusion-graph
 fi
