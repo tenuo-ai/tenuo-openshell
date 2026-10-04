@@ -17,7 +17,7 @@ process and stored in its own file, and the sandbox receives only the signed
 body. The issuer secret is not written. The attenuation process reads Task A's
 key and the child public key. It does not read the child secret.
 
-Step 16 uses the production path instead. `tenuo-openshell provision`
+Step 17 uses the production path instead. `tenuo-openshell provision`
 generates the holder key inside the sandbox and installs a warrant that Task A
 delegates to it. An unmodified MCP Python SDK client, with no Tenuo code, talks
 to `tenuo-openshell-agent proxy` on loopback, which signs each call. That
@@ -41,31 +41,34 @@ private key never leaves the sandbox. See
 8. Task A reads identity logs in production. Denied
    `tenuo_constraint_denied`.
 9. Task A restarts with `replicas` 8. Denied `tenuo_constraint_denied`.
-10. A restart without a warrant is denied `tenuo_missing_warrant`.
-11. The third holder, in the second sandbox, reads staging payments logs with
+10. Task A restarts `auth` in staging with `replicas` 3. OpenShell admits
+    `restart_service`, but the warrant names it for `payments` only. Denied
+    `tenuo_constraint_denied`; without Tenuo, the restart runs.
+11. A restart without a warrant is denied `tenuo_missing_warrant`.
+12. The third holder, in the second sandbox, reads staging payments logs with
     the narrowed warrant. Allowed.
-12. That holder requests a restart with the same warrant. Denied
+13. That holder requests a restart with the same warrant. Denied
     `tenuo_tool_denied`.
-13. That holder tries to mint a further warrant that adds `restart_service`
+14. That holder tries to mint a further warrant that adds `restart_service`
     back. Attenuation refuses the wider warrant.
-14. The Agent Toolkit middleware, on the host, checks Task B's warrant for
+15. The Agent Toolkit middleware, on the host, checks Task B's warrant for
     the same restart. It denies the call before the function runs. That
     denial is in the receipt report and has no OpenShell or destination
     receipt.
-15. A Tenuo A2A worker receives a full parent/child warrant stack over JSON-RPC
+16. A Tenuo A2A worker receives a full parent/child warrant stack over JSON-RPC
     HTTP with child-holder proof of possession. It executes `read_logs`; a
     separately minted read-only child warrant is denied before the
     `restart_service` skill runs. The machine-readable result is retained as
     `results/evidence/a2a-handoff.json`.
 
-16. `tenuo-openshell provision` gives the first sandbox a read-only warrant
+17. `tenuo-openshell provision` gives the first sandbox a read-only warrant
     for its own key. The MCP SDK client lists tools, reads staging payments
     logs through the signing proxy (allowed, checked by the middleware and the
     destination), and asks for a restart, which the proxy denies inside the
     sandbox with `tool-not-authorized`. The sandbox policy lets only curl and
     the proxy reach the MCP server.
 
-17. A higher policy version limits the first sandbox's tool results to 64
+18. A higher policy version limits the first sandbox's tool results to 64
     bytes. Inside the sandbox, `tenuo-openshell-agent sign` signs another read
     with the provisioned key and warrant, and curl sends it as JSON-RPC id 17.
     The middleware allows it, the read runs, and OpenShell withholds its
@@ -75,7 +78,7 @@ private key never leaves the sandbox. See
 
 The middleware runs with `--evaluate-results`. Each allowed call through
 OpenShell also gets a result receipt: the status, byte count, and SHA-256 of
-the returned body, linked to the call's allow receipt by hash. Step 17's
+the returned body, linked to the call's allow receipt by hash. Step 18's
 receipt records the block instead of a digest.
 
 The A2A step is maintained under

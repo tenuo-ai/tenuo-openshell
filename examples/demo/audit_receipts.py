@@ -257,6 +257,7 @@ def require_demo(records: list[dict[str, object]]) -> None:
         has("2", "openshell", "allow") and "13" not in by_request,
         has("11", "openshell", "deny", "approval-required") and absent("11", "destination"),
         has("12", "openshell", "deny", "approval-invalid") and absent("12", "destination"),
+        has("15", "openshell", "deny", "constraint-violation") and absent("15", "destination"),
         has("14", "agent-toolkit", "deny", "tool-not-authorized")
         and absent("14", "openshell")
         and absent("14", "destination"),
