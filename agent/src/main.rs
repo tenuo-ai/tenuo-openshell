@@ -86,6 +86,27 @@ enum Command {
         approvals_dir: Option<PathBuf>,
         approval: String,
     },
+    /// Attenuate this holder's warrant to a child holder key and print the
+    /// child's warrant chain. The child gets the named tools with this
+    /// warrant's constraints and a shorter lifetime.
+    Delegate {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[command(flatten)]
+        warrant: WarrantArgs,
+        /// Child holder public key: 64 hex characters, as printed by `keygen`.
+        #[arg(long)]
+        child_pub: String,
+        /// Tools to pass on, comma-separated. Each must be in this warrant.
+        #[arg(long, value_delimiter = ',', required = true)]
+        tools: Vec<String>,
+        /// Child lifetime in seconds. Never longer than this warrant's.
+        #[arg(long, default_value_t = 300)]
+        ttl: u64,
+        /// The child may not delegate further.
+        #[arg(long)]
+        terminal: bool,
+    },
     /// Sign one JSON-RPC message from stdin and write it to stdout.
     Sign {
         #[command(flatten)]
@@ -186,6 +207,31 @@ fn run(cli: Cli) -> Result<()> {
             let hash =
                 approvals::ApprovalStore::new(approvals_path(approvals_dir)?).install(&bytes)?;
             println!("installed approval for request {}", hex::encode(hash));
+            Ok(())
+        }
+        Command::Delegate {
+            key,
+            warrant,
+            child_pub,
+            tools,
+            ttl,
+            terminal,
+        } => {
+            let holder = holder(&key, warrant)?;
+            let signing = authority::load_key(&key_path(&key)?)?;
+            let bytes: [u8; 32] = hex::decode(child_pub.trim())?
+                .try_into()
+                .map_err(|_| "child public key must be 32 bytes")?;
+            let child = tenuo::PublicKey::from_bytes(&bytes)?;
+            let chain = authority::delegate(
+                &signing,
+                &holder.chain()?,
+                &child,
+                &tools,
+                std::time::Duration::from_secs(ttl.max(1)),
+                terminal,
+            )?;
+            println!("{}", authority::encode_chain(&chain)?);
             Ok(())
         }
         Command::Sign { key, warrant } => {

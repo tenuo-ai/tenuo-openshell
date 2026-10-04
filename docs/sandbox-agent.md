@@ -242,6 +242,70 @@ sandbox's `max_result_bytes`. The code is `tenuo_result_too_large` or
 retry a non-idempotent tool on those codes. See
 [Tool results](architecture.md#tool-results).
 
+## Sub-agents
+
+An agent can pass part of its authority to a sub-agent that has its own holder
+key. The child warrant is attenuated from the agent's warrant, signed by the
+agent's holder key, and appended to the chain, so the middleware verifies both
+links. Neither key leaves its process or sandbox; only public keys and warrants
+move.
+
+### In the same sandbox
+
+The sub-agent uses its own key, warrant, and approvals directory, selected with
+`TENUO_HOLDER_KEY_FILE`, `TENUO_WARRANT_FILE`, and `TENUO_APPROVALS_DIR`:
+
+```bash
+export TENUO_HOLDER_KEY_FILE=~/.tenuo-subagent/holder.key \
+  TENUO_WARRANT_FILE=~/.tenuo-subagent/warrant \
+  TENUO_APPROVALS_DIR=~/.tenuo-subagent/approvals
+child="$(tenuo-openshell-agent keygen)"
+chain="$(env -u TENUO_HOLDER_KEY_FILE -u TENUO_WARRANT_FILE -u TENUO_APPROVALS_DIR \
+  tenuo-openshell-agent delegate --child-pub "$child" --tools read_logs --ttl 300 --terminal)"
+tenuo-openshell-agent install-warrant "$chain"
+```
+
+The sub-agent runs its own `proxy` on another `--listen` port with the same
+environment.
+
+### In another sandbox
+
+From the operator side, `delegate` runs the same three steps across two
+sandboxes:
+
+```bash
+tenuo-openshell delegate \
+  --from-sandbox planner \
+  --to-sandbox worker \
+  --tools read_logs \
+  --ttl 600 \
+  --terminal
+```
+
+It generates the key in `worker`, has the agent in `planner` sign the child
+warrant, checks that the child names `worker`'s key, and installs it there. The
+trust policy must list `worker` with the same trusted root as `planner`; the
+chain still ends at that root. OpenShell has no sandbox-to-sandbox channel
+([NVIDIA/OpenShell#1049](https://github.com/NVIDIA/OpenShell/issues/1049)),
+so the operator CLI relays the public material.
+
+### What a child gets
+
+- `--tools` names the tools to pass on. Each keeps the parent's argument
+  constraints. Naming a tool the parent does not hold is refused.
+- `--ttl` sets the child's lifetime; it cannot outlive the parent.
+- `--terminal` sets the child's maximum chain depth to its own depth, so it
+  cannot delegate further. Without it, the child may delegate within the
+  parent's limit.
+- Revoking any warrant in the chain denies every call that carries it. The
+  middleware checks each link against the sandbox's signed revocation list, so
+  revoking the agent's warrant also stops a sub-agent that is already running.
+
+Narrowing argument constraints further at delegation time waits on a shared
+constraint parser in Tenuo core
+([tenuo-ai/tenuo#753](https://github.com/tenuo-ai/tenuo/issues/753)). Until
+then, issue a narrower warrant from the orchestrator with `provision`.
+
 ## Current limits
 
 - The proxy's local check trusts the warrant chain's own root. It exists for

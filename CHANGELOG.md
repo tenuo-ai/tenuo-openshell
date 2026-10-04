@@ -8,6 +8,11 @@ All notable changes will be documented here. The format follows
 
 ### Added
 
+- Sub-agent delegation: `tenuo-openshell-agent delegate` attenuates the
+  sandbox's warrant to a sub-agent's key, keeping the parent's constraints per
+  tool, with `--terminal` capping chain depth. `tenuo-openshell delegate` does
+  the same across two sandboxes. The demo shows a terminal sub-agent, a
+  cross-sandbox read, and a running child denied after its ancestor is revoked.
 - Demo row "restart other service": the OpenShell policy admits
   `restart_service` and task A's warrant names it for `payments`, so a restart
   of `auth` is denied by Tenuo and reaches the effect under OpenShell alone.

@@ -198,7 +198,7 @@ def require_demo_results(results: list[dict[str, object]]) -> None:
         (str(row["request_id"]), str(row["outcome"]), str(row["decision_code"])) for row in results
     )
     expected = sorted(
-        [(request_id, "delivered", "None") for request_id in ("1", "2", "2", "5", "9")]
+        [(request_id, "delivered", "None") for request_id in ("1", "2", "2", "5", "9", "19", "21")]
         + [("17", "blocked", "tenuo_result_too_large")]
     )
     if outcomes != expected:
@@ -258,6 +258,8 @@ def require_demo(records: list[dict[str, object]]) -> None:
         has("11", "openshell", "deny", "approval-required") and absent("11", "destination"),
         has("12", "openshell", "deny", "approval-invalid") and absent("12", "destination"),
         has("15", "openshell", "deny", "constraint-violation") and absent("15", "destination"),
+        has("19", "openshell", "allow") and has("19", "destination", "allow") and shows_parent("19"),
+        has("21", "openshell", "allow") and has("21", "destination", "allow") and shows_parent("21"),
         has("14", "agent-toolkit", "deny", "tool-not-authorized")
         and absent("14", "openshell")
         and absent("14", "destination"),

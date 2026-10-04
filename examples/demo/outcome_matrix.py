@@ -63,6 +63,11 @@ EXPECTED = {
     "MCP client read": ("allow", "allow", "openshell", ""),
     "MCP client restart": ("deny", "allow", "sandbox agent", "approval-required"),
     "MCP client approved restart": ("allow", "allow", "openshell", ""),
+    "sub-agent read": ("allow", "allow", "openshell", ""),
+    "sub-agent restart": ("deny", "allow", "sandbox agent", "tool-not-authorized"),
+    "sub-agent delegates further": ("refused", "not checked", "attenuation", "attenuation-refused"),
+    "cross-sandbox sub-agent read": ("allow", "allow", "openshell", ""),
+    "revoked ancestor, running child": ("deny", "allow", "openshell", "tenuo_revoked"),
     "wider child": ("refused", "not checked", "attenuation", "attenuation-refused"),
     "direct task B restart": ("deny", "allow", "destination", ""),
     "direct missing warrant": ("deny", "allow", "destination", ""),
@@ -77,6 +82,8 @@ BASELINE_REASON = {
     "narrowed read": "the child warrant still admits this read",
     "MCP client read": "the sandbox-signed read is within its warrant",
     "MCP client approved restart": "an approver signed this exact restart",
+    "sub-agent read": "the parent passed read_logs on with its constraints",
+    "cross-sandbox sub-agent read": "the first sandbox delegated read_logs to the second",
 }
 
 

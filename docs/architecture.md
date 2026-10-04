@@ -58,7 +58,9 @@ What this guarantees:
 
 - A compromised agent can act only within its warrant: the tools, argument
   constraints, lifetime, and approvals the orchestrator granted. It cannot
-  widen or re-delegate beyond that.
+  widen that. It can delegate a narrower part of it to another key unless its
+  warrant is terminal; every link in the chain is verified and checked for
+  revocation. See [Sub-agents](sandbox-agent.md#sub-agents).
 - A warrant copied out of the sandbox is unusable without the holder key, and
   a warrant copied between tasks is unusable without the other task's key.
 - Keys are per task. Revoking or letting a warrant expire ends that task's

@@ -181,6 +181,13 @@ cleanup() {
   local status=$?
   trap - EXIT
   if [[ "$SANDBOX_CREATED" == 1 && -n "${CLI+x}" ]]; then
+    if [[ "$status" != 0 ]]; then
+      # Keep each sandbox's supervisor log with the retained artifacts.
+      "${CLI[@]}" logs -n 400 "$SANDBOX_NAME" >"$LOG_DIR/sandbox-first.log" 2>&1 || true
+      if [[ -n "${CHILD_SANDBOX_NAME:-}" ]]; then
+        "${CLI[@]}" logs -n 400 "$CHILD_SANDBOX_NAME" >"$LOG_DIR/sandbox-second.log" 2>&1 || true
+      fi
+    fi
     "${CLI[@]}" sandbox delete "$SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
     if [[ -n "${CHILD_SANDBOX_NAME:-}" ]]; then
       "${CLI[@]}" sandbox delete "$CHILD_SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
@@ -595,6 +602,144 @@ sandbox_signed_call() {
   ' sh "$id" "$UPSTREAM_PORT"
 }
 
+# Run tenuo-openshell-agent in a sandbox. A non-empty directory gives the call
+# its own holder key, warrant, and approvals, as a sub-agent process would.
+sandbox_agent() {
+  local sandbox="$1" dir="$2"
+  shift 2
+  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+    dir="$1"; shift
+    if [ -n "$dir" ]; then
+      export TENUO_HOLDER_KEY_FILE="$dir/holder.key" TENUO_WARRANT_FILE="$dir/warrant" TENUO_APPROVALS_DIR="$dir/approvals"
+    fi
+    exec tenuo-openshell-agent "$@"
+  ' sh "$dir" "$@" 2>>"$SETUP_LOG" | tr -d '\r'
+}
+
+# Send one tools/call from a sandbox with JSON-RPC id $3. With signing on, the
+# holder in directory $2 (default holder when empty) signs it first.
+sandbox_tool_call() {
+  local sandbox="$1" dir="$2" id="$3" tool="$4" arguments="$5" sign="$6"
+  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+    set -e
+    dir="$1"; id="$2"; tool="$3"; arguments="$4"; sign="$5"; port="$6"
+    if [ -n "$dir" ]; then
+      export TENUO_HOLDER_KEY_FILE="$dir/holder.key" TENUO_WARRANT_FILE="$dir/warrant" TENUO_APPROVALS_DIR="$dir/approvals"
+    fi
+    work="$(mktemp -d)"
+    body="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$arguments}}"
+    if [ "$sign" = sign ]; then
+      printf "%s" "$body" | tenuo-openshell-agent sign >"$work/body.json"
+    else
+      printf "%s" "$body" >"$work/body.json"
+    fi
+    curl -sS -i --max-time 20 "http://host.openshell.internal:$port/mcp" \
+      --header "content-type: application/json" \
+      --header "accept: application/json, text/event-stream" \
+      --header "mcp-protocol-version: 2025-11-25" \
+      --data-binary @"$work/body.json"
+  ' sh "$dir" "$id" "$tool" "$arguments" "$sign" "$UPSTREAM_PORT"
+}
+
+# Sub-agent delegation (#18). The first sandbox's agent holds the warrant Task
+# A delegated to it. It delegates read_logs, terminally, to a sub-agent with its
+# own key in the same sandbox, and the operator CLI relays a delegation to the
+# second sandbox. Only public keys and warrants cross; the parent's key stays put.
+subagent_delegation() {
+  local run="$1" child_dir=/home/sandbox/.tenuo-subagent output line decision_us chain public
+  local read='{"service":"payments","environment":"staging"}'
+  local restart='{"service":"payments","environment":"staging","replicas":3}'
+  if [[ "$run" == "openshell-only" ]]; then
+    output="$RUN_DIR/control-subagent-read.out"
+    sandbox_tool_call "$SANDBOX_NAME" "" 19 read_logs "$read" plain >"$output" 2>>"$SETUP_LOG" || fail "control sub-agent read"
+    grep -Fq "read payments logs in staging" "$output" || fail "control sub-agent read reached the effect"
+    record_obs "sub-agent read" "$run" "allow" "openshell" "" 0 0
+    output="$RUN_DIR/control-subagent-restart.out"
+    sandbox_tool_call "$SANDBOX_NAME" "" 20 restart_service "$restart" plain >"$output" 2>>"$SETUP_LOG" || fail "control sub-agent restart"
+    grep -Fq "restarted payments in staging" "$output" || fail "control sub-agent restart reached the effect"
+    record_obs "sub-agent restart" "$run" "allow" "sandbox agent" "" 0 0
+    record_obs "sub-agent delegates further" "$run" "not checked" "attenuation" "" 0 0
+    output="$RUN_DIR/control-cross-sandbox-read.out"
+    sandbox_tool_call "$CHILD_SANDBOX_NAME" "" 21 read_logs "$read" plain >"$output" 2>>"$SETUP_LOG" || fail "control cross-sandbox read"
+    grep -Fq "read payments logs in staging" "$output" || fail "control cross-sandbox read reached the effect"
+    record_obs "cross-sandbox sub-agent read" "$run" "allow" "openshell" "" 0 0
+    printf 'PASS openshell-only sub-agent calls were not checked\n'
+    return
+  fi
+
+  public="$(sandbox_agent "$SANDBOX_NAME" "$child_dir" keygen | tail -1)"
+  [[ "$public" =~ ^[0-9a-f]{64}$ ]] || fail "sub-agent holder key"
+  chain="$(sandbox_agent "$SANDBOX_NAME" "" delegate --child-pub "$public" --tools read_logs --ttl 300 --terminal | tail -1)"
+  [[ -n "$chain" ]] || fail "parent agent delegated to the sub-agent"
+  sandbox_agent "$SANDBOX_NAME" "$child_dir" install-warrant "$chain" >/dev/null || fail "sub-agent warrant install"
+
+  output="$RUN_DIR/subagent-read.out"
+  sandbox_tool_call "$SANDBOX_NAME" "$child_dir" 19 read_logs "$read" sign >"$output" 2>>"$SETUP_LOG" || fail "sub-agent read"
+  grep -Fq '200 OK' "$output" || fail "sub-agent read returns 200"
+  grep -Fq "read payments logs in staging" "$output" || fail "sub-agent read reached the effect"
+  decision_us="$(decision_us_for 19 "$MIDDLEWARE_LOG")" || fail "sub-agent read has no decision timing"
+  record_obs "sub-agent read" "$run" "allow" "openshell" "" "$decision_us" 0
+  printf 'PASS sub-agent in the same sandbox read with a narrowed warrant\n'
+
+  output="$RUN_DIR/subagent-restart.out"
+  printf '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"restart_service","arguments":%s}}' "$restart" \
+    | "${CLI[@]}" sandbox exec --name "$SANDBOX_NAME" --no-tty -- sh -c '
+        export TENUO_HOLDER_KEY_FILE="$1/holder.key" TENUO_WARRANT_FILE="$1/warrant"
+        tenuo-openshell-agent sign || true' sh "$child_dir" >"$output" 2>>"$SETUP_LOG" || true
+  grep -Fq '"tool-not-authorized"' "$output" || fail "sub-agent restart was refused in the sandbox"
+  record_obs "sub-agent restart" "$run" "deny" "sandbox agent" "tool-not-authorized" 0 0
+  printf 'PASS sub-agent restart, which its parent did not pass on, was refused\n'
+
+  output="$RUN_DIR/subagent-delegate.out"
+  sandbox_agent "$SANDBOX_NAME" "$child_dir" delegate --child-pub "$public" --tools read_logs >"$output" 2>&1 || true
+  grep -Fq "attenuation refused" "$SETUP_LOG" || fail "terminal sub-agent could delegate further"
+  record_obs "sub-agent delegates further" "$run" "refused" "attenuation" "attenuation-refused" 0 0
+  printf 'PASS terminal sub-agent could not delegate further\n'
+
+  env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" delegate \
+    --from-sandbox "$SANDBOX_NAME" \
+    --to-sandbox "$CHILD_SANDBOX_NAME" \
+    --tools read_logs \
+    --ttl 600 \
+    --openshell "$CLI_BIN" \
+    --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "cross-sandbox delegation"
+  output="$RUN_DIR/cross-sandbox-read.out"
+  sandbox_tool_call "$CHILD_SANDBOX_NAME" "" 21 read_logs "$read" sign >"$output" 2>>"$SETUP_LOG" || fail "cross-sandbox read"
+  grep -Fq '200 OK' "$output" || fail "cross-sandbox read returns 200"
+  grep -Fq "read payments logs in staging" "$output" || fail "cross-sandbox read reached the effect"
+  decision_us="$(decision_us_for 21 "$MIDDLEWARE_LOG")" || fail "cross-sandbox read has no decision timing"
+  record_obs "cross-sandbox sub-agent read" "$run" "allow" "openshell" "" "$decision_us" 0
+  printf 'PASS a second sandbox read with authority delegated from the first\n'
+}
+
+# Revoke Task A's warrant, an ancestor of the second sandbox's running child.
+# The list names only Task A; the child's next call is denied.
+revoke_ancestor() {
+  local run="$1" output decision_us
+  local read='{"service":"payments","environment":"staging"}'
+  if [[ "$run" == "openshell-only" ]]; then
+    output="$RUN_DIR/control-revoked-child.out"
+    sandbox_tool_call "$CHILD_SANDBOX_NAME" "" 22 read_logs "$read" plain >"$output" 2>>"$SETUP_LOG" || fail "control revoked-child read"
+    grep -Fq "read payments logs in staging" "$output" || fail "control revoked-child read reached the effect"
+    record_obs "revoked ancestor, running child" "$run" "allow" "openshell" "" 0 0
+    printf 'PASS openshell-only revocation was not checked\n'
+    return
+  fi
+  update_policy '.sandboxes |= with_entries(.value.revocation = {
+      signed_list_base64: $srl,
+      max_staleness_secs: 3600,
+      clock_tolerance_secs: 30,
+      rollback_floor_path: ($floors + "/floor-" + .key + ".json")
+    })' "the revocation" --arg srl "$(cat "$FIXTURE_DIR/revocations/task-a.srl")" --arg floors "$RUN_DIR"
+  output="$RUN_DIR/revoked-child.out"
+  sandbox_tool_call "$CHILD_SANDBOX_NAME" "" 22 read_logs "$read" sign >"$output" 2>>"$SETUP_LOG" || fail "revoked-child read returns a response"
+  grep -Fq '403 Forbidden' "$output" || fail "running child of a revoked ancestor was denied"
+  grep -Fq 'tenuo_revoked' "$output" || fail "running child denial reason is tenuo_revoked"
+  decision_us="$(decision_us_for 22 "$MIDDLEWARE_LOG")" || fail "revoked-child read has no decision timing"
+  record_obs "revoked ancestor, running child" "$run" "deny" "openshell" "tenuo_revoked" "$decision_us" 0
+  printf 'PASS revoking an ancestor denied a running child in another sandbox\n'
+}
+
 # A higher policy version limits results in the first sandbox to 64 bytes. The
 # sandbox signs a read whose result is larger. The read runs and OpenShell
 # withholds its result, because the upstream call happens before the response.
@@ -602,7 +747,8 @@ sandbox_signed_call() {
 # middleware reports that version.
 update_policy() {
   local edit="$1" label="$2" version
-  jq --arg sandbox "$SANDBOX_ID" "(.version = ((.version // 1) + 1)) | $edit" \
+  shift 2
+  jq --arg sandbox "$SANDBOX_ID" "$@" "(.version = ((.version // 1) + 1)) | $edit" \
     "$FIXTURE_DIR/policy.json" >"$FIXTURE_DIR/policy.next.json"
   mv "$FIXTURE_DIR/policy.next.json" "$FIXTURE_DIR/policy.json"
   version="$(jq -r .version "$FIXTURE_DIR/policy.json")"
@@ -712,6 +858,7 @@ run_suite() {
     || fail "direct task A read is authorized by the destination"
   jq -se 'length == 6' "$EFFECT_LOG" >/dev/null || fail "direct authorized read must reach the effect"
   result_size_limit
+  subagent_delegation "openshell+tenuo"
   local denial_out="$RUN_DIR/local-denial.out" denial_line denial_us
   "$DEMO_PYTHON" "$EXAMPLE_DIR/local_denial.py" \
     --policy "$FIXTURE_DIR/policy.json" \
@@ -737,7 +884,7 @@ run_suite() {
     --verify-with "$RECEIPT_DIR/openshell.pub" >"$RESULTS_DIR/evidence/openshell-results.json" \
     || fail "result receipt export"
   jq -se '
-    ([.[] | select(.outcome == "delivered")] | length == 5)
+    ([.[] | select(.outcome == "delivered")] | length == 7)
     and ([.[] | select(.outcome == "blocked" and .decision_code == "tenuo_result_too_large" and .request_id == "17")] | length == 1)
   ' "$RESULTS_DIR/evidence/openshell-results.json" >/dev/null || fail "result receipts cover the allowed calls"
   printf 'PASS receipts export as JSON lines for log pipelines\n'
@@ -745,6 +892,8 @@ run_suite() {
     --port "$A2A_PORT" \
     --output "$RESULTS_DIR/evidence/a2a-handoff.json" || fail "A2A authority handoff"
   mcp_client_approved_run "$SANDBOX_NAME" "openshell+tenuo"
+  # Last in this run: it revokes Task A and everything delegated from it.
+  revoke_ancestor "openshell+tenuo"
   run_control
   run_timing
   printf 'ALL PASS both runs were recorded and the receipts verify offline\n'
@@ -872,6 +1021,8 @@ PY
   control_allow "narrowed restart" "$FIXTURE_DIR/delegated-restart.json" "restarted payments in staging" "$CHILD_SANDBOX_NAME"
   mcp_client_run "$SANDBOX_NAME" "openshell-only"
   mcp_client_approved_run "$SANDBOX_NAME" "openshell-only"
+  subagent_delegation "openshell-only"
+  revoke_ancestor "openshell-only"
   control_direct "direct task B restart" "$FIXTURE_DIR/task-b-restart.json"
   control_direct "direct missing warrant" "$FIXTURE_DIR/missing-warrant.json"
   control_direct "direct narrowed restart" "$FIXTURE_DIR/delegated-restart.json"
@@ -879,7 +1030,7 @@ PY
   printf 'PASS openshell-only wider child was not checked\n'
 
   jq -se '
-    length == 21
+    length == 25
     and ([.[] | select(.arguments.environment == "production")] | length >= 1)
     and ([.[] | select(.tool == "restart_service" and .arguments.service == "auth")] | length == 1)
     and ([.[] | select(.arguments.replicas == 8)] | length >= 1)
