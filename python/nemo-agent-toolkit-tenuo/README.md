@@ -4,16 +4,16 @@ Provider-owned Agent Toolkit middleware that checks a Tenuo warrant before a
 function runs. Unauthorized calls stop before `call_next`, so protected
 function code never receives them.
 
-> [!IMPORTANT]
-> `nemo-agent-toolkit-tenuo` is currently a source preview and is not published
-> on PyPI. Install it from a pinned repository revision until the first release.
+This package is the in-process Agent Toolkit integration. The OpenShell
+supervisor middleware at the repository root is the independent enforcement
+point for MCP traffic that leaves the sandbox. Use both: the plugin catches
+calls early, with readable errors, and the middleware enforces at the network
+boundary.
 
-This package is the in-process Agent Toolkit integration. The independent
-OpenShell supervisor middleware is implemented at the repository root.
+## Install
 
-## Install from source
-
-From the repository root, use the same environment as Agent Toolkit 1.8:
+Tagged releases publish the package to PyPI. To install from a checkout, run
+this from the repository root in the same environment as Agent Toolkit 1.8:
 
 ```bash
 uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test
@@ -73,7 +73,7 @@ middleware continues after an allow.
 
 ## Compatibility and verification
 
-This preview is tested with Python 3.11–3.13, `nvidia-nat-core` 1.8.x, and
+Tested with Python 3.11–3.13, `nvidia-nat-core` 1.8.x, and
 Tenuo 0.3.x. Run its tests and distribution build with:
 
 ```bash

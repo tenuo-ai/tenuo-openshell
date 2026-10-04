@@ -8,9 +8,8 @@ exploit details or credentials.
 
 Include the affected commit or version, deployment mode, reproduction steps,
 expected impact, and any suggested mitigation. Remove secrets and personal
-data. We will acknowledge the report, coordinate validation and remediation,
-and agree on disclosure timing with the reporter; this project does not promise
-a fixed response SLA.
+data. We acknowledge each report, coordinate validation and remediation, and agree
+on disclosure timing with the reporter.
 
 ## Supported versions
 

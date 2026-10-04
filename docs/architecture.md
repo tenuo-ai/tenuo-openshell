@@ -214,6 +214,6 @@ the attachment `config`. The attachment is part of the OpenShell sandbox
 policy, which the sandbox creator writes; the Tenuo policy is the operator's.
 `ValidateConfig` therefore still accepts only `tenuo_meta`.
 
-When the attachment is `fail_closed`, an unreachable middleware now blocks
+When the attachment is `fail_closed`, an unreachable middleware blocks
 responses as well as requests on that attachment. See
 [Receipts](receipts.md) for the result receipt format.

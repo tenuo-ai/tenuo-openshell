@@ -5,8 +5,8 @@ Redis-backed atomic approval replay protection, versioned policy reload,
 health probes, persistent revocation rollback floors and receipts, and a
 default-deny NetworkPolicy.
 
-Before the first signed release, the default `v0.1.0` image does not exist.
-Build the image from a pinned source revision and override both
+The default image is the signed release image for the chart's version. To run
+an unreleased revision, build the image from it and override
 `image.repository` and `image.tag`. Git releases and images use the same
 `vMAJOR.MINOR.PATCH` tag; the Helm chart version omits the `v` as required by
 Helm's semantic-version format.
