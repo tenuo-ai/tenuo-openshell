@@ -146,7 +146,8 @@ class TenuoMiddlewareConfig(FunctionMiddlewareBaseConfig, name="tenuo"):
         description=(
             "Check a function group's function by its name in the group (read_logs) instead of "
             "its qualified name (ops__read_logs), so a warrant that names MCP tools applies to an "
-            "mcp_client function group."
+            "mcp_client function group. Use it only on MCP function groups: it drops the first "
+            "group__ prefix, so other__read_logs on another function would be checked as read_logs."
         ),
     )
     approval_required: Literal["raise", "defer"] = Field(
@@ -155,7 +156,8 @@ class TenuoMiddlewareConfig(FunctionMiddlewareBaseConfig, name="tenuo"):
             "raise stops a call that needs an approval with ApprovalRequired. defer passes it to "
             "the next stage, for MCP tools behind tenuo-openshell-agent proxy, which records the "
             "request for an approver and attaches the approval; the OpenShell middleware enforces "
-            "it. Calls the warrant does not allow stop here either way."
+            "it. Calls the warrant does not allow stop here either way. A deferred call that "
+            "reaches a server which does not check warrants runs without an approval."
         ),
     )
 

@@ -137,8 +137,8 @@ function_groups:
 | Option | Default | Effect |
 | --- | --- | --- |
 | `warrant_file`, `holder_key_file` | unset | Read on every call when no `authority()` binding is active. A binding takes precedence. Both or neither. |
-| `strip_function_group` | `false` | Check a function group's function by its name in the group (`read_logs`), not NAT's qualified name (`ops__read_logs`), so a warrant that names MCP tools applies. |
-| `approval_required` | `raise` | `defer` hands a call that needs an approval to the next stage instead of raising `ApprovalRequired`. Use it only when that stage enforces approvals itself, as `tenuo-openshell-agent proxy` and the OpenShell middleware do: the proxy records the request for an approver. Calls the warrant does not allow still stop here. |
+| `strip_function_group` | `false` | Check a function group's function by its name in the group (`read_logs`), not NAT's qualified name (`ops__read_logs`), so a warrant that names MCP tools applies. Use it only on MCP function groups: it drops the first `group__` prefix and trusts the rest, so on other functions `other__read_logs` would be checked as `read_logs`. |
+| `approval_required` | `raise` | `defer` hands a call that needs an approval to the next stage instead of raising `ApprovalRequired`. Use it only when that stage enforces approvals itself, as `tenuo-openshell-agent proxy` and the OpenShell middleware do: the proxy records the request for an approver. Calls the warrant does not allow still stop here. A deferred call that reaches a server which does not check warrants runs without an approval. |
 
 [A NeMo Agent Toolkit agent in an OpenShell sandbox](../../docs/nat-agent.md)
 runs this configuration.

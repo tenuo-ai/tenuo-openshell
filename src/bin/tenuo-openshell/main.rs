@@ -1047,11 +1047,16 @@ fn dev_authority(authority: &AuthorityArgs, sandbox: &SandboxArgs) -> Result<Aut
     Ok(authority)
 }
 
+/// An `openshell` invocation. `openshell sandbox exec` reads its stdin to the
+/// end before it runs the command, so an inherited stdin that never closes (a
+/// pipe, a recipe, a CI step) hangs it. Nothing here sends input, so stdin is
+/// always null.
 fn openshell_command(args: &SandboxArgs) -> Process {
     let mut process = Process::new(&args.openshell);
     if let Some(endpoint) = &args.gateway_endpoint {
         process.args(["--gateway-endpoint", endpoint]);
     }
+    process.stdin(std::process::Stdio::null());
     process
 }
 

@@ -27,6 +27,8 @@ server, so the agent's Python has no way around the proxy.
   CLI is installed, `tenuo-openshell dev up` is running, and your gateway has
   the `tenuo/authorization` block and was restarted. If you cleaned up after
   the quickstart, do its step 2 again.
+- `tenuo-openshell` v0.1.6 or later, which adds `demo agent`. Check with
+  `tenuo-openshell --version`; to upgrade, repeat the quickstart's step 1.
 - About 180 MB of image download.
 
 ## 1. Create the agent's sandbox
@@ -56,7 +58,7 @@ The sandbox runs the Tenuo agent's proxy, as in the quickstart:
 
 ```bash
 openshell sandbox create --name tenuo-nat \
-  --from ghcr.io/tenuo-ai/tenuo-openshell-nat-demo:v0.1.5 \
+  --from ghcr.io/tenuo-ai/tenuo-openshell-nat-demo:v0.1.6 \
   --policy ~/.local/state/tenuo-openshell/dev/nat-policy.yaml \
   --no-tty --detach -- tenuo-openshell-agent proxy --upstream http://host.openshell.internal:18680/mcp
 ```
@@ -144,6 +146,8 @@ tenuo-openshell demo agent "Check the identity logs in production"
 denied   read_logs(service=identity, environment=production): Authorization denied: Constraint not satisfied
 answer   read_logs did not run: Authorization denied: Constraint not satisfied.
 ```
+
+<!-- check: open-stdin -->
 
 A restart waits for a human. The proxy records the request, and the agent
 reads that it is waiting:
@@ -253,10 +257,15 @@ function_groups:
   `provision` installed in the sandbox. An application binds a task's warrant
   in code; `nat run` has no such code, so the plugin reads the files.
 - `strip_function_group` checks `ops__read_logs` as `read_logs`, the MCP
-  tool name the warrant uses.
+  tool name the warrant uses. Turn it on only for MCP function groups: it
+  drops the first `group__` prefix and trusts the rest, so on other functions
+  `other__read_logs` would be checked as `read_logs` and still run as itself.
 - `approval_required: defer` hands a call that needs an approval on to the
   proxy, which records the request for `approve`. Without it, the plugin
   stops the call with `approval_required`, and there is nothing to approve.
+  Defer only when the next stage enforces approvals itself, as the proxy and
+  the OpenShell middleware do here. Against an MCP server that does not check
+  warrants, a deferred restart would run.
 
 The call outside the task now stops in the agent. The plugin's message names
 the reason and a reference, not the arguments:

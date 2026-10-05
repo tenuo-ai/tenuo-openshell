@@ -256,6 +256,34 @@ check_register_gateway() {
   tenuo-openshell dev status
 }
 
+# `demo agent` must not wait on its own stdin: `openshell sandbox exec` reads
+# stdin to the end, so an inherited pipe that never closes would hang it. Run
+# the guide's out-of-task prompt (denied in the sandbox, so nothing reaches the
+# MCP server) with stdin from a pipe that stays open, under a deadline.
+check_open_stdin() {
+  local log="$WORK/open-stdin.log" fifo="$WORK/open-stdin.fifo" writer pid waited=0
+  # A writer that never writes or closes keeps the pipe open; the watched
+  # process is demo agent itself.
+  mkfifo "$fifo"
+  sleep 600 >"$fifo" &
+  writer=$!
+  tenuo-openshell demo agent "Check the identity logs in production" <"$fifo" >"$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( waited >= 90 )); then
+      kill "$pid" "$writer" 2>/dev/null || true
+      echo "FAIL demo agent hung with an open stdin" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  kill "$writer" 2>/dev/null || true
+  wait "$writer" 2>/dev/null || true
+  grep -q '^denied' "$log" || { cat "$log" >&2; echo "FAIL demo agent with an open stdin did not report the denial" >&2; exit 1; }
+  echo "PASS demo agent ran with an open stdin"
+}
+
 # The reader removes the block and restarts the gateway, which must then start
 # without the middleware.
 check_unregister_gateway() {
