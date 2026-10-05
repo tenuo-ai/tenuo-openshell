@@ -8,14 +8,15 @@ have notes in `CHANGELOG.md`. It then runs `make check` and builds:
 - the Python wheel and sdist;
 - the Helm chart;
 - the operator and sandbox binaries;
-- the multi-platform middleware image; and
-- the agent image, from the same sandbox binaries.
+- the multi-platform middleware image;
+- the agent image, from the same sandbox binaries; and
+- the multi-platform demo image for the quickstart, also from those binaries.
 
 It attests the build provenance of all of them.
 
 - `publish=false` is a dry run. The artifacts stay in the workflow run.
 - `publish=true` also pushes and signs the middleware image, the agent image,
-  and the Helm chart (as `oci://ghcr.io/tenuo-ai/charts/tenuo-openshell`) on
+  the demo image, and the Helm chart (as `oci://ghcr.io/tenuo-ai/charts/tenuo-openshell`) on
   GHCR, signs the binary archives, publishes the Python package to PyPI, and creates the GitHub
   release from the `CHANGELOG.md` section.
 
@@ -37,7 +38,8 @@ Before the first `publish=true` run:
    signing key registered with GitHub:
    `git config gpg.format ssh`, `git config user.signingkey <key>`.
 4. **GHCR packages.** After the first push of each package
-   (`tenuo-openshell`, `tenuo-openshell-agent`, `charts/tenuo-openshell`),
+   (`tenuo-openshell`, `tenuo-openshell-agent`, `tenuo-openshell-demo`,
+   `charts/tenuo-openshell`),
    open its package settings:
    - link the package to this repository;
    - set it to public when the repository is public.
@@ -70,9 +72,24 @@ Before the first `publish=true` run:
 8. Download the dry run's `release-artifacts`, and check the wheel, chart, and
    archives. Then dispatch again with `-f publish=true` and approve the
    `release` environment.
-9. Repeat the quickstart using only public artifacts, then verify signatures,
+9. Run `make quickstart` and `make production-quickstart` using only public
+   artifacts, then verify signatures,
    checksums, plugin discovery, secure startup, one allowed call, and negative
    authorization cases.
+
+Before the tag, check the quickstart against local builds of this commit.
+`tenuo-openshell dev up` defaults to the images for its own version, which do
+not exist until the release publishes them:
+
+```bash
+cargo build --release --locked --bin tenuo-openshell
+docker build -t tenuo-openshell:candidate .
+scripts/build-demo-image.sh tenuo-openshell-demo:candidate
+TENUO_QS_CLI=target/release/tenuo-openshell \
+  TENUO_QS_MIDDLEWARE_IMAGE=tenuo-openshell:candidate \
+  TENUO_QS_DEMO_IMAGE=tenuo-openshell-demo:candidate \
+  make quickstart
+```
 
 ## Release binaries
 
@@ -149,6 +166,7 @@ identity=(--certificate-identity "https://github.com/tenuo-ai/tenuo-openshell/.g
 
 cosign verify "ghcr.io/tenuo-ai/tenuo-openshell:$tag" "${identity[@]}"
 cosign verify "ghcr.io/tenuo-ai/tenuo-openshell-agent:$tag" "${identity[@]}"
+cosign verify "ghcr.io/tenuo-ai/tenuo-openshell-demo:$tag" "${identity[@]}"
 cosign verify "ghcr.io/tenuo-ai/charts/tenuo-openshell:${tag#v}" "${identity[@]}"
 
 helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \

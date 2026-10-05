@@ -8,7 +8,8 @@ task authority work.
 
 | Goal | Guide | What it demonstrates |
 | --- | --- | --- |
-| Make an allowed and denied call in a real sandbox | [10-minute quickstart](quickstart.md) | Released artifacts, TLS and JWT middleware authentication, argument constraints |
+| Make an allowed, a denied, and an approval-gated call next to your OpenShell gateway | [5-minute quickstart](quickstart.md) | Released artifacts, argument constraints, approvals, development mode |
+| Run the same path with production settings | [Going to production](production-quickstart.md) | TLS and JWT middleware authentication, a signed policy |
 | See the complete security model | [Authenticated demo](../examples/demo/README.md) | Approvals, replay protection, holder binding, delegation, revocation, A2A, receipts |
 | Run an Agent Toolkit approval flow | [NeMo Agent Toolkit example](../examples/nemo-agent-toolkit/README.md) | ReAct tool use through the signing proxy, an exact-call human approval, no model key required |
 | Trace authority across runtime boundaries | [A2A interoperability proof](../examples/interoperability/README.md) | A narrowed warrant and holder proof crossing a JSON-RPC handoff |

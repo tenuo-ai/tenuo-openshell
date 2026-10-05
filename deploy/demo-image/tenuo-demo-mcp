@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Demo MCP server for the Tenuo quickstart.
+
+Serves `read_logs` and `restart_service` over MCP Streamable HTTP (JSON
+responses only) at /mcp. It has no Tenuo code and no authorization: it runs
+every call it receives and prints one `RAN <tool> <arguments>` line per call,
+so its log shows exactly what got through.
+
+    tenuo-demo-mcp [--port 8080]
+"""
+
+import argparse
+import json
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ARGUMENTS = {
+    "type": "object",
+    "properties": {
+        "service": {"type": "string"},
+        "environment": {"type": "string"},
+    },
+    "required": ["service", "environment"],
+}
+TOOLS = [
+    {
+        "name": "read_logs",
+        "description": "Read the last lines of a service's logs.",
+        "inputSchema": ARGUMENTS,
+    },
+    {
+        "name": "restart_service",
+        "description": "Restart a service with a number of replicas.",
+        "inputSchema": {
+            **ARGUMENTS,
+            "properties": {
+                **ARGUMENTS["properties"],
+                "replicas": {"type": "integer", "minimum": 1},
+            },
+        },
+    },
+]
+
+
+def run(name, arguments):
+    service = arguments.get("service")
+    environment = arguments.get("environment")
+    if name == "read_logs":
+        return f"{service}/{environment}: 3 lines, last: GET /health 200"
+    if name == "restart_service":
+        replicas = arguments.get("replicas", 1)
+        return f"restarted {service} in {environment} with {replicas} replicas"
+    return None
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "tenuo-demo-mcp/1"
+
+    def do_POST(self):
+        if self.path.split("?")[0] != "/mcp":
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("content-length", "0"))
+            message = json.loads(self.rfile.read(length))
+        except (ValueError, json.JSONDecodeError):
+            self.send_error(400)
+            return
+        if not isinstance(message, dict) or "id" not in message:
+            # A notification such as notifications/initialized.
+            self.send_response(202)
+            self.send_header("content-length", "0")
+            self.end_headers()
+            return
+        method = message.get("method")
+        params = message.get("params") or {}
+        if method == "initialize":
+            result = {
+                "protocolVersion": params.get("protocolVersion", "2025-11-25"),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "tenuo-demo", "version": "1"},
+            }
+        elif method == "tools/list":
+            result = {"tools": TOOLS}
+        elif method == "tools/call":
+            name = params.get("name")
+            arguments = params.get("arguments") or {}
+            text = run(name, arguments)
+            if text is None:
+                self.reply(message["id"], error={"code": -32602, "message": f"unknown tool {name}"})
+                return
+            print(f"RAN {name} {json.dumps(arguments, sort_keys=True)}", flush=True)
+            result = {"content": [{"type": "text", "text": text}]}
+        elif method == "ping":
+            result = {}
+        else:
+            self.reply(message["id"], error={"code": -32601, "message": f"unknown method {method}"})
+            return
+        self.reply(message["id"], result=result)
+
+    def reply(self, request_id, result=None, error=None):
+        body = {"jsonrpc": "2.0", "id": request_id}
+        if error is None:
+            body["result"] = result
+        else:
+            body["error"] = error
+        data = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
+    print(f"tenuo-demo-mcp listening on :{args.port}/mcp", file=sys.stderr, flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

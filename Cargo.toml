@@ -25,7 +25,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "tenuo-openshell"
-path = "src/bin/tenuo-openshell.rs"
+path = "src/bin/tenuo-openshell/main.rs"
 
 [dependencies]
 async-trait = "0.1"

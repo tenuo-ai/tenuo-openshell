@@ -115,6 +115,8 @@ enum Command {
         warrant: WarrantArgs,
     },
     /// Serve a loopback MCP endpoint that signs tools/call and forwards to the server.
+    /// Creates the holder key if needed, so the proxy can start before the
+    /// sandbox is provisioned.
     Proxy {
         #[command(flatten)]
         key: KeyArgs,
@@ -260,6 +262,7 @@ fn run(cli: Cli) -> Result<()> {
                         .into(),
                 );
             }
+            authority::ensure_key(&key_path(&key)?)?;
             let holder = holder(&key, warrant)?;
             if let Err(error) = holder.chain() {
                 eprintln!("tenuo-openshell-agent: {error}; tools/call will be denied until one is installed");
