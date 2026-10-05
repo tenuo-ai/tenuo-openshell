@@ -17,7 +17,9 @@ API key until the last, optional section.
 | The payments logs in staging | Runs | Runs |
 | The identity logs in production | Runs | Denied; the agent reads why |
 | A restart of payments in staging | Runs | Held until you approve it, then runs once |
-| Anything, from the agent's Python straight to the MCP server | Runs | Blocked by OpenShell: only the Tenuo agent may connect |
+
+OpenShell's sandbox policy lets only the Tenuo agent connect to the MCP
+server, so the agent's Python has no way around the proxy.
 
 ## Before you start
 
