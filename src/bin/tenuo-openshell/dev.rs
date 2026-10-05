@@ -205,7 +205,14 @@ fn up(state: &DevState, args: &UpArgs) -> Result<()> {
     println!();
     println!("Development only: no TLS, no caller authentication, unsigned policy.");
     println!();
-    print!("{}", next_steps(state, &config, &GatewayConfig::locate()?)?);
+    let gateway = GatewayConfig::locate()?;
+    if gateway.is_snap() {
+        // The snap's CLI cannot read the copy in the state directory.
+        let copy = sandbox_policy_for(state, &gateway)?;
+        fs::create_dir_all(copy.parent().ok_or("no parent directory")?)?;
+        write_atomic(&copy, demo_sandbox_policy(&config).as_bytes())?;
+    }
+    print!("{}", next_steps(state, &config, &gateway)?);
     Ok(())
 }
 
@@ -573,6 +580,11 @@ impl GatewayConfig {
         }
     }
 
+    /// Whether this is the OpenShell snap's gateway.
+    pub fn is_snap(&self) -> bool {
+        self.path == Path::new(SNAP_CONFIG)
+    }
+
     /// The `grpc_endpoint` of the `tenuo/authorization` registration, if any.
     pub fn registered_endpoint(&self) -> Option<String> {
         registered_endpoint(self.contents.as_deref()?)
@@ -634,6 +646,19 @@ fn registration_block(config: &DevConfig) -> Result<String> {
     })
 }
 
+/// The demo sandbox policy `openshell sandbox create` reads. The OpenShell
+/// snap's CLI is confined to non-hidden files in the home directory and its
+/// own snap directories, so it cannot read the state directory under
+/// `~/.local`. With the snap, `dev up` also writes the policy to
+/// `~/snap/openshell/common/tenuo-openshell/demo-policy.yaml`.
+pub fn sandbox_policy_for(state: &DevState, gateway: &GatewayConfig) -> Result<PathBuf> {
+    if gateway.is_snap() {
+        Ok(home()?.join("snap/openshell/common/tenuo-openshell/demo-policy.yaml"))
+    } else {
+        Ok(state.sandbox_policy())
+    }
+}
+
 fn next_steps(state: &DevState, config: &DevConfig, gateway: &GatewayConfig) -> Result<String> {
     let block = registration_block(config)?;
     let restart = gateway.restart;
@@ -675,7 +700,7 @@ fn next_steps(state: &DevState, config: &DevConfig, gateway: &GatewayConfig) -> 
          3. Give it a task:\n\n   \
          tenuo-openshell provision --dev --sandbox {DEMO_SANDBOX} --preset demo\n",
         image = config.demo_image,
-        policy = state.sandbox_policy().display(),
+        policy = sandbox_policy_for(state, gateway)?.display(),
         mcp = config.mcp_url(),
     ))
 }
@@ -936,6 +961,10 @@ mod tests {
         assert!(root_only.contains("grpc_endpoint = \"http://127.0.0.1:18651\""));
         assert!(root_only.contains("sudo snap restart openshell.gateway"));
         assert!(!root_only.contains("version = 2"));
+        // Its CLI cannot read ~/.local; the policy copy is in its own directory.
+        assert!(root_only.contains("snap/openshell/common/tenuo-openshell/demo-policy.yaml \\"));
+        assert!(!root_only.contains(&state.sandbox_policy().display().to_string()));
+        assert!(missing.contains(&format!("--policy {} \\", state.sandbox_policy().display())));
     }
 
     #[test]

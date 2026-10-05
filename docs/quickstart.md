@@ -64,8 +64,9 @@ policy, and single-use state in memory. Running `dev up` again changes
 nothing.
 
 It then prints a registration block for your gateway, and names the file to
-add it to: `~/.config/openshell/gateway.toml`, or with Homebrew,
-`/opt/homebrew/var/openshell/gateway.toml` when the first does not exist:
+add it to: `~/.config/openshell/gateway.toml`, or when that does not exist,
+`/opt/homebrew/var/openshell/gateway.toml` with Homebrew and
+`/var/snap/openshell/common/gateway.toml` with the snap:
 
 ```toml
 [[openshell.supervisor.middleware]]
@@ -78,12 +79,16 @@ timeout = "2s"
 ```
 
 Add the block to the end of that file, then restart the gateway so it loads
-the middleware. `dev up` never edits your OpenShell installation.
+the middleware. The deb and rpm packages install no `gateway.toml`; `dev up`
+then says to create it, with an `[openshell]` table holding `version = 2`
+before the block. The snap's file belongs to root, so edit it with `sudo`.
+`dev up` never edits your OpenShell installation.
 
 | Platform | Restart the gateway |
 | --- | --- |
 | macOS (Homebrew) | `brew services restart openshell` |
-| Linux | `systemctl --user restart openshell-gateway` |
+| Linux (deb or rpm) | `systemctl --user restart openshell-gateway` |
+| Linux (snap) | `sudo snap restart openshell.gateway` |
 
 <!-- check: register-gateway -->
 
@@ -122,6 +127,11 @@ openshell sandbox create --name tenuo-demo \
   --policy ~/.local/state/tenuo-openshell/dev/demo-policy.yaml \
   --no-tty --detach -- tenuo-openshell-agent proxy --upstream http://host.openshell.internal:18680/mcp
 ```
+
+With the OpenShell snap, pass
+`--policy ~/snap/openshell/common/tenuo-openshell/demo-policy.yaml` instead.
+The snap's `openshell` cannot read hidden directories such as `~/.local`, so
+`dev up` also writes the policy there, and prints the command with it.
 
 Give it a task. `provision --dev` adds the sandbox to the dev policy, has the
 agent create its holder key, and installs a warrant signed by the dev issuer:

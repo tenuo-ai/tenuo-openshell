@@ -42,7 +42,8 @@
 # instead of the stand-in: the `openshell` on PATH, and the gateway's own
 # gateway.toml and restart command. It knows the deb and rpm packages' systemd
 # user service (~/.config/openshell/gateway.toml) and the snap
-# (/var/snap/openshell/common/gateway.toml, edited with sudo). gateway.toml is
+# (/var/snap/openshell/common/gateway.toml, edited with sudo; its sandbox
+# policy path is the one the guide gives for the snap). gateway.toml is
 # restored, and the gateway restarted, when the check ends. The guide's dev
 # state directory is used as written; one already there is moved aside and
 # put back. .github/workflows/linux-install.yml runs this mode.
@@ -253,6 +254,11 @@ if [[ "$MODE" == installed ]]; then
     mv "$DEV_DIR" "$WORK/dev.saved"
     echo "moved $DEV_DIR aside; it is put back at the end"
   fi
+  # Where `dev up` copies the demo policy for the snap's CLI.
+  SNAP_POLICY_DIR="$HOME/snap/openshell/common/tenuo-openshell"
+  if [[ "$INSTALL" == snap && -e "$SNAP_POLICY_DIR" ]]; then
+    mv "$SNAP_POLICY_DIR" "$WORK/snap-policy.saved"
+  fi
 fi
 
 gateway_log() {
@@ -292,6 +298,12 @@ cleanup() {
     if [[ -e "$WORK/dev.saved" ]]; then
       mv "$WORK/dev.saved" "$DEV_DIR"
     fi
+    if [[ "$INSTALL" == snap ]]; then
+      rm -rf "$SNAP_POLICY_DIR"
+      if [[ -e "$WORK/snap-policy.saved" ]]; then
+        mv "$WORK/snap-policy.saved" "$SNAP_POLICY_DIR"
+      fi
+    fi
   fi
   docker rm -f tenuo-openshell-dev tenuo-openshell-dev-mcp "$FORWARDER" >/dev/null 2>&1 || true
   if [[ "$status" != 0 ]]; then
@@ -330,6 +342,17 @@ substitute() {
   fi
 }
 substitute "CLI install directory" sed "s#~/.local/bin#\"\$BIN\"#g"
+if [[ "$INSTALL" == snap ]]; then
+  # The guide's instruction for the snap, whose CLI cannot read ~/.local.
+  # shellcheck disable=SC2088 # expanded in the script run from the guide
+  snap_policy="~/snap/openshell/common/tenuo-openshell/demo-policy.yaml"
+  grep -Fq -- "--policy $snap_policy" "$GUIDE" || {
+    echo "the guide no longer gives the snap's demo policy path" >&2
+    exit 1
+  }
+  substitute "snap demo policy" \
+    sed "s#--policy ~/.local/state/tenuo-openshell/dev/demo-policy.yaml#--policy $snap_policy#"
+fi
 substitute "dev state directory" sed "s#~/.local/state/tenuo-openshell/dev#\"\$DEV_DIR\"#g"
 # Nothing answers the approval prompt.
 substitute "unattended approval" sed "s#^tenuo-openshell approve --dev #tenuo-openshell approve --yes --dev #"

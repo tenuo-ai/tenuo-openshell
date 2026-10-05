@@ -37,6 +37,10 @@ All notable changes will be documented here. The format follows
   (`nvidia-nat-core>=1.8,<1.10`). The plugin code is unchanged; CI runs the
   plugin tests and `nat info components` discovery against both 1.8 and 1.9.
   `ci/nat-compat.sh` runs them against a chosen minor release.
+- `TENUO_QS_GATEWAY=installed make quickstart` runs the quickstart against
+  the OpenShell gateway installed on this host. The `Linux install` workflow
+  runs it after OpenShell's own `install.sh` on Ubuntu: the deb package on
+  x86_64 and arm64, and the snap on x86_64. The rpm packages are not covered.
 
 ### Changed
 
@@ -57,6 +61,22 @@ All notable changes will be documented here. The format follows
   installs `nvidia-nat-langchain[openai,nvidia]`.
 - The OpenShell end-to-end suite installs the plugin with
   `nvidia-nat-core>=1.8,<1.10`.
+
+### Fixed
+
+- The quickstart failed with the OpenShell snap. The snap's `openshell`
+  cannot read hidden directories such as `~/.local`, so `sandbox create
+  --policy ~/.local/state/tenuo-openshell/dev/demo-policy.yaml` was denied.
+  With the snap, `dev up` also writes the demo sandbox policy to
+  `~/snap/openshell/common/tenuo-openshell/demo-policy.yaml`, prints that
+  path, and the guide gives it.
+- `dev up`, `dev down`, and `dev status` find the snap's
+  `/var/snap/openshell/common/gateway.toml` and print its restart command,
+  `sudo snap restart openshell.gateway`. Only root can read that file, so
+  they say they cannot check it rather than report the block missing.
+- The quickstart said to add the registration block to the end of
+  `gateway.toml`, which the deb and rpm packages do not install. It now says
+  `dev up` asks to create it, and gives the snap's path and restart command.
 
 ## [0.1.4] - 2026-10-05
 
