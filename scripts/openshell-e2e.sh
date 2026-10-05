@@ -156,6 +156,20 @@ WORKLOAD_IMAGE="${TENUO_DEMO_WORKLOAD_IMAGE:-localhost/tenuo-openshell/workload:
 SANDBOX_CREATED=0
 RECEIPT_DIR="$RUN_DIR/receipts"
 RECEIPT_KEY="$RUN_DIR/secrets/openshell-receipt.key"
+# Every `openshell sandbox exec` runs under this hard deadline, in seconds.
+EXEC_TIMEOUT="${TENUO_DEMO_EXEC_TIMEOUT:-120}"
+if [[ ! "$EXEC_TIMEOUT" =~ ^[0-9]+$ || "$EXEC_TIMEOUT" -lt 60 ]]; then
+  echo "TENUO_DEMO_EXEC_TIMEOUT must be a whole number of seconds, at least 60" >&2
+  exit 2
+fi
+# A retryable request refuses to start in the sandbox after this many seconds.
+# Its curl has a 20-second limit, so by the exec deadline it has either reached
+# the middleware or never will. The margin also covers sandbox clock skew.
+REQUEST_START_WINDOW=$((EXEC_TIMEOUT - 40))
+# Retry only while the middleware is in the request path; see sandbox_request.
+REQUEST_RETRY=1
+# Keep the caller's stderr for timeout notices; most exec stderr goes to the setup log.
+exec 3>&2
 mkdir -p "$LOG_DIR" "$JWT_DIR" "$TLS_DIR" "$FIXTURE_DIR" "$RECEIPT_DIR" "$RUN_DIR/secrets"
 mkdir -p "$RESULTS_DIR/evidence"
 : >"$EFFECT_LOG"
@@ -183,14 +197,18 @@ cleanup() {
   if [[ "$SANDBOX_CREATED" == 1 && -n "${CLI+x}" ]]; then
     if [[ "$status" != 0 ]]; then
       # Keep each sandbox's supervisor log with the retained artifacts.
-      "${CLI[@]}" logs -n 400 "$SANDBOX_NAME" >"$LOG_DIR/sandbox-first.log" 2>&1 || true
+      run_with_deadline 30 "" "" "${CLI[@]}" logs -n 400 "$SANDBOX_NAME" \
+        </dev/null >"$LOG_DIR/sandbox-first.log" 2>&1 || true
       if [[ -n "${CHILD_SANDBOX_NAME:-}" ]]; then
-        "${CLI[@]}" logs -n 400 "$CHILD_SANDBOX_NAME" >"$LOG_DIR/sandbox-second.log" 2>&1 || true
+        run_with_deadline 30 "" "" "${CLI[@]}" logs -n 400 "$CHILD_SANDBOX_NAME" \
+          </dev/null >"$LOG_DIR/sandbox-second.log" 2>&1 || true
       fi
     fi
-    "${CLI[@]}" sandbox delete "$SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
+    run_with_deadline "$EXEC_TIMEOUT" "" "" "${CLI[@]}" sandbox delete "$SANDBOX_NAME" \
+      </dev/null >>"$SETUP_LOG" 2>&1 || true
     if [[ -n "${CHILD_SANDBOX_NAME:-}" ]]; then
-      "${CLI[@]}" sandbox delete "$CHILD_SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
+      run_with_deadline "$EXEC_TIMEOUT" "" "" "${CLI[@]}" sandbox delete "$CHILD_SANDBOX_NAME" \
+        </dev/null >>"$SETUP_LOG" 2>&1 || true
     fi
   fi
   for pid_name in GATEWAY_PID MIDDLEWARE_PID UPSTREAM_PID; do
@@ -228,6 +246,170 @@ run_step() {
   printf ' %q' "$@" >>"$SETUP_LOG"
   printf '\n' >>"$SETUP_LOG"
   "$@" >>"$SETUP_LOG" 2>&1 || fail "$label"
+}
+
+# Run a command with a hard deadline: run_with_deadline SECONDS LABEL SANDBOX
+# COMMAND... macOS has no timeout(1), so a watchdog kills the command. Returns
+# 124 on timeout. With a label, the watchdog first records diagnostics for
+# SANDBOX while the command is still hung. The command keeps the caller's stdin.
+run_with_deadline() {
+  local seconds="$1" label="$2" sandbox="$3"
+  shift 3
+  local flag="$RUN_DIR/deadline.$$.$RANDOM" pid watchdog status=0
+  "$@" <&0 &
+  pid=$!
+  (
+    set +e
+    sleep "$seconds" &
+    sleeper=$!
+    trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+    wait "$sleeper"
+    : >"$flag"
+    if [[ -n "$label" ]]; then
+      capture_diagnostics "$label" "$sandbox" "$pid" "sandbox exec ran past ${seconds}s"
+    fi
+    # Signal the children too: a host tool's own openshell child would
+    # otherwise outlive it.
+    victims="$pid $(pgrep -P "$pid" | tr '\n' ' ')"
+    kill -TERM $victims
+    for _ in {1..25}; do
+      kill -0 "$pid" || exit 0
+      sleep 0.2
+    done
+    kill -KILL $victims
+  ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" || status=$?
+  kill -TERM "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if [[ -e "$flag" ]]; then
+    rm -f "$flag"
+    return 124
+  fi
+  return "$status"
+}
+
+# Record what a sandbox exec was waiting on: capture_diagnostics LABEL SANDBOX
+# PID REASON, where PID is the hung client, if any. Every probe is bounded,
+# since a wedged gateway or container runtime can hang them too.
+capture_diagnostics() {
+  local label="$1" sandbox="$2" pid="$3" reason="$4" dir container child
+  dir="$LOG_DIR/exec-$(date +%H%M%S)-$RANDOM"
+  mkdir -p "$dir"
+  printf 'STALL %s: %s in %s; diagnostics in %s\n' \
+    "$label" "$reason" "${sandbox:-no sandbox}" "$dir" >&3
+  {
+    printf 'label: %s\nreason: %s\nsandbox: %s\ncaptured: %s\n' \
+      "$label" "$reason" "$sandbox" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -n "$pid" ]]; then
+      printf '\n# hung client and its children\n'
+      ps -o pid,ppid,etime,stat,command -p "$pid"
+      for child in $(pgrep -P "$pid"); do
+        ps -o pid,ppid,etime,stat,command -p "$child" | tail -n +2
+      done
+      if command -v lsof >/dev/null 2>&1; then
+        # fd 0 shows whether the client still waits on stdin; TCP rows show
+        # whether it reached the gateway.
+        printf '\n# open files of the hung client\n'
+        lsof -nP -p "$pid"
+      fi
+    fi
+  } >"$dir/client.txt" 2>&1
+  tail -n 400 "$GATEWAY_LOG" >"$dir/gateway-tail.log" 2>&1
+  tail -n 200 "$MIDDLEWARE_LOG" >"$dir/middleware-tail.log" 2>&1
+  df -h "$RUN_DIR" >"$dir/disk.txt" 2>&1
+  [[ -n "$sandbox" ]] || return 0
+  run_with_deadline 30 "" "" "${CLI[@]}" logs -n 400 "$sandbox" </dev/null >"$dir/sandbox.log" 2>&1
+  run_with_deadline 30 "" "" "$COMPUTE_DRIVER" ps -a </dev/null >"$dir/containers.txt" 2>&1
+  # The sandbox's workload and supervisor containers carry its name.
+  for container in $(grep -oE "[^ ]*--$sandbox-[^ ]*" "$dir/containers.txt"); do
+    run_with_deadline 30 "" "" "$COMPUTE_DRIVER" logs --timestamps --tail 400 "$container" \
+      </dev/null >"$dir/container-$container.log" 2>&1
+  done
+  return 0
+}
+
+# `openshell sandbox exec` under the exec deadline: sandbox_exec LABEL SANDBOX
+# COMMAND... Stdin is /dev/null: the CLI reads a piped stdin to EOF before it
+# sends the exec, so an inherited pipe that never closes hangs it silently.
+sandbox_exec() {
+  local label="$1" sandbox="$2"
+  shift 2
+  run_with_deadline "$EXEC_TIMEOUT" "$label" "$sandbox" \
+    "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- "$@" </dev/null
+}
+
+# sandbox_exec for a command that reads the caller's stdin.
+sandbox_exec_stdin() {
+  local label="$1" sandbox="$2"
+  shift 2
+  run_with_deadline "$EXEC_TIMEOUT" "$label" "$sandbox" \
+    "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- "$@"
+}
+
+# A host command that runs `sandbox exec` itself, such as
+# `tenuo-openshell provision`: bounded_tool LABEL SANDBOX COMMAND...
+bounded_tool() {
+  local label="$1" sandbox="$2"
+  shift 2
+  run_with_deadline "$EXEC_TIMEOUT" "$label" "$sandbox" "$@" </dev/null
+}
+
+# Lines in the middleware log that mention JSON-RPC request id $1.
+middleware_lines_for() {
+  grep -cF "request_id=$1 " "$MIDDLEWARE_LOG" 2>/dev/null || true
+}
+
+effect_count() {
+  wc -l <"$EFFECT_LOG" | tr -d ' '
+}
+
+# The start of a retryable request's remote script. It refuses to start after
+# the epoch second in $1, so an exec that hung before starting cannot send its
+# request after sandbox_request has checked that it never arrived.
+REQUEST_GUARD='[ "$(date +%s)" -le "$1" ] || { echo "request start deadline passed" >&2; exit 125; }
+shift
+'
+
+# Send one MCP request with JSON-RPC id $1 from sandbox $2 by running shell
+# script $3 there, with the remaining arguments as $1 and on. Sets LAST_E2E_US.
+#
+# An exec that timed out, or whose request refused to start, is retried once,
+# and only when the request provably never reached the MCP server: the
+# middleware logged nothing for its id and no effect was recorded. The
+# middleware fails closed, so a request it never saw had no effect. The demo
+# counts effects and some tools are single-use, so any other failure is final.
+# That includes curl timing out in the sandbox: its request was sent, and it
+# could still be delivered.
+sandbox_request() {
+  local id="$1" sandbox="$2" script="$3"
+  shift 3
+  local out="$RUN_DIR/request-$id.$RANDOM.out" attempt status lines effects start end
+  for attempt in 1 2; do
+    lines="$(middleware_lines_for "$id")"
+    effects="$(effect_count)"
+    status=0
+    start="$(now_us)"
+    sandbox_exec "request $id" "$sandbox" \
+      sh -c "$REQUEST_GUARD$script" sh "$(($(date +%s) + REQUEST_START_WINDOW))" "$@" \
+      >"$out" || status=$?
+    end="$(now_us)"
+    LAST_E2E_US=$((end - start))
+    if [[ "$attempt" == 1 && "$REQUEST_RETRY" == 1 ]] \
+      && [[ "$status" == 124 || "$status" == 125 ]] \
+      && [[ "$(middleware_lines_for "$id")" == "$lines" && "$(effect_count)" == "$effects" ]]; then
+      printf 'RETRY request %s from %s never reached the middleware (exit %s); sending it again\n' \
+        "$id" "$sandbox" "$status" >&3
+      continue
+    fi
+    break
+  done
+  if [[ "$status" == 28 ]]; then
+    # curl's own --max-time: the exec worked, but the request got no response.
+    capture_diagnostics "request $id" "$sandbox" "" "curl in the sandbox timed out"
+  fi
+  cat "$out"
+  return "$status"
 }
 
 generate_security_material() {
@@ -301,6 +483,12 @@ default_image = "$WORKLOAD_IMAGE"
 EOF
   if [[ -n "$SUPERVISOR_GRPC_ENDPOINT" ]]; then
     printf 'grpc_endpoint = "%s"\n' "$SUPERVISOR_GRPC_ENDPOINT" >>"$GATEWAY_CONFIG"
+  fi
+  if [[ "$COMPUTE_DRIVER" == "docker" ]]; then
+    # A starting Docker gateway force-removes every supervisor container with
+    # its label, including those of other gateways on the same daemon. A
+    # per-run label keeps concurrent runs from killing each other's sandboxes.
+    printf 'sandbox_label = "%s"\n' "$RUN_ID" >>"$GATEWAY_CONFIG"
   fi
   sed "s/__UPSTREAM_PORT__/$UPSTREAM_PORT/g" "$EXAMPLE_DIR/openshell-policy.yaml" >"$SANDBOX_POLICY"
 }
@@ -433,17 +621,15 @@ record_obs() {
 send_request() {
   local fixture="$1"
   local sandbox="${2:-$SANDBOX_NAME}"
-  local body start end
+  local body
   body="$(jq -c . "$fixture")"
-  start="$(now_us)"
-  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- \
-    curl -sS -i --max-time 20 "http://host.openshell.internal:$UPSTREAM_PORT/mcp" \
-      --header 'content-type: application/json' \
-      --header 'accept: application/json, text/event-stream' \
-      --header 'mcp-protocol-version: 2025-11-25' \
-      --data-binary "$body"
-  end="$(now_us)"
-  LAST_E2E_US=$((end - start))
+  sandbox_request "$(jq -r .id "$fixture")" "$sandbox" '
+    exec curl -sS -i --max-time 20 "$1" \
+      --header "content-type: application/json" \
+      --header "accept: application/json, text/event-stream" \
+      --header "mcp-protocol-version: 2025-11-25" \
+      --data-binary "$2"
+  ' "http://host.openshell.internal:$UPSTREAM_PORT/mcp" "$body"
 }
 
 expect_allow() {
@@ -486,7 +672,7 @@ expect_deny() {
 
 # Run the unmodified MCP client in the sandbox through the signing proxy.
 sandbox_mcp_client() {
-  "${CLI[@]}" sandbox exec --name "$1" --no-tty -- sh -c '
+  sandbox_exec "MCP client" "$1" sh -c '
     tenuo-openshell-agent proxy --upstream "http://host.openshell.internal:$1/mcp" 2>>"$HOME/proxy.log" &
     proxy=$!
     sleep 1
@@ -509,14 +695,15 @@ mcp_client_approved_run() {
   local request before start end line decision_us
   if [[ "$run" == "openshell+tenuo" ]]; then
     request="$(jq -er '.restart_service.request_hash' "$first")" || fail "the restart has a pending request"
-    env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" approve \
-      --sandbox "$sandbox" \
-      --request "$request" \
-      --approver-key "$FIXTURE_DIR/signers/approver/key" \
-      --trusted-root "$(jq -er --arg sandbox "$SANDBOX_ID" '.sandboxes[$sandbox].trusted_roots[0]' "$FIXTURE_DIR/policy.json")" \
-      --yes \
-      --openshell "$CLI_BIN" \
-      --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "approve the pending restart"
+    bounded_tool "tenuo-openshell approve" "$sandbox" \
+      env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" approve \
+        --sandbox "$sandbox" \
+        --request "$request" \
+        --approver-key "$FIXTURE_DIR/signers/approver/key" \
+        --trusted-root "$(jq -er --arg sandbox "$SANDBOX_ID" '.sandboxes[$sandbox].trusted_roots[0]' "$FIXTURE_DIR/policy.json")" \
+        --yes \
+        --openshell "$CLI_BIN" \
+        --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "approve the pending restart"
     before="$(wc -l <"$MIDDLEWARE_LOG")"
     start="$(now_us)"
     sandbox_mcp_client "$sandbox" >"$output" || fail "approved MCP client run"
@@ -529,7 +716,7 @@ mcp_client_approved_run() {
     printf 'PASS approver signed the pending restart and it ran once\n'
   else
     start="$(now_us)"
-    "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- \
+    sandbox_exec "comparison MCP client" "$sandbox" \
       /usr/local/lib/tenuo-demo/bin/python /usr/local/lib/tenuo-demo/mcp_client.py \
       "http://host.openshell.internal:$UPSTREAM_PORT/mcp" 2>>"$SETUP_LOG" \
       | tr -d '\r' | tail -1 >"$output" || fail "comparison approved MCP client run"
@@ -551,21 +738,22 @@ mcp_client_run() {
   local output="$RUN_DIR/mcp-client-$sandbox.json"
   local before start end decision_us line
   if [[ "$run" == "openshell+tenuo" ]]; then
-    env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" provision \
-      --sandbox "$sandbox" \
-      --parent-key "$FIXTURE_DIR/signers/task-a/key" \
-      --parent-warrant "$FIXTURE_DIR/warrants/task-a.cbor" \
-      --capabilities '{"read_logs": {"service": "payments", "environment": "staging"}, "restart_service": {"service": "payments", "environment": "staging", "replicas": {"range": {"max": 5}}}}' \
-      --ttl 300 \
-      --openshell "$CLI_BIN" \
-      --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "provision the sandbox holder"
+    bounded_tool "tenuo-openshell provision" "$sandbox" \
+      env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" provision \
+        --sandbox "$sandbox" \
+        --parent-key "$FIXTURE_DIR/signers/task-a/key" \
+        --parent-warrant "$FIXTURE_DIR/warrants/task-a.cbor" \
+        --capabilities '{"read_logs": {"service": "payments", "environment": "staging"}, "restart_service": {"service": "payments", "environment": "staging", "replicas": {"range": {"max": 5}}}}' \
+        --ttl 300 \
+        --openshell "$CLI_BIN" \
+        --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "provision the sandbox holder"
     before="$(wc -l <"$MIDDLEWARE_LOG")"
     start="$(now_us)"
     sandbox_mcp_client "$sandbox" >"$output" || fail "MCP client in the sandbox"
     end="$(now_us)"
   else
     start="$(now_us)"
-    "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- \
+    sandbox_exec "comparison MCP client" "$sandbox" \
       /usr/local/lib/tenuo-demo/bin/python /usr/local/lib/tenuo-demo/mcp_client.py \
       "http://host.openshell.internal:$UPSTREAM_PORT/mcp" 2>>"$SETUP_LOG" \
       | tr -d '\r' | tail -1 >"$output" || fail "comparison MCP client in the sandbox"
@@ -598,7 +786,7 @@ mcp_client_run() {
 # curl. The explicit id keeps receipts matchable.
 sandbox_signed_call() {
   local sandbox="$1" id="$2"
-  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+  sandbox_request "$id" "$sandbox" '
     set -e
     work="$(mktemp -d)"
     printf "%s" "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"read_logs\",\"arguments\":{\"service\":\"payments\",\"environment\":\"staging\"}}}" \
@@ -608,7 +796,7 @@ sandbox_signed_call() {
       --header "accept: application/json, text/event-stream" \
       --header "mcp-protocol-version: 2025-11-25" \
       --data-binary @"$work/body.json"
-  ' sh "$id" "$UPSTREAM_PORT"
+  ' "$id" "$UPSTREAM_PORT"
 }
 
 # Run tenuo-openshell-agent in a sandbox. A non-empty directory gives the call
@@ -616,7 +804,7 @@ sandbox_signed_call() {
 sandbox_agent() {
   local sandbox="$1" dir="$2"
   shift 2
-  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+  sandbox_exec "tenuo-openshell-agent $1" "$sandbox" sh -c '
     dir="$1"; shift
     if [ -n "$dir" ]; then
       export TENUO_HOLDER_KEY_FILE="$dir/holder.key" TENUO_WARRANT_FILE="$dir/warrant" TENUO_APPROVALS_DIR="$dir/approvals"
@@ -629,7 +817,7 @@ sandbox_agent() {
 # holder in directory $2 (default holder when empty) signs it first.
 sandbox_tool_call() {
   local sandbox="$1" dir="$2" id="$3" tool="$4" arguments="$5" sign="$6"
-  "${CLI[@]}" sandbox exec --name "$sandbox" --no-tty -- sh -c '
+  sandbox_request "$id" "$sandbox" '
     set -e
     dir="$1"; id="$2"; tool="$3"; arguments="$4"; sign="$5"; port="$6"
     if [ -n "$dir" ]; then
@@ -647,7 +835,7 @@ sandbox_tool_call() {
       --header "accept: application/json, text/event-stream" \
       --header "mcp-protocol-version: 2025-11-25" \
       --data-binary @"$work/body.json"
-  ' sh "$dir" "$id" "$tool" "$arguments" "$sign" "$UPSTREAM_PORT"
+  ' "$dir" "$id" "$tool" "$arguments" "$sign" "$UPSTREAM_PORT"
 }
 
 # Sub-agent delegation (#18). The first sandbox's agent holds the warrant Task
@@ -692,7 +880,7 @@ subagent_delegation() {
 
   output="$RUN_DIR/subagent-restart.out"
   printf '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"restart_service","arguments":%s}}' "$restart" \
-    | "${CLI[@]}" sandbox exec --name "$SANDBOX_NAME" --no-tty -- sh -c '
+    | sandbox_exec_stdin "sub-agent restart signing" "$SANDBOX_NAME" sh -c '
         export TENUO_HOLDER_KEY_FILE="$1/holder.key" TENUO_WARRANT_FILE="$1/warrant"
         tenuo-openshell-agent sign || true' sh "$child_dir" >"$output" 2>>"$SETUP_LOG" || true
   grep -Fq '"tool-not-authorized"' "$output" || fail "sub-agent restart was refused in the sandbox"
@@ -705,13 +893,14 @@ subagent_delegation() {
   record_obs "sub-agent delegates further" "$run" "refused" "attenuation" "attenuation-refused" 0 0
   printf 'PASS terminal sub-agent could not delegate further\n'
 
-  env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" delegate \
-    --from-sandbox "$SANDBOX_NAME" \
-    --to-sandbox "$CHILD_SANDBOX_NAME" \
-    --tools read_logs \
-    --ttl 600 \
-    --openshell "$CLI_BIN" \
-    --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "cross-sandbox delegation"
+  bounded_tool "tenuo-openshell delegate" "$CHILD_SANDBOX_NAME" \
+    env -u OPENSHELL_SANDBOX_POLICY "$TENUO_TARGET/debug/tenuo-openshell" delegate \
+      --from-sandbox "$SANDBOX_NAME" \
+      --to-sandbox "$CHILD_SANDBOX_NAME" \
+      --tools read_logs \
+      --ttl 600 \
+      --openshell "$CLI_BIN" \
+      --gateway-endpoint "$GATEWAY_ENDPOINT" >>"$SETUP_LOG" 2>&1 || fail "cross-sandbox delegation"
   output="$RUN_DIR/cross-sandbox-read.out"
   sandbox_tool_call "$CHILD_SANDBOX_NAME" "" 21 read_logs "$read" sign >"$output" 2>>"$SETUP_LOG" || fail "cross-sandbox read"
   grep -Fq '200 OK' "$output" || fail "cross-sandbox read returns 200"
@@ -972,6 +1161,8 @@ run_control() {
   stop_one GATEWAY_PID
   stop_one MIDDLEWARE_PID
   stop_one UPSTREAM_PID
+  # Without the middleware nothing proves a request never arrived.
+  REQUEST_RETRY=0
 
   CONTROL_EFFECT="$RUN_DIR/control-effects.jsonl"
   : >"$CONTROL_EFFECT"
