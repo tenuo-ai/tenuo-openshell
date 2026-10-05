@@ -205,7 +205,14 @@ fn up(state: &DevState, args: &UpArgs) -> Result<()> {
     println!();
     println!("Development only: no TLS, no caller authentication, unsigned policy.");
     println!();
-    print!("{}", next_steps(state, &config, &GatewayConfig::locate()?)?);
+    let gateway = GatewayConfig::locate()?;
+    if gateway.is_snap() {
+        // The snap's CLI cannot read the copy in the state directory.
+        let copy = sandbox_policy_for(state, &gateway)?;
+        fs::create_dir_all(copy.parent().ok_or("no parent directory")?)?;
+        write_atomic(&copy, demo_sandbox_policy(&config).as_bytes())?;
+    }
+    print!("{}", next_steps(state, &config, &gateway)?);
     Ok(())
 }
 
@@ -506,13 +513,23 @@ fn policy_metrics(config: &DevConfig) -> Option<(u64, u64)> {
     ))
 }
 
-/// Where the installed gateway reads its configuration: the XDG path, then
-/// on macOS the Homebrew prefix path. When neither exists, the XDG path,
-/// which the operator creates.
+/// Where the installed gateway reads its configuration, and how to restart
+/// it: the XDG path of the deb and rpm packages' systemd user service, then
+/// on macOS the Homebrew prefix path, and on Linux the snap's. When none
+/// exists, the XDG path, which the operator creates.
 pub struct GatewayConfig {
     pub path: PathBuf,
     pub contents: Option<String>,
+    /// The file exists but this user cannot read it, like the snap's, which
+    /// only root can.
+    pub unreadable: bool,
+    pub restart: &'static str,
 }
+
+const SNAP_CONFIG: &str = "/var/snap/openshell/common/gateway.toml";
+const SNAP_RESTART: &str = "sudo snap restart openshell.gateway";
+const BREW_RESTART: &str = "brew services restart openshell";
+const USER_SERVICE_RESTART: &str = "systemctl --user restart openshell-gateway";
 
 impl GatewayConfig {
     pub fn locate() -> Result<Self> {
@@ -521,26 +538,51 @@ impl GatewayConfig {
             None => home()?.join(".config"),
         };
         let xdg = config_home.join("openshell/gateway.toml");
-        let mut candidates = vec![xdg.clone()];
-        if cfg!(target_os = "macos") {
+        let candidates = if cfg!(target_os = "macos") {
             let prefix = std::env::var_os("HOMEBREW_PREFIX")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/opt/homebrew"));
-            candidates.push(prefix.join("var/openshell/gateway.toml"));
+            vec![
+                (xdg, BREW_RESTART),
+                (prefix.join("var/openshell/gateway.toml"), BREW_RESTART),
+            ]
+        } else {
+            vec![
+                (xdg, USER_SERVICE_RESTART),
+                (PathBuf::from(SNAP_CONFIG), SNAP_RESTART),
+            ]
+        };
+        Ok(Self::first_of(candidates))
+    }
+
+    /// The first candidate that exists, readable or not, else the first.
+    fn first_of(candidates: Vec<(PathBuf, &'static str)>) -> Self {
+        for (path, restart) in &candidates {
+            let (contents, unreadable) = match fs::read_to_string(path) {
+                Ok(contents) => (Some(contents), false),
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => (None, true),
+                Err(_) => continue,
+            };
+            return Self {
+                path: path.clone(),
+                contents,
+                unreadable,
+                restart,
+            };
         }
-        for path in candidates {
-            if let Ok(contents) = fs::read_to_string(&path) {
-                return Ok(Self {
-                    path,
-                    contents: Some(contents),
-                });
-            }
-        }
-        Ok(Self {
-            path: xdg,
+        let (path, restart) = candidates.into_iter().next().expect("a candidate");
+        Self {
+            path,
             contents: None,
-        })
+            unreadable: false,
+            restart,
+        }
+    }
+
+    /// Whether this is the OpenShell snap's gateway.
+    pub fn is_snap(&self) -> bool {
+        self.path == Path::new(SNAP_CONFIG)
     }
 
     /// The `grpc_endpoint` of the `tenuo/authorization` registration, if any.
@@ -591,14 +633,6 @@ fn registered_endpoint(toml: &str) -> Option<String> {
     found
 }
 
-pub fn restart_command() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "brew services restart openshell"
-    } else {
-        "systemctl --user restart openshell-gateway"
-    }
-}
-
 fn registration_block(config: &DevConfig) -> Result<String> {
     register_gateway(&RegisterArgs {
         middleware_endpoint: Some(config.endpoint()),
@@ -612,11 +646,30 @@ fn registration_block(config: &DevConfig) -> Result<String> {
     })
 }
 
+/// The demo sandbox policy `openshell sandbox create` reads. The OpenShell
+/// snap's CLI is confined to non-hidden files in the home directory and its
+/// own snap directories, so it cannot read the state directory under
+/// `~/.local`. With the snap, `dev up` also writes the policy to
+/// `~/snap/openshell/common/tenuo-openshell/demo-policy.yaml`.
+pub fn sandbox_policy_for(state: &DevState, gateway: &GatewayConfig) -> Result<PathBuf> {
+    if gateway.is_snap() {
+        Ok(home()?.join("snap/openshell/common/tenuo-openshell/demo-policy.yaml"))
+    } else {
+        Ok(state.sandbox_policy())
+    }
+}
+
 fn next_steps(state: &DevState, config: &DevConfig, gateway: &GatewayConfig) -> Result<String> {
     let block = registration_block(config)?;
-    let restart = restart_command();
+    let restart = gateway.restart;
     let path = gateway.path.display();
     let register = match (&gateway.contents, gateway.registered_endpoint()) {
+        (None, None) if gateway.unreadable => format!(
+            "1. Register the middleware with your OpenShell gateway. Add this block\n   \
+             to the end of {path}, with sudo. `dev up` cannot read that file,\n   \
+             so it cannot tell whether the block is there already:\n\n{block}\n   \
+             Then restart the gateway:\n\n   {restart}\n"
+        ),
         (_, Some(endpoint)) if endpoint == config.endpoint() => format!(
             "1. {path} already registers this middleware.\n   \
              If the gateway is not running, restart it: {restart}\n"
@@ -647,7 +700,7 @@ fn next_steps(state: &DevState, config: &DevConfig, gateway: &GatewayConfig) -> 
          3. Give it a task:\n\n   \
          tenuo-openshell provision --dev --sandbox {DEMO_SANDBOX} --preset demo\n",
         image = config.demo_image,
-        policy = state.sandbox_policy().display(),
+        policy = sandbox_policy_for(state, gateway)?.display(),
         mcp = config.mcp_url(),
     ))
 }
@@ -674,8 +727,16 @@ fn down(state: &DevState) -> Result<()> {
         println!("The gateway checks it at startup, and sandboxes that attach it now fail closed.");
         println!(
             "Remove that block and restart the gateway: {}",
-            restart_command()
+            gateway.restart
         );
+    } else if gateway.unreadable {
+        println!();
+        println!(
+            "If {} registers tenuo/authorization, remove that block and restart the gateway: {}",
+            gateway.path.display(),
+            gateway.restart
+        );
+        println!("The gateway checks it at startup, and sandboxes that attach it now fail closed.");
     }
     Ok(())
 }
@@ -717,6 +778,10 @@ fn status(state: &DevState) -> Result<()> {
         }
         (Some(endpoint), _) => println!(
             "gateway     {} registers tenuo/authorization at {endpoint}",
+            gateway.path.display()
+        ),
+        (None, _) if gateway.unreadable => println!(
+            "gateway     cannot read {}; check it for the tenuo/authorization block with sudo",
             gateway.path.display()
         ),
         (None, _) => println!(
@@ -853,11 +918,13 @@ mod tests {
         let gateway = |contents: Option<&str>| GatewayConfig {
             path: path.clone(),
             contents: contents.map(str::to_string),
+            unreadable: false,
+            restart: USER_SERVICE_RESTART,
         };
         let missing = next_steps(&state, &config(), &gateway(None)).unwrap();
         assert!(missing.contains("Create\n"));
         assert!(missing.contains("[openshell]\nversion = 2\n\n# OpenShell gateway"));
-        assert!(missing.contains(restart_command()));
+        assert!(missing.contains(USER_SERVICE_RESTART));
         assert!(missing.contains("--from demo:test"));
         assert!(missing.contains("--upstream http://host.openshell.internal:18680/mcp"));
         assert!(missing.contains("provision --dev --sandbox tenuo-demo --preset demo"));
@@ -878,6 +945,75 @@ mod tests {
         let stale = next_steps(&state, &moved, &gateway(Some(&block))).unwrap();
         assert!(stale.contains("registers tenuo/authorization at http://127.0.0.1:18651"));
         assert!(stale.contains("grpc_endpoint = \"http://127.0.0.1:19000\""));
+
+        // The snap's gateway.toml is root's: add the block with sudo, and
+        // restart the snap service.
+        let snap = GatewayConfig {
+            path: PathBuf::from(SNAP_CONFIG),
+            contents: None,
+            unreadable: true,
+            restart: SNAP_RESTART,
+        };
+        let root_only = next_steps(&state, &config(), &snap).unwrap();
+        assert!(root_only.contains("Add this block"));
+        assert!(root_only.contains("/var/snap/openshell/common/gateway.toml, with sudo"));
+        assert!(root_only.contains("cannot read that file"));
+        assert!(root_only.contains("grpc_endpoint = \"http://127.0.0.1:18651\""));
+        assert!(root_only.contains("sudo snap restart openshell.gateway"));
+        assert!(!root_only.contains("version = 2"));
+        // Its CLI cannot read ~/.local; the policy copy is in its own directory.
+        assert!(root_only.contains("snap/openshell/common/tenuo-openshell/demo-policy.yaml \\"));
+        assert!(!root_only.contains(&state.sandbox_policy().display().to_string()));
+        assert!(missing.contains(&format!("--policy {} \\", state.sandbox_policy().display())));
+    }
+
+    #[test]
+    fn gateway_config_is_the_first_install_that_has_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let xdg = directory.path().join("xdg/gateway.toml");
+        let snap = directory.path().join("snap/gateway.toml");
+        let candidates = || {
+            vec![
+                (xdg.clone(), USER_SERVICE_RESTART),
+                (snap.clone(), SNAP_RESTART),
+            ]
+        };
+
+        // Neither exists: the first, which the operator creates.
+        let none = GatewayConfig::first_of(candidates());
+        assert_eq!(none.path, xdg);
+        assert_eq!(none.restart, USER_SERVICE_RESTART);
+        assert!(none.contents.is_none() && !none.unreadable);
+
+        // Only the snap's exists: its path and restart command.
+        fs::create_dir_all(snap.parent().unwrap()).unwrap();
+        fs::write(&snap, "[openshell]\nversion = 2\n").unwrap();
+        let found = GatewayConfig::first_of(candidates());
+        assert_eq!(found.path, snap);
+        assert_eq!(found.restart, SNAP_RESTART);
+        assert_eq!(
+            found.contents.as_deref(),
+            Some("[openshell]\nversion = 2\n")
+        );
+
+        // The XDG one wins when both exist.
+        fs::create_dir_all(xdg.parent().unwrap()).unwrap();
+        fs::write(&xdg, "").unwrap();
+        assert_eq!(GatewayConfig::first_of(candidates()).path, xdg);
+
+        // One this user cannot read is still the one, marked unreadable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::remove_file(&xdg).unwrap();
+            fs::set_permissions(&snap, fs::Permissions::from_mode(0o000)).unwrap();
+            if fs::read(&snap).is_err() {
+                let locked = GatewayConfig::first_of(candidates());
+                assert_eq!(locked.path, snap);
+                assert!(locked.unreadable && locked.contents.is_none());
+                assert_eq!(locked.restart, SNAP_RESTART);
+            }
+        }
     }
 
     #[test]

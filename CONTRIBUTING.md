@@ -19,6 +19,19 @@ When Helm is installed it also lints the production chart. Set
 Use `make e2e` for changes to protocols, policy evaluation, authentication,
 container behavior, demo assets, or the OpenShell pin.
 
+`make quickstart` runs [the quickstart](docs/quickstart.md) end to end
+against a stand-in for an installed OpenShell gateway. With
+`TENUO_QS_GATEWAY=installed` it runs against the OpenShell this host already
+has instead, installed with OpenShell's `install.sh` and with its gateway
+running: it edits and restores that gateway's `gateway.toml` and restarts it.
+`TENUO_QS_CLI`, `TENUO_QS_MIDDLEWARE_IMAGE`, and `TENUO_QS_DEMO_IMAGE` swap in
+local builds; see `scripts/quickstart-check.sh`. The `Linux install` workflow
+does this on GitHub's Ubuntu runners for the deb package on x86_64 and arm64
+and the snap on x86_64. It runs on pull requests that touch the quickstart or
+what it runs, weekly, and on demand, where `artifacts: published` checks a
+release. It is not a required check. The rpm packages are not covered: hosted
+runners are Ubuntu only.
+
 `make check` also formats and lints the fuzz targets, and runs
 `cargo deny check` when `cargo-deny` is installed. `deny.toml` holds the
 advisory, license, and source policy. Add an advisory ignore only with the
