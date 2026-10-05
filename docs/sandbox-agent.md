@@ -12,8 +12,8 @@ agent's MCP client ──► tenuo-openshell-agent proxy (127.0.0.1:7415)
                        OpenShell ──► Tenuo middleware ──► MCP server
 ```
 
-To see the whole path work first, from released artifacts and a throwaway
-gateway, run the [quickstart](quickstart.md).
+To see the whole path work first, next to the OpenShell gateway you already
+run, try the [quickstart](quickstart.md).
 
 Two binaries are involved:
 
@@ -189,13 +189,30 @@ Once a tool lists any constraint, arguments that are not listed are rejected;
 use `{"wildcard": true}` to admit one without constraining it. A tool with
 `{}` accepts any arguments, so prefer listing each argument.
 
+To make every call to a tool wait for a human, name the tool with
+`--require-approval` and the approvers' public keys with `--approver`. Both
+are repeatable. `--min-approvals` sets how many distinct approvers must sign
+each call (default 1). Tools not named run without approval. See
+[Approvals](#approvals).
+
+```bash
+tenuo-openshell provision \
+  --sandbox my-sandbox \
+  --issuer-key issuer.key \
+  --capabilities @capabilities.json \
+  --require-approval restart_service \
+  --approver approver.pub
+```
+
 ## 4. Run the proxy and point the agent at it
 
 ```bash
 tenuo-openshell-agent proxy --upstream https://mcp.internal/mcp
 ```
 
-Configure the agent's MCP client with `http://127.0.0.1:7415/mcp`. The proxy
+The proxy creates the holder key if there is none yet, so it can start with
+the sandbox, before a warrant is provisioned; until then it denies every
+`tools/call`. Configure the agent's MCP client with `http://127.0.0.1:7415/mcp`. The proxy
 listens on loopback only. Run one proxy per MCP server, each with its own
 `--listen` port.
 
@@ -260,13 +277,16 @@ without one, the proxy records the pending request in the sandbox and returns
 
 An approver reviews and signs it from outside the sandbox. Create the
 approver key once with `tenuo-openshell keygen --out approver.key
---public-out approver.pub`; `approver.pub` is the key the warrant must name as
-a required approver:
+--public-out approver.pub`; `approver.pub` is the key the warrant names with
+`--approver` (see [Capabilities](#capabilities)):
 
 ```bash
 tenuo-openshell approve --sandbox my-sandbox --request 88c676b2 \
   --approver-key approver.key --trusted-root issuer.pub
 ```
+
+`--request` takes a unique prefix of the hash, and can be left out when only
+one request is pending.
 
 The sandbox wrote the pending request, so `approve` trusts none of it until it
 checks it. The request records the approval request Tenuo produced and the

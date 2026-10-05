@@ -62,20 +62,24 @@ Choose the shortest path that demonstrates the capability you care about:
 
 | Goal | What you will see | Start |
 | --- | --- | --- |
-| Prove task-level enforcement | A real OpenShell sandbox makes one allowed and two denied MCP calls using released artifacts | [`make quickstart`](docs/quickstart.md) |
+| Prove task-level enforcement | Your own OpenShell gateway: one allowed call, one denied outside the task, and a restart held until you approve it | [Quickstart](docs/quickstart.md) |
 | Add authorization to Agent Toolkit | Choose in-process function checks, OpenShell enforcement for MCP calls, or both | [Agent Toolkit guide](docs/agent-toolkit.md) |
 | See a human approval flow | A NeMo Agent Toolkit ReAct agent pauses a restart until an approver signs the exact call | [`examples/nemo-agent-toolkit/run.sh`](examples/nemo-agent-toolkit/README.md) |
 | Exercise the complete security model | Constraints, approval replay protection, holder binding, cross-runtime delegation, revocation, and signed receipts | [`make demo`](examples/demo/README.md) |
 | Protect an existing OpenShell agent | Add the signing proxy, register the middleware, and provision task authority | [Integration guide](docs/sandbox-agent.md) |
+| Run it in production | TLS, the gateway's JWT, a signed policy, and Redis replay protection | [Going to production](docs/production-quickstart.md) |
 
-The quickstart takes about 10 minutes, builds nothing, and keeps its gateway
-separate from any OpenShell gateway you already run. The Agent Toolkit example
-uses a deterministic model stub, so it needs no model account or API key.
+The quickstart adds Tenuo to the OpenShell gateway you already run, in
+development mode, in about 5 minutes. `tenuo-openshell dev up` prints the
+gateway block for you to paste; it never edits your OpenShell install. The
+calls are fixed, so it needs no model or API key, and neither does the Agent
+Toolkit example.
 
 ```bash
-git clone https://github.com/tenuo-ai/tenuo-openshell.git
-cd tenuo-openshell
-make quickstart
+tenuo-openshell dev up      # middleware and a demo MCP server; prints the gateway block
+openshell sandbox create --name tenuo-demo ...
+tenuo-openshell provision --dev --sandbox tenuo-demo --preset demo
+tenuo-openshell demo call restart_service service=payments environment=staging replicas=3
 ```
 
 Agent Toolkit has two integration paths. The PyPI plugin protects native
@@ -234,8 +238,9 @@ To build from source instead, run `cargo build --release --locked --bins`.
 | Goal | Guide |
 | --- | --- |
 | Find the right evaluation, integration, or operations path | [Documentation index](docs/README.md) |
-| Try it in 10 minutes from released artifacts | [Quickstart](docs/quickstart.md) |
+| Try it in 5 minutes next to your OpenShell gateway | [Quickstart](docs/quickstart.md) |
 | Add Tenuo to Agent Toolkit | [Agent Toolkit integration paths](docs/agent-toolkit.md) |
+| Run the middleware with TLS, JWT, and a signed policy | [Going to production](docs/production-quickstart.md) |
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) and the [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |

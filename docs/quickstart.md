@@ -1,268 +1,108 @@
 # Quickstart
 
-This guide takes you from nothing to one allowed and two denied MCP tool calls
-in an OpenShell sandbox, in about 10 minutes. It uses only released artifacts:
-the OpenShell v0.1.2 binaries, the Tenuo v0.1.2 images, and the
-`tenuo-openshell` v0.1.2 CLI. Nothing is built from source.
+Your OpenShell sandbox policy decides which binaries in a sandbox may reach an
+MCP server, and which tools they may call there. If it allows
+`restart_service`, the agent can restart any service, in any environment, as
+often as it likes. Tenuo decides which service, for which task, and asks a
+human first. Each sandbox holds a warrant for its current task, and the Tenuo
+middleware in OpenShell checks every `tools/call` against it.
 
-It starts its own OpenShell gateway on port 18670, so a gateway you already
-run is not touched. Run every command in one shell, in order.
+This guide adds Tenuo to the OpenShell gateway you already run, in development
+mode, and shows the difference in about 5 minutes. It uses fixed demo calls,
+so it needs no model or API key.
 
-From a repository checkout, the fastest path is `make quickstart`. It executes
-the commands in this guide, checks every expected outcome, and cleans up. The
-steps below explain the complete setup and can also be run manually.
+| Call from the sandbox | Without Tenuo | With Tenuo |
+| --- | --- | --- |
+| `read_logs` for `payments` in `staging` | Runs | Runs |
+| `read_logs` for `identity` in `production` | Runs | Denied: outside the task |
+| `restart_service` for `payments` in `staging` | Runs | Held until you approve it, then runs once |
+| Any call that skips the Tenuo agent | Runs | Denied by the middleware |
 
-| You end with | Where |
-| --- | --- |
-| An OpenShell v0.1.2 gateway with Tenuo registered over TLS and JWT | Host process |
-| The Tenuo middleware | Docker container `tenuo-quickstart-middleware` |
-| An MCP server with `read_logs` and `restart_service` | Host process |
-| A sandbox whose task may read `payments` logs in `staging` or `dev` | Sandbox `tenuo-quickstart` |
+## Before you start
 
-By the end, you will have verified three distinct behaviors:
-
-1. a call within the task's warrant reaches the MCP server;
-2. a call outside the warrant is denied locally for clear agent feedback; and
-3. a call that bypasses the local proxy is independently denied by the
-   OpenShell middleware before credentials are attached.
-
-## Requirements
-
+- OpenShell installed with its install script, and its local gateway running:
+  `openshell sandbox create` works. The gateway uses the Docker driver.
+- On macOS, Docker Desktop with host networking on (Settings → Resources →
+  Network). OpenShell needs it for any sandbox, with or without Tenuo.
 - macOS on Apple silicon, or Linux on x86_64 or arm64.
-- Docker Desktop, or Docker Engine 28.0 or later.
-- `curl`, `jq`, and `python3`.
-- About 400 MB of downloads.
+- About 300 MB of image downloads.
 
-The gateway listens on your LAN address without authentication, because the
-sandbox supervisors must reach it from Docker. Run this on a trusted network
-and clean up when you are done.
-
-## 1. Settings and binaries
-
-```bash
-mkdir tenuo-quickstart && cd tenuo-quickstart
-export PATH="$PWD/bin:$PATH"
-GATEWAY_PORT=18670 HEALTH_PORT=18671 MIDDLEWARE_PORT=18651 MCP_PORT=18680
-
-if [ "$(uname -s)" = Darwin ]; then
-  HOST_IP="$(ipconfig getifaddr "$(route -n get default | awk '/interface:/ {print $2}')")"
-else
-  HOST_IP="$(ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
-fi
-export OPENSHELL_GATEWAY_ENDPOINT="http://$HOST_IP:$GATEWAY_PORT"
-echo "host address: $HOST_IP"
-```
-
-`HOST_IP` must be a non-loopback IPv4 address. The gateway, the sandbox
-supervisors, and the middleware all reach each other through it.
-
-Download the OpenShell CLI and gateway, and the Tenuo operator CLI:
+## 1. Install the Tenuo CLI
 
 ```bash
 case "$(uname -s)/$(uname -m)" in
-  Darwin/arm64) cli=aarch64-apple-darwin gateway=aarch64-apple-darwin ;;
-  Linux/x86_64) cli=x86_64-unknown-linux-musl gateway=x86_64-unknown-linux-gnu ;;
-  Linux/aarch64) cli=aarch64-unknown-linux-musl gateway=aarch64-unknown-linux-gnu ;;
-  *) echo "unsupported platform" >&2; false ;;
+  Darwin/arm64) target=aarch64-apple-darwin ;;
+  Linux/x86_64) target=x86_64-unknown-linux-musl ;;
+  Linux/aarch64) target=aarch64-unknown-linux-musl ;;
 esac
-mkdir -p bin
-curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell-$cli.tar.gz" \
-  | tar -xz -C bin
-curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell-gateway-$gateway.tar.gz" \
-  | tar -xz -C bin
-curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.2/tenuo-openshell-v0.1.2-$cli.tar.gz" \
-  | tar -xz -C bin tenuo-openshell
-openshell --version && openshell-gateway --version && tenuo-openshell --version
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.3/tenuo-openshell-v0.1.3-$target.tar.gz" \
+  | tar -xz -C ~/.local/bin tenuo-openshell
+tenuo-openshell --version
 ```
 
-To verify the Tenuo binary's signature first, see
-[Verifying a release binary](releasing.md#verifying-a-release-binary).
+`~/.local/bin` must be on your `PATH`. To verify the binary's signature first,
+see [Verifying a release binary](releasing.md#verifying-a-release-binary).
 
-## 2. Keys
-
-The gateway signs a short-lived JWT for every call it makes to the middleware.
-`generate-certs` creates that signing key, a CA, and a server certificate for
-`HOST_IP`. The quickstart gateway runs without TLS on its own listener, so the
-middleware uses that server certificate.
+## 2. Start Tenuo next to your gateway
 
 ```bash
-openshell-gateway generate-certs --output-dir pki --server-san "$HOST_IP"
+tenuo-openshell dev up
 ```
 
-The issuer key signs warrants, and the middleware trusts its public key. The
-policy signing key signs each version of the trust policy, and the middleware
-gets only its public key. `keygen` writes each secret key with mode 0600,
-never overwrites a file, and prints the public key:
+`dev up` starts two containers, both published on 127.0.0.1 only:
 
-```bash
-tenuo-openshell keygen --out issuer.key --public-out issuer.pub
-tenuo-openshell keygen --out policy-signing.key --public-out policy-signing.pub
+| Container | What it is |
+| --- | --- |
+| `tenuo-openshell-dev` | The Tenuo middleware, on port 18651 |
+| `tenuo-openshell-dev-mcp` | A demo MCP server with `read_logs` and `restart_service`, on port 18680. It has no Tenuo code and runs every call it receives. |
+
+It keeps an issuer key, an approver key, and the middleware's trust policy in
+`~/.local/state/tenuo-openshell/dev`. The policy starts out trusting no
+sandboxes. Development mode has no TLS, no caller authentication, an unsigned
+policy, and single-use state in memory. Running `dev up` again changes
+nothing.
+
+It then prints a registration block for your gateway, and names the file to
+add it to: `~/.config/openshell/gateway.toml`, or with Homebrew,
+`/opt/homebrew/var/openshell/gateway.toml` when the first does not exist:
+
+```toml
+[[openshell.supervisor.middleware]]
+name = "tenuo/authorization"
+grpc_endpoint = "http://127.0.0.1:18651"
+allow_insecure_transport = true
+audience = "urn:openshell:extension:middleware:tenuo/authorization"
+max_payload_bytes = 262144
+timeout = "2s"
 ```
 
-## 3. Middleware
+Add the block to the end of that file, then restart the gateway so it loads
+the middleware. `dev up` never edits your OpenShell installation.
 
-The sandbox ID does not exist until step 6, so start from a policy that
-trusts no sandboxes. `--sign-with` writes `tenuo/policy.json.sig` next to it:
+| Platform | Restart the gateway |
+| --- | --- |
+| macOS (Homebrew) | `brew services restart openshell` |
+| Linux | `systemctl --user restart openshell-gateway` |
 
-```bash
-mkdir -p tenuo
-tenuo-openshell policy init --policy tenuo/policy.json --sign-with policy-signing.key
-```
+<!-- check: register-gateway -->
 
-Start the middleware with TLS, the gateway's JWT public key, and the policy
-signing public key. It denies every request until a sandbox is added:
+The gateway log then warns that extension authentication is disabled for this
+registration. That is development mode: the middleware accepts calls without
+OpenShell's credential. [Going to production](production-quickstart.md)
+registers it over TLS with the gateway's JWT.
 
-```bash
-docker run -d --name tenuo-quickstart-middleware \
-  --user "$(id -u):$(id -g)" \
-  -e TENUO_DECISION_LOG=1 \
-  -p "$MIDDLEWARE_PORT:50051" \
-  -v "$PWD/tenuo:/etc/tenuo:ro" \
-  -v "$PWD/pki/server:/tls:ro" \
-  -v "$PWD/pki/jwt/public.pem:/jwt/public.pem:ro" \
-  ghcr.io/tenuo-ai/tenuo-openshell:v0.1.2 \
-  --policy /etc/tenuo/policy.json \
-  --policy-signing-key "$(cat policy-signing.pub)" \
-  --listen 0.0.0.0:50051 \
-  --tls-cert /tls/tls.crt \
-  --tls-key /tls/tls.key \
-  --openshell-jwt-public-key /jwt/public.pem \
-  --openshell-gateway-id tenuo-quickstart \
-  --allow-in-memory-replay
-until docker logs tenuo-quickstart-middleware 2>&1 | grep -q listening; do sleep 1; done
-```
+The gateway contacts the middleware when it starts, so start Tenuo first.
 
-The middleware refuses a policy whose signature does not verify.
-`--allow-in-memory-replay` keeps single-use state for proofs and approvals in
-the process, which suits one local instance. Production uses Redis over
-`rediss://`; see [Deployment](deployment.md).
+## 3. Create a sandbox and give it a task
 
-## 4. MCP server
+`dev up` also wrote an OpenShell sandbox policy for the demo,
+`~/.local/state/tenuo-openshell/dev/demo-policy.yaml`. It is an ordinary
+policy: the agent may call `read_logs` and `restart_service` on the demo MCP
+server, with any arguments. The only Tenuo addition is the
+`network_middlewares` entry that attaches the middleware to that host:
 
-A minimal MCP server that runs every call it receives and logs it to
-`mcp.log`. It has no Tenuo code.
-
-```bash
-cat > mcp_server.py <<'EOF'
-import json
-import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-ARGS = {"type": "object", "properties": {
-    "service": {"type": "string"}, "environment": {"type": "string"}}}
-TOOLS = [{"name": "read_logs", "inputSchema": ARGS},
-         {"name": "restart_service", "inputSchema": ARGS}]
-
-
-class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        message = json.loads(self.rfile.read(int(self.headers["content-length"])))
-        method, params = message.get("method"), message.get("params") or {}
-        if "id" not in message:
-            self.send_response(202)
-            self.end_headers()
-            return
-        if method == "initialize":
-            result = {"protocolVersion": params.get("protocolVersion", "2025-11-25"),
-                      "capabilities": {"tools": {}},
-                      "serverInfo": {"name": "quickstart", "version": "1"}}
-        elif method == "tools/list":
-            result = {"tools": TOOLS}
-        elif method == "tools/call":
-            args = params.get("arguments", {})
-            print(f"RAN {params['name']} {json.dumps(args)}", flush=True)
-            text = f"{params['name']} ran for {args.get('service')} in {args.get('environment')}"
-            result = {"content": [{"type": "text", "text": text}]}
-        else:
-            result = {}
-        body = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}).encode()
-        self.send_response(200)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *args):
-        pass
-
-
-ThreadingHTTPServer(("0.0.0.0", int(sys.argv[1])), Handler).serve_forever()
-EOF
-python3 mcp_server.py "$MCP_PORT" > mcp.log 2>&1 &
-echo $! > mcp.pid
-```
-
-## 5. Gateway
-
-Write the gateway configuration. `tenuo-openshell register --only gateway`
-prints the middleware registration block for it.
-
-```bash
-cat > gateway.toml <<EOF
-[openshell]
-version = 2
-
-[openshell.gateway.auth]
-allow_unauthenticated_users = true
-
-[openshell.gateway.gateway_jwt]
-signing_key_path = "$PWD/pki/jwt/signing.pem"
-public_key_path = "$PWD/pki/jwt/public.pem"
-kid_path = "$PWD/pki/jwt/kid"
-gateway_id = "tenuo-quickstart"
-
-[openshell.drivers.docker]
-grpc_endpoint = "http://$HOST_IP:$GATEWAY_PORT"
-
-EOF
-tenuo-openshell register --only gateway \
-  --middleware-endpoint "https://$HOST_IP:$MIDDLEWARE_PORT" \
-  --ca "$PWD/pki/ca.crt" \
-  --mcp-host host.openshell.internal >> gateway.toml
-openshell-gateway config preflight --path gateway.toml
-```
-
-`gateway_id` must match the middleware's `--openshell-gateway-id`. The
-middleware rejects any call whose JWT has another issuer or audience.
-
-Start the gateway. It contacts the middleware before it accepts requests:
-
-```bash
-openshell-gateway \
-  --config gateway.toml \
-  --compute-driver docker \
-  --bind-address "$HOST_IP" \
-  --port "$GATEWAY_PORT" \
-  --health-port "$HEALTH_PORT" \
-  --disable-tls \
-  --db-url "sqlite://$PWD/gateway.db" > gateway.log 2>&1 &
-echo $! > gateway.pid
-until curl -fs -o /dev/null "http://$HOST_IP:$HEALTH_PORT/healthz"; do sleep 1; done
-```
-
-## 6. Sandbox
-
-Build a sandbox image with the agent. The `COPY --from` line is the only Tenuo
-addition:
-
-```bash
-cat > Dockerfile <<'EOF'
-FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
-  && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.2 \
-  /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
-EOF
-docker build -q -t tenuo-quickstart-sandbox:latest .
-```
-
-The sandbox policy admits both tools on the MCP server and attaches the Tenuo
-middleware to it:
-
-```bash
-cat > sandbox-policy.yaml <<EOF
-version: 1
-
+```yaml
 network_middlewares:
   tenuo:
     middleware: tenuo/authorization
@@ -270,200 +110,171 @@ network_middlewares:
     endpoints:
       include:
         - host.openshell.internal
-
-network_policies:
-  quickstart-mcp:
-    name: Quickstart MCP server
-    endpoints:
-      - host: host.openshell.internal
-        port: $MCP_PORT
-        path: /mcp
-        protocol: mcp
-        enforcement: enforce
-        rules:
-          - allow: {method: initialize}
-          - allow: {method: notifications/initialized}
-          - allow: {method: tools/list}
-          - allow: {method: tools/call, tool: read_logs}
-          - allow: {method: tools/call, tool: restart_service}
-    binaries:
-      - path: /usr/local/bin/tenuo-openshell-agent
-      - path: /usr/bin/curl
-EOF
-openshell sandbox create --name tenuo-quickstart \
-  --from tenuo-quickstart-sandbox:latest \
-  --policy sandbox-policy.yaml \
-  --no-tty --detach -- sleep infinity
 ```
 
-`curl` is listed only so step 8 can show what the middleware does with an
-unsigned call. In your own policy, list only the agent.
-
-## 7. Trust the sandbox and issue a warrant
-
-Add the sandbox's ID to the trust policy, and sign the new version. Every tool
-accepts a signed call once unless it is listed with `--idempotent`, so list
-the read-only `read_logs` there; `restart_service` stays single-use. The
-middleware reloads the policy within five seconds:
+Create the sandbox. The demo image holds the Tenuo agent, and the sandbox runs
+the agent's MCP proxy. An agent's MCP client points at the proxy, which signs
+each `tools/call` with a key that never leaves the sandbox:
 
 ```bash
-SANDBOX_ID="$(openshell sandbox get tenuo-quickstart -o json | jq -er .id)"
-tenuo-openshell policy add \
-  --policy tenuo/policy.json \
-  --sandbox-id "$SANDBOX_ID" \
-  --trusted-root issuer.pub \
-  --mcp "http://host.openshell.internal:$MCP_PORT/mcp" \
-  --tools read_logs,restart_service \
-  --idempotent read_logs \
-  --sign-with policy-signing.key
-sleep 6
+openshell sandbox create --name tenuo-demo \
+  --from ghcr.io/tenuo-ai/tenuo-openshell-demo:v0.1.3 \
+  --policy ~/.local/state/tenuo-openshell/dev/demo-policy.yaml \
+  --no-tty --detach -- tenuo-openshell-agent proxy --upstream http://host.openshell.internal:18680/mcp
 ```
 
-Provision the task. The holder key is generated inside the sandbox and never
-leaves it. The warrant allows `read_logs` for `payments` in `staging` or
-`dev`, and nothing else:
+Give it a task. `provision --dev` adds the sandbox to the dev policy, has the
+agent create its holder key, and installs a warrant signed by the dev issuer:
 
 ```bash
-tenuo-openshell provision \
-  --sandbox tenuo-quickstart \
-  --issuer-key issuer.key \
-  --capabilities '{"read_logs": {"service": "payments", "environment": {"one_of": ["staging", "dev"]}}}' \
-  --ttl 3600
-```
-
-Your key and warrant IDs differ:
-
-```text
-sandbox tenuo-quickstart
-holder  38f75994816fe14f4c4179865277018dd76d1e52e398734f3ef48ce2a5e34f8f
-warrant tnu_wrt_01a10a65811476b291459ac46e9fff56
-tools   read_logs
-```
-
-## 8. Make calls
-
-Start the signing proxy in the sandbox. An agent's MCP client points at it
-instead of the MCP server:
-
-```bash
-openshell sandbox exec --name tenuo-quickstart --no-tty -- sh -c "
-  nohup tenuo-openshell-agent proxy \
-    --upstream http://host.openshell.internal:$MCP_PORT/mcp > /tmp/proxy.log 2>&1 &
-  until grep -q listening /tmp/proxy.log; do sleep 0.2; done"
-```
-
-`call <url> <tool> <arguments>` sends one MCP `tools/call` from inside the
-sandbox:
-
-```bash
-call() {
-  openshell sandbox exec --name tenuo-quickstart --no-tty -- \
-    curl -sS "$1" \
-      -H 'content-type: application/json' \
-      -H 'accept: application/json, text/event-stream' \
-      -H 'mcp-protocol-version: 2025-11-25' \
-      -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",
-           \"params\": {\"name\": \"$2\", \"arguments\": $3}}"
-  echo
-}
-```
-
-**Allowed.** The proxy signs the call, the middleware checks the warrant, and
-the MCP server runs it:
-
-```bash
-call http://127.0.0.1:7415/mcp read_logs '{"service": "payments", "environment": "staging"}'
+tenuo-openshell provision --dev --sandbox tenuo-demo --preset demo
 ```
 
 ```text
-{"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "read_logs ran for payments in staging"}]}}
+trusted sandbox tenuo-demo (f93f8b2b-4981-4327-ac4c-075a72e46b9d) in the dev policy, version 2
+sandbox  tenuo-demo
+holder   7469287b01a9cec652bfae7366c24670427eeafbca23933ffd3cee31e2d6d46f
+warrant  tnu_wrt_01a10adf5a937576b63088480b84ceb3
+tools    read_logs, restart_service
+approval restart_service needs 1 of 1 approver(s)
 ```
 
-**Denied by the warrant.** `production` is outside the warrant. The proxy
-refuses to sign it, so the call never leaves the sandbox:
+The `demo` preset grants:
+
+- `read_logs` for `payments` in `staging` or `dev`; and
+- `restart_service` for `payments` in `staging` with at most 5 replicas, once
+  the dev approver signs each call.
+
+Without the preset, the same warrant is:
+
+```text
+tenuo-openshell provision --dev --sandbox tenuo-demo \
+  --capabilities '{"read_logs": {"service": "payments", "environment": {"one_of": ["staging", "dev"]}},
+                   "restart_service": {"service": "payments", "environment": "staging", "replicas": {"range": {"max": 5}}}}' \
+  --require-approval restart_service
+```
+
+## 4. See the difference
+
+`demo call` sends one `tools/call` from inside the sandbox through the agent's
+proxy, and prints what happened to it.
+
+A call inside the task runs:
 
 ```bash
-call http://127.0.0.1:7415/mcp read_logs '{"service": "payments", "environment": "production"}'
+tenuo-openshell demo call read_logs service=payments environment=staging
 ```
 
 ```text
-{"error":{"code":-32001,"data":{"tenuo":{"code":"constraint-violation","message":"Constraint not satisfied","source":"agent"}},"message":"Authorization denied: Constraint not satisfied"},"id":1,"jsonrpc":"2.0"}
+allowed  read_logs(service=payments, environment=staging): payments/staging: 3 lines, last: GET /health 200
 ```
 
-**Denied by the middleware.** The proxy's check is there for clear errors. The
-middleware is the enforcement point. A call that skips the proxy reaches
-OpenShell with no warrant, and the middleware denies it before it reaches the
-MCP server:
+A call outside it is denied. The agent checks the warrant first and does not
+sign the call, so it never leaves the sandbox:
 
 ```bash
-call "http://host.openshell.internal:$MCP_PORT/mcp" read_logs '{"service": "payments", "environment": "staging"}'
+tenuo-openshell demo call read_logs service=identity environment=production
 ```
 
 ```text
-{"binary":"/usr/bin/curl","detail":"Request rejected by configured middleware","error":"middleware_denied","host":"host.openshell.internal","layer":"l7","method":"POST","middleware":"tenuo","path":"/mcp","policy":"quickstart-mcp","port":18680,"reason_code":"tenuo_missing_warrant"}
+denied   read_logs(service=identity, environment=production) by the Tenuo agent, before it left the sandbox: constraint-violation
 ```
 
-A denial whose code does not start with `tenuo_`, such as `policy_denied`,
-comes from OpenShell's own sandbox policy, not from Tenuo.
-
-Check both sides. The middleware logged one allow and one deny with its reason
-code, and the MCP server ran one call:
+A restart waits for a human:
 
 ```bash
-docker logs tenuo-quickstart-middleware 2>&1 | grep tenuo_decision
-cat mcp.log
+tenuo-openshell demo call restart_service service=payments environment=staging replicas=3
 ```
 
 ```text
-tenuo_decision request_id=1 decision_us=415 outcome=allow reason=-
-tenuo_decision request_id=1 decision_us=9 outcome=deny reason=tenuo_missing_warrant
+held     restart_service(service=payments, environment=staging, replicas=3): waiting for approval, request c6f07d0b95a7
+         approve it with: tenuo-openshell approve --dev --sandbox tenuo-demo --request c6f07d0b95a7
+```
+
+Approve it. `approve` checks the pending request against the warrant, shows
+the call, and asks before it signs; `--yes` skips the question in a script.
+With one request pending, `--request` can be left out:
+
+```bash
+tenuo-openshell approve --dev --sandbox tenuo-demo
+```
+
+```text
+tool      restart_service
+arguments {"environment":"staging","replicas":3,"service":"payments"}
+message   Approval required for tool 'restart_service'
+warrant   tnu_wrt_01a10adf5a937576b63088480b84ceb3
+request   c6f07d0b95a7d9b8fb88bb75232ef0d1735eb45883449d79db7310d377c60e46
+expires   in 300 seconds
+approve this call? [y/N] y
+approved c6f07d0b95a7d9b8fb88bb75232ef0d1735eb45883449d79db7310d377c60e46 in sandbox tenuo-demo
+```
+
+Retry the same call. It runs, and the approval is spent: the next identical
+call waits for a new one.
+
+```bash
+tenuo-openshell demo call restart_service service=payments environment=staging replicas=3
+```
+
+```text
+allowed  restart_service(service=payments, environment=staging, replicas=3): restarted payments in staging with 3 replicas
+```
+
+The agent's check gives clear errors, but the middleware is what enforces. A
+call that skips the agent carries no warrant, and the middleware denies it
+before it reaches the MCP server. `--unsigned` sends one with curl from the
+same sandbox, as a compromised agent could:
+
+```bash
+tenuo-openshell demo call --unsigned read_logs service=payments environment=staging
+```
+
+```text
+denied   read_logs(service=payments, environment=staging) by the Tenuo middleware in OpenShell: tenuo_missing_warrant
+```
+
+The MCP server ran exactly the two allowed calls:
+
+```bash
+docker logs tenuo-openshell-dev-mcp 2>&1 | grep RAN
+```
+
+```text
 RAN read_logs {"environment": "staging", "service": "payments"}
+RAN restart_service {"environment": "staging", "replicas": 3, "service": "payments"}
 ```
 
-The middleware reason codes are defined in [`src/reason.rs`](../src/reason.rs).
-The agent's codes, such as
-`constraint-violation` and `tool-not-authorized`, are described in
-[Running an agent under Tenuo](sandbox-agent.md#denials-the-agent-sees).
+`tenuo-openshell dev status` shows the policy version and the gateway
+registration. The middleware logs one line per decision:
+`docker logs tenuo-openshell-dev 2>&1 | grep tenuo_decision`. Its reason codes
+are defined in [`src/reason.rs`](../src/reason.rs).
 
-## 9. Try a change
-
-Narrow or widen the task without restarting anything. The proxy re-reads the
-warrant on every call:
+## 5. Clean up
 
 ```bash
-tenuo-openshell provision \
-  --sandbox tenuo-quickstart \
-  --issuer-key issuer.key \
-  --capabilities '{"read_logs": {"service": "payments", "environment": {"one_of": ["staging", "dev"]}}, "restart_service": {"service": "payments", "environment": "staging"}}' \
-  --ttl 600
-call http://127.0.0.1:7415/mcp restart_service '{"service": "payments", "environment": "staging"}'
-call http://127.0.0.1:7415/mcp restart_service '{"service": "auth", "environment": "staging"}'
+openshell sandbox delete tenuo-demo
+tenuo-openshell dev down
 ```
 
-The first restart runs. The second is denied `constraint-violation`.
+`dev down` keeps the keys and policy for the next `dev up`. Remove the
+`tenuo/authorization` block from your gateway configuration and restart the
+gateway, or the gateway will not start without the middleware.
 
-## 10. Clean up
-
-```bash
-openshell sandbox delete tenuo-quickstart
-while openshell sandbox get tenuo-quickstart > /dev/null 2>&1; do sleep 1; done
-kill "$(cat gateway.pid)" "$(cat mcp.pid)"
-docker rm -f tenuo-quickstart-middleware
-docker rmi tenuo-quickstart-sandbox:latest
-cd .. && rm -rf tenuo-quickstart
-```
+<!-- check: unregister-gateway -->
 
 ## Next steps
 
 | Goal | Guide |
 | --- | --- |
 | Put your own agent under Tenuo | [Running an agent under Tenuo](sandbox-agent.md) |
-| Add approvals, delegation, and sub-agents | [Running an agent under Tenuo](sandbox-agent.md#approvals) |
-| Run the middleware in production | [Deployment](deployment.md) and the [Helm chart](../deploy/helm/tenuo-openshell/README.md) |
+| Run the middleware with TLS, the gateway's JWT, and a signed policy | [Going to production](production-quickstart.md) |
+| Deploy it with Redis and Helm | [Deployment](deployment.md) and the [Helm chart](../deploy/helm/tenuo-openshell/README.md) |
+| Issue warrants from your own service or Tenuo Cloud | [Production issuance](production-issuance.md) |
 | See the base sandbox policy and task authority compose across every scenario | [Demo](../examples/demo/README.md) (`make demo`, builds from source) |
 
-To add Tenuo to a gateway you already run, put the `register` block in its
-`gateway.toml`, start the middleware with that gateway's JWT public key and
-`gateway_id`, and restart the gateway. The package-managed gateway's
-configuration path is in the
-[OpenShell installation guide](https://docs.nvidia.com/openshell/latest/about/installation).
+To point the dev middleware at your own MCP server, add a destination to the
+dev policy with `tenuo-openshell policy add --policy
+~/.local/state/tenuo-openshell/dev/policy/policy.json`, and attach the
+middleware to that host in your sandbox policy. `tenuo-openshell register
+--only sandbox --mcp-host <host>` prints the attachment.

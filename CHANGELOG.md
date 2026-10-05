@@ -22,6 +22,39 @@ All notable changes will be documented here. The format follows
   installs `nvidia-nat-langchain[openai,nvidia]`.
 - The OpenShell end-to-end suite installs the plugin with
   `nvidia-nat-core>=1.8,<1.10`.
+- A 5-minute [quickstart](docs/quickstart.md) for OpenShell users. It adds
+  Tenuo to the gateway OpenShell's installer set up, in development mode, and
+  makes an allowed, a denied, and an approval-gated call with no model or API
+  key. `make quickstart` runs it against a gateway laid out like an installed
+  one.
+- `tenuo-openshell dev up`, `dev down`, and `dev status`: run the middleware
+  (`--insecure-dev`, in-memory replay) and a demo MCP server as Docker
+  containers on 127.0.0.1, keep dev keys and policy in
+  `~/.local/state/tenuo-openshell/dev`, and print the
+  `[[openshell.supervisor.middleware]]` block and the gateway restart
+  command. They never edit the OpenShell installation.
+- `tenuo-openshell warrant issue` and `provision` take `--approver`
+  (repeatable), `--min-approvals`, and `--require-approval <tool>` to issue
+  approval-gated warrants (#54), and `--preset demo` for the quickstart's
+  task.
+- `provision --dev` and `approve --dev` use the dev environment's keys;
+  `provision --dev` also adds the sandbox to the dev policy and waits until
+  the middleware serves it.
+- `tenuo-openshell demo call <tool> key=value...`: one `tools/call` from the
+  sandbox, with a one-line outcome naming who allowed, denied, or held it.
+  `--unsigned` sends it without the agent.
+- `ghcr.io/tenuo-ai/tenuo-openshell-demo`: the quickstart's sandbox image
+  (the agent and curl) and demo MCP server, built per platform from the
+  release's agent binaries.
+
+### Changed
+
+- The previous quickstart is now [Going to production](docs/production-quickstart.md),
+  run by `make production-quickstart`.
+- `tenuo-openshell approve` takes `--request` as optional when one request is
+  pending.
+- `tenuo-openshell-agent proxy` creates the holder key when there is none, so
+  it can start with the sandbox before a warrant is provisioned.
 
 ## [0.1.2] - 2026-10-05
 

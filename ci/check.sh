@@ -13,12 +13,13 @@ cargo build --release --locked
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny check --hide-inclusion-graph
 fi
-bash -n scripts/bench.sh scripts/bootstrap-openshell.sh scripts/onboarding-smoke.sh scripts/openshell-e2e.sh scripts/quickstart-check.sh examples/nemo-agent-toolkit/run.sh ci/nat-compat.sh ci/release-binary.sh
+bash -n scripts/bench.sh scripts/bootstrap-openshell.sh scripts/onboarding-smoke.sh scripts/openshell-e2e.sh scripts/quickstart-check.sh examples/nemo-agent-toolkit/run.sh ci/nat-compat.sh ci/release-binary.sh scripts/production-quickstart-check.sh scripts/build-demo-image.sh
 TENUO_SMOKE_SKIP_BUILD=1 scripts/onboarding-smoke.sh
 if command -v helm >/dev/null 2>&1; then
   helm lint deploy/helm/tenuo-openshell
 fi
 python3 -m py_compile \
+  deploy/demo-image/tenuo-demo-mcp \
   examples/nemo-agent-toolkit/scripted_llm.py \
   examples/demo/mcp_client.py \
   examples/demo/mcp_server.py \

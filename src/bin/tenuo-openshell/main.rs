@@ -10,6 +10,17 @@
 //! tenuo-openshell provision --sandbox <name> --issuer-key issuer.key \
 //!     --capabilities caps.json --ttl 3600
 //! ```
+//!
+//! For a first run next to an installed OpenShell gateway:
+//!
+//! ```text
+//! tenuo-openshell dev up
+//! tenuo-openshell provision --dev --sandbox tenuo-demo --preset demo
+//! tenuo-openshell demo call read_logs service=payments environment=staging
+//! ```
+
+mod demo;
+mod dev;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Map, Value};
@@ -59,6 +70,16 @@ enum Command {
     Delegate(DelegateArgs),
     /// Review a pending approval request, sign it, and install it.
     Approve(ApproveArgs),
+    /// Run a development middleware and demo MCP server next to an installed
+    /// OpenShell gateway.
+    ///
+    /// Keys and policy live in `$TENUO_OPENSHELL_DEV_DIR`, or
+    /// `$XDG_STATE_HOME/tenuo-openshell/dev` (`~/.local/state/...`).
+    #[command(subcommand)]
+    Dev(dev::DevCommand),
+    /// Make calls from the demo sandbox.
+    #[command(subcommand)]
+    Demo(demo::DemoCommand),
 }
 
 #[derive(Subcommand)]
@@ -195,7 +216,7 @@ enum WarrantCommand {
     Issue(IssueArgs),
 }
 
-#[derive(Args)]
+#[derive(Args, Clone, Default)]
 struct AuthorityArgs {
     /// Issuer private key (32 raw bytes or 64 hex characters). Mints a root warrant.
     #[arg(long, conflicts_with_all = ["parent_key", "parent_warrant"])]
@@ -206,11 +227,37 @@ struct AuthorityArgs {
     #[arg(long, requires = "parent_key")]
     parent_warrant: Option<PathBuf>,
     /// Capabilities as JSON, or @file. See `docs/deployment.md`.
-    #[arg(long)]
-    capabilities: String,
+    #[arg(long, required_unless_present = "preset", conflicts_with = "preset")]
+    capabilities: Option<String>,
+    /// Use a named set of capabilities instead of --capabilities.
+    #[arg(long, value_enum)]
+    preset: Option<Preset>,
+    /// Approver public key, 64 hex characters or a file containing them.
+    /// Repeatable. Calls to a --require-approval tool need their signatures.
+    #[arg(long = "approver", value_name = "KEY")]
+    approvers: Vec<String>,
+    /// Approvals each gated call needs, from distinct approvers. Default 1.
+    #[arg(long, requires = "approvers")]
+    min_approvals: Option<u32>,
+    /// Tool whose every call waits for approval. Repeatable. Needs --approver.
+    #[arg(long = "require-approval", value_name = "TOOL", value_delimiter = ',')]
+    require_approval: Vec<String>,
     #[arg(long, default_value_t = 3600)]
     ttl: u64,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum Preset {
+    /// `read_logs` for `payments` in `staging` or `dev`, and
+    /// `restart_service` for `payments` in `staging` with at most 5
+    /// replicas, after an approver signs each call. Needs an approver.
+    Demo,
+}
+
+const DEMO_CAPABILITIES: &str = r#"{
+  "read_logs": {"service": "payments", "environment": {"one_of": ["staging", "dev"]}},
+  "restart_service": {"service": "payments", "environment": "staging", "replicas": {"range": {"max": 5}}}
+}"#;
 
 #[derive(Args)]
 struct IssueArgs {
@@ -227,9 +274,14 @@ struct ProvisionArgs {
     sandbox: SandboxArgs,
     #[command(flatten)]
     authority: AuthorityArgs,
+    /// Use the `tenuo-openshell dev up` environment: add the sandbox to the
+    /// dev policy, sign with the dev issuer key, and use the dev approver
+    /// when the grant needs one.
+    #[arg(long, conflicts_with_all = ["issuer_key", "parent_key", "parent_warrant"])]
+    dev: bool,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Default)]
 struct SandboxArgs {
     /// OpenShell sandbox name.
     #[arg(long)]
@@ -270,17 +322,21 @@ struct DelegateArgs {
 #[derive(Args)]
 struct ApproveArgs {
     /// Request hash from the agent's `-32002` error or `tenuo-openshell-agent
-    /// pending`. A unique prefix is enough.
+    /// pending`. A unique prefix of 8 or more characters is enough. Optional
+    /// when exactly one request is pending.
     #[arg(long)]
-    request: String,
+    request: Option<String>,
     /// Approver private key (32 raw bytes or 64 hex characters).
-    #[arg(long)]
-    approver_key: PathBuf,
+    #[arg(long, required_unless_present = "dev")]
+    approver_key: Option<PathBuf>,
     /// Issuer public key the pending warrant chain must verify to (64 hex
     /// characters or a file). Repeatable; usually the sandbox's
     /// `trusted_roots`.
-    #[arg(long = "trusted-root", required = true)]
+    #[arg(long = "trusted-root", required_unless_present = "dev")]
     trusted_root: Vec<String>,
+    /// Use the `tenuo-openshell dev up` approver key and issuer.
+    #[arg(long, conflicts_with_all = ["approver_key", "trusted_root"])]
+    dev: bool,
     /// Seconds the approval stays valid.
     #[arg(long, default_value_t = 300)]
     ttl: u64,
@@ -332,6 +388,8 @@ fn run(cli: Cli) -> Result<()> {
         Command::Provision(args) => provision(&args),
         Command::Approve(args) => approve(&args),
         Command::Delegate(args) => delegate(&args),
+        Command::Dev(command) => dev::run(&command),
+        Command::Demo(command) => demo::run(&command),
     }
 }
 
@@ -540,9 +598,14 @@ fn policy_sign(args: &PolicySignArgs) -> Result<()> {
     Ok(())
 }
 
-/// Write a new key pair. Neither file is ever overwritten, and nothing is
-/// written unless both files can be created.
 fn keygen(args: &KeygenArgs) -> Result<()> {
+    println!("{}", write_key_pair(&args.out, args.public_out.as_deref())?);
+    Ok(())
+}
+
+/// Write a new key pair and return the public key as hex. Neither file is
+/// ever overwritten, and nothing is written unless both files can be created.
+fn write_key_pair(out: &Path, public_out: Option<&Path>) -> Result<String> {
     use std::io::Write;
     let key = SigningKey::generate();
     let public = hex::encode(key.public_key().to_bytes());
@@ -554,9 +617,9 @@ fn keygen(args: &KeygenArgs) -> Result<()> {
         options.mode(0o600);
     }
     let mut secret = options
-        .open(&args.out)
-        .map_err(|error| format!("{}: {error}", args.out.display()))?;
-    let public_file = match &args.public_out {
+        .open(out)
+        .map_err(|error| format!("{}: {error}", out.display()))?;
+    let public_file = match public_out {
         Some(path) => match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -565,7 +628,7 @@ fn keygen(args: &KeygenArgs) -> Result<()> {
             Ok(file) => Some(file),
             Err(error) => {
                 drop(secret);
-                let _ = fs::remove_file(&args.out);
+                let _ = fs::remove_file(out);
                 return Err(format!("{}: {error}", path.display()).into());
             }
         },
@@ -575,8 +638,7 @@ fn keygen(args: &KeygenArgs) -> Result<()> {
     if let Some(mut file) = public_file {
         writeln!(file, "{public}")?;
     }
-    println!("{public}");
-    Ok(())
+    Ok(public)
 }
 
 fn register(args: &RegisterArgs) -> Result<String> {
@@ -774,14 +836,96 @@ fn label_matches(pattern: &str, label: &str) -> bool {
     walk(&pattern, &label)
 }
 
+/// What a warrant grants: tools with their constraints, and the tools whose
+/// calls need approval.
+struct Grant {
+    capabilities: Vec<(String, ConstraintSet)>,
+    gated: Vec<String>,
+    approvers: Vec<PublicKey>,
+    min_approvals: u32,
+}
+
+fn grant(args: &AuthorityArgs) -> Result<Grant> {
+    let (text, mut gated) = match (&args.capabilities, args.preset) {
+        (Some(text), None) => (read_arg(text)?, Vec::new()),
+        (None, Some(Preset::Demo)) => (
+            DEMO_CAPABILITIES.to_string(),
+            vec!["restart_service".to_string()],
+        ),
+        _ => return Err("pass --capabilities or --preset".into()),
+    };
+    let capabilities = parse_capabilities(&text)?;
+    for tool in &args.require_approval {
+        if !gated.contains(tool) {
+            gated.push(tool.clone());
+        }
+    }
+    for tool in &gated {
+        if !capabilities.iter().any(|(name, _)| name == tool) {
+            return Err(format!("--require-approval {tool}: the warrant does not grant it").into());
+        }
+    }
+    let mut approvers = Vec::new();
+    for approver in &args.approvers {
+        let key = read_public(approver)?;
+        if !approvers.contains(&key) {
+            approvers.push(key);
+        }
+    }
+    match (gated.is_empty(), approvers.is_empty()) {
+        (false, true) if args.preset.is_some() => {
+            return Err(format!(
+                "this preset requires approval for {}; pass --approver <key>",
+                gated.join(", ")
+            )
+            .into())
+        }
+        (false, true) => return Err("--require-approval needs at least one --approver".into()),
+        (true, false) => return Err("--approver needs --require-approval <tool>".into()),
+        _ => {}
+    }
+    let min_approvals = args.min_approvals.unwrap_or(1);
+    if !gated.is_empty() && (min_approvals == 0 || min_approvals as usize > approvers.len()) {
+        return Err(format!(
+            "--min-approvals must be between 1 and the number of approvers ({})",
+            approvers.len()
+        )
+        .into());
+    }
+    Ok(Grant {
+        capabilities,
+        gated,
+        approvers,
+        min_approvals,
+    })
+}
+
 fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
-    let capabilities = parse_capabilities(&read_arg(&args.capabilities)?)?;
+    let Grant {
+        capabilities,
+        gated,
+        approvers,
+        min_approvals,
+    } = grant(args)?;
     let ttl = Duration::from_secs(args.ttl);
     if let Some(path) = &args.issuer_key {
         let issuer = read_secret(path)?;
         let mut builder = Warrant::builder();
         for (tool, constraints) in capabilities {
             builder = builder.capability(tool, constraints);
+        }
+        if !gated.is_empty() {
+            let mut gates = tenuo::ApprovalGateMap::new();
+            for tool in gated {
+                gates.insert(tool, tenuo::ToolApprovalGate::whole_tool());
+            }
+            builder = builder
+                .required_approvers(approvers)
+                .min_approvals(min_approvals)
+                .extension(
+                    tenuo::APPROVAL_GATE_EXTENSION_KEY,
+                    tenuo::encode_approval_gate_map(&gates)?,
+                );
         }
         return Ok(vec![builder
             .holder(holder.clone())
@@ -791,6 +935,12 @@ fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
     let (Some(key), Some(warrant)) = (&args.parent_key, &args.parent_warrant) else {
         return Err("pass --issuer-key, or --parent-key with --parent-warrant".into());
     };
+    if !gated.is_empty() {
+        return Err(
+            "approval requirements are set on a root warrant; an attenuated warrant keeps its parent's"
+                .into(),
+        );
+    }
     let parent_key = read_secret(key)?;
     let mut chain = decode_chain(&fs::read(warrant)?)?;
     let parent = chain.last().ok_or("parent warrant is empty")?;
@@ -851,24 +1001,62 @@ fn delegate(args: &DelegateArgs) -> Result<()> {
 }
 
 fn provision(args: &ProvisionArgs) -> Result<()> {
+    let authority = if args.dev {
+        dev_authority(&args.authority, &args.sandbox)?
+    } else {
+        args.authority.clone()
+    };
+    // Check the grant before touching the sandbox.
+    grant(&authority)?;
     let public = openshell_exec(&args.sandbox, &[AGENT, "keygen"])?;
     let holder = read_public(public.lines().last().unwrap_or_default())?;
-    let chain = issue(&args.authority, &holder)?;
+    let chain = issue(&authority, &holder)?;
     let encoded = encode_chain(&chain)?;
     openshell_exec(&args.sandbox, &[AGENT, "install-warrant", &encoded])?;
     let leaf = chain.last().ok_or("empty chain")?;
-    println!("sandbox {}", args.sandbox.sandbox);
-    println!("holder  {}", hex::encode(holder.to_bytes()));
-    println!("warrant {}", leaf.id());
-    println!("tools   {}", leaf.tools().join(", "));
+    println!("sandbox  {}", args.sandbox.sandbox);
+    println!("holder   {}", hex::encode(holder.to_bytes()));
+    println!("warrant  {}", leaf.id());
+    println!("tools    {}", leaf.tools().join(", "));
+    if let Some(gates) = leaf.approval_gate_map()? {
+        let tools: Vec<&str> = gates.tools().map(String::as_str).collect();
+        println!(
+            "approval {} needs {} of {} approver(s)",
+            tools.join(", "),
+            leaf.approval_threshold(),
+            leaf.required_approvers().map_or(0, Vec::len)
+        );
+    }
     Ok(())
 }
 
-fn openshell_exec(args: &SandboxArgs, command: &[&str]) -> Result<String> {
+/// `provision --dev`: trust the sandbox in the dev policy, then sign with the
+/// dev issuer and, when the grant needs approval and names no approver, the
+/// dev approver.
+fn dev_authority(authority: &AuthorityArgs, sandbox: &SandboxArgs) -> Result<AuthorityArgs> {
+    let state = dev::DevState::locate()?;
+    state.config()?;
+    let mut authority = authority.clone();
+    authority.issuer_key = Some(state.issuer_key());
+    let gated = authority.preset.is_some() || !authority.require_approval.is_empty();
+    if gated && authority.approvers.is_empty() {
+        authority.approvers = vec![state.approver_public().display().to_string()];
+    }
+    grant(&authority)?;
+    dev::trust_sandbox(&state, sandbox)?;
+    Ok(authority)
+}
+
+fn openshell_command(args: &SandboxArgs) -> Process {
     let mut process = Process::new(&args.openshell);
     if let Some(endpoint) = &args.gateway_endpoint {
         process.args(["--gateway-endpoint", endpoint]);
     }
+    process
+}
+
+fn openshell_exec(args: &SandboxArgs, command: &[&str]) -> Result<String> {
+    let mut process = openshell_command(args);
     process.args(["sandbox", "exec", "--name", &args.sandbox, "--no-tty", "--"]);
     process.args(command);
     let output = process.output()?;
@@ -900,14 +1088,28 @@ fn approve(args: &ApproveArgs) -> Result<()> {
         (None, None) => return Err("pass --sandbox or --pending".into()),
     };
     let listing: Value = serde_json::from_str(listing.lines().last().unwrap_or("[]"))?;
-    let record = find_request(&listing, &args.request)?;
-    let roots = args
-        .trusted_root
+    let record = match &args.request {
+        Some(wanted) => find_request(&listing, wanted)?,
+        None => only_request(&listing)?,
+    };
+    let (approver_key, trusted_roots) = if args.dev {
+        let state = dev::DevState::locate()?;
+        (
+            state.approver_key(),
+            vec![state.issuer_public().display().to_string()],
+        )
+    } else {
+        (
+            args.approver_key.clone().ok_or("pass --approver-key")?,
+            args.trusted_root.clone(),
+        )
+    };
+    let roots = trusted_roots
         .iter()
         .map(|root| read_public(root))
         .collect::<Result<Vec<_>>>()?;
     let (request, leaf) = review(record, &roots)?;
-    let approver = read_secret(&args.approver_key)?;
+    let approver = read_secret(&approver_key)?;
     let listed = leaf
         .required_approvers()
         .is_some_and(|keys| keys.contains(&approver.public_key()));
@@ -948,6 +1150,28 @@ fn approve(args: &ApproveArgs) -> Result<()> {
         None => println!("{approval}"),
     }
     Ok(())
+}
+
+/// The single pending request, when `--request` is left out.
+fn only_request(listing: &Value) -> Result<&Value> {
+    let pending = listing
+        .as_array()
+        .ok_or("pending listing is not a JSON array")?;
+    match pending.as_slice() {
+        [request] => Ok(request),
+        [] => Err("no request is pending".into()),
+        _ => Err(format!(
+            "{} requests are pending; pass --request with one of: {}",
+            pending.len(),
+            pending
+                .iter()
+                .filter_map(|request| request["request_hash"].as_str())
+                .map(|hash| hash.chars().take(12).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .into()),
+    }
 }
 
 fn find_request<'a>(listing: &'a Value, wanted: &str) -> Result<&'a Value> {
@@ -1303,8 +1527,9 @@ mod tests {
             issuer_key: None,
             parent_key: Some(parent_key_path),
             parent_warrant: Some(parent_path),
-            capabilities: r#"{"read_logs": {}}"#.to_string(),
+            capabilities: Some(r#"{"read_logs": {}}"#.to_string()),
             ttl: 60,
+            ..AuthorityArgs::default()
         };
         let chain = issue(&args, &child.public_key()).unwrap();
         assert_eq!(chain.len(), 2);
@@ -1399,6 +1624,242 @@ mod tests {
         );
         assert!(find_request(&listing, "ab").is_err());
         assert!(find_request(&listing, "0000000000").is_err());
+    }
+
+    /// Run `call` through a Tenuo guard as the proxy does, without approvals.
+    /// `Ok` is allowed; `Err(true)` needs approval; `Err(false)` is denied.
+    fn guard_check(
+        warrant: &Warrant,
+        issuer: &SigningKey,
+        holder: SigningKey,
+        tool: &str,
+        arguments: Value,
+    ) -> std::result::Result<(), bool> {
+        use std::sync::Arc;
+        use tenuo::sdk::prelude::*;
+        let authority =
+            PresentedAuthority::new(vec![warrant.clone()], Arc::new(LocalSigner::new(holder)))
+                .unwrap();
+        let mut authorizer = tenuo::Authorizer::new();
+        authorizer.add_trusted_root(issuer.public_key());
+        let guard = Guard::builder()
+            .authorizer(authorizer)
+            .revocation(RevocationMode::TtlOnly {
+                max_lifetime: Duration::from_secs(3600),
+            })
+            .build()
+            .unwrap();
+        let call = Call::try_from_json(tool, &arguments).unwrap();
+        guard
+            .check(&authority, &call)
+            .map(|_| ())
+            .map_err(|denial| denial.needs_approval())
+    }
+
+    fn key_file(directory: &Path, name: &str, key: &SigningKey) -> PathBuf {
+        let path = directory.join(name);
+        fs::write(&path, hex::encode(key.secret_key_bytes())).unwrap();
+        path
+    }
+
+    #[test]
+    fn approval_flags_gate_only_the_named_tools() {
+        let directory = tempfile::tempdir().unwrap();
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let approvers = [SigningKey::generate(), SigningKey::generate()];
+        let approver_file = directory.path().join("approver.pub");
+        fs::write(
+            &approver_file,
+            hex::encode(approvers[0].public_key().to_bytes()),
+        )
+        .unwrap();
+        let args = AuthorityArgs {
+            issuer_key: Some(key_file(directory.path(), "issuer.key", &issuer)),
+            capabilities: Some(
+                r#"{"read_logs": {"service": "payments"}, "restart_service": {"service": "payments"}}"#
+                    .into(),
+            ),
+            approvers: vec![
+                approver_file.display().to_string(),
+                hex::encode(approvers[1].public_key().to_bytes()),
+            ],
+            min_approvals: Some(2),
+            require_approval: vec!["restart_service".into()],
+            ttl: 60,
+            ..AuthorityArgs::default()
+        };
+        let chain = issue(&args, &holder.public_key()).unwrap();
+        let leaf = &chain[0];
+        let gates = leaf.approval_gate_map().unwrap().unwrap();
+        assert_eq!(
+            gates.tools().collect::<Vec<_>>(),
+            vec![&"restart_service".to_string()]
+        );
+        assert_eq!(leaf.approval_threshold(), 2);
+        let mut required = leaf.required_approvers().unwrap().clone();
+        let mut expected = vec![approvers[0].public_key(), approvers[1].public_key()];
+        required.sort_by_key(PublicKey::to_bytes);
+        expected.sort_by_key(PublicKey::to_bytes);
+        assert_eq!(required, expected);
+        let payments = json!({"service": "payments"});
+        assert_eq!(
+            guard_check(leaf, &issuer, holder.clone(), "read_logs", payments.clone()),
+            Ok(())
+        );
+        assert_eq!(
+            guard_check(leaf, &issuer, holder, "restart_service", payments),
+            Err(true)
+        );
+
+        let refused = |change: fn(&mut AuthorityArgs)| {
+            let mut bad = args.clone();
+            change(&mut bad);
+            issue(&bad, &SigningKey::generate().public_key()).is_err()
+        };
+        assert!(refused(|args| args.require_approval.clear()));
+        assert!(refused(|args| args.approvers.clear()));
+        assert!(refused(
+            |args| args.require_approval = vec!["delete_service".into()]
+        ));
+        assert!(refused(|args| args.min_approvals = Some(3)));
+        assert!(refused(|args| args.min_approvals = Some(0)));
+        assert!(refused(|args| {
+            args.issuer_key = None;
+            args.parent_key = Some("parent.key".into());
+            args.parent_warrant = Some("parent.warrant".into());
+        }));
+        // An ungated grant stays as it was.
+        let mut plain = args.clone();
+        plain.approvers.clear();
+        plain.require_approval.clear();
+        plain.min_approvals = None;
+        let chain = issue(&plain, &SigningKey::generate().public_key()).unwrap();
+        assert!(chain[0].approval_gate_map().unwrap().is_none());
+        assert!(chain[0].required_approvers().is_none());
+    }
+
+    #[test]
+    fn demo_preset_grants_the_documented_calls() {
+        let directory = tempfile::tempdir().unwrap();
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let approver = SigningKey::generate();
+        let mut args = AuthorityArgs {
+            issuer_key: Some(key_file(directory.path(), "issuer.key", &issuer)),
+            preset: Some(Preset::Demo),
+            ttl: 60,
+            ..AuthorityArgs::default()
+        };
+        let error = issue(&args, &holder.public_key()).unwrap_err().to_string();
+        assert!(error.contains("restart_service"), "{error}");
+        args.approvers = vec![hex::encode(approver.public_key().to_bytes())];
+        let chain = issue(&args, &holder.public_key()).unwrap();
+        let leaf = &chain[0];
+        let check = |tool: &str, arguments: Value| {
+            guard_check(leaf, &issuer, holder.clone(), tool, arguments)
+        };
+        assert_eq!(
+            check(
+                "read_logs",
+                json!({"service": "payments", "environment": "staging"})
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check(
+                "read_logs",
+                json!({"service": "payments", "environment": "dev"})
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check(
+                "read_logs",
+                json!({"service": "identity", "environment": "production"})
+            ),
+            Err(false)
+        );
+        let restart = |service: &str, environment: &str, replicas: i64| {
+            check(
+                "restart_service",
+                json!({"service": service, "environment": environment, "replicas": replicas}),
+            )
+        };
+        assert_eq!(restart("payments", "staging", 3), Err(true));
+        assert_eq!(restart("payments", "staging", 6), Err(false));
+        assert_eq!(restart("payments", "production", 3), Err(false));
+        assert_eq!(restart("identity", "staging", 3), Err(false));
+        assert_eq!(check("delete_service", json!({})), Err(false));
+    }
+
+    #[test]
+    fn the_only_pending_request_needs_no_hash() {
+        let one = json!([{"request_hash": "aaaa1111bbbb2222"}]);
+        assert_eq!(
+            only_request(&one).unwrap()["request_hash"],
+            "aaaa1111bbbb2222"
+        );
+        assert!(only_request(&json!([])).is_err());
+        let two =
+            json!([{"request_hash": "aaaa1111bbbb2222"}, {"request_hash": "cccc3333dddd4444"}]);
+        let error = only_request(&two).unwrap_err().to_string();
+        assert!(error.contains("aaaa1111bbbb, cccc3333dddd"), "{error}");
+
+        // The sandbox supplies this listing. Malformed, non-ASCII hashes must
+        // be reported rather than panicking at a UTF-8 byte boundary.
+        let malformed = json!([
+            {"request_hash": "a💥💥💥"},
+            {"request_hash": "dddd4444eeee5555"}
+        ]);
+        let error = only_request(&malformed).unwrap_err().to_string();
+        assert!(error.contains("a💥💥💥, dddd4444eeee"), "{error}");
+    }
+
+    #[test]
+    fn dev_flags_replace_keys_and_conflict_with_them() {
+        let parse = |args: &[&str]| Cli::try_parse_from([&["tenuo-openshell"], args].concat());
+        assert!(parse(&["provision", "--dev", "--sandbox", "s", "--preset", "demo"]).is_ok());
+        assert!(parse(&[
+            "provision",
+            "--dev",
+            "--sandbox",
+            "s",
+            "--preset",
+            "demo",
+            "--issuer-key",
+            "k"
+        ])
+        .is_err());
+        assert!(parse(&["provision", "--sandbox", "s"]).is_err());
+        assert!(parse(&[
+            "warrant",
+            "issue",
+            "--holder",
+            "h",
+            "--preset",
+            "demo",
+            "--capabilities",
+            "{}"
+        ])
+        .is_err());
+        assert!(parse(&[
+            "warrant",
+            "issue",
+            "--holder",
+            "h",
+            "--min-approvals",
+            "1",
+            "--preset",
+            "demo"
+        ])
+        .is_err());
+        assert!(parse(&["approve", "--dev", "--sandbox", "s"]).is_ok());
+        assert!(parse(&["approve", "--sandbox", "s", "--approver-key", "k"]).is_err());
+        assert!(parse(&["approve", "--dev", "--sandbox", "s", "--approver-key", "k"]).is_err());
+        assert!(parse(&["demo", "call", "read_logs", "service=payments"]).is_ok());
+        assert!(parse(&["demo", "call", "read_logs", "--mcp-url", "http://x/mcp"]).is_err());
+        assert!(parse(&["dev", "up", "--port", "1"]).is_ok());
     }
 
     fn register_args() -> RegisterArgs {
