@@ -2,6 +2,12 @@
 # Run docs/quickstart.md end to end against an OpenShell gateway laid out the
 # way OpenShell's install.sh installs it, and check its outcomes.
 #
+# TENUO_QS_GUIDE=nat-agent runs docs/nat-agent.md instead, which starts where
+# the quickstart's step 2 ends: the quickstart's blocks up to its gateway
+# registration run first. The guide's section between
+# `<!-- check: manual-begin -->` and `<!-- check: manual-end -->` needs an
+# NVIDIA API key and is not run.
+#
 # The guide starts with OpenShell installed and its local gateway running.
 # This script stands in for the installer without installing anything
 # system-wide. In a temporary XDG_CONFIG_HOME and XDG_STATE_HOME it:
@@ -34,6 +40,9 @@
 #   TENUO_QS_MIDDLEWARE_IMAGE  local image for ghcr.io/tenuo-ai/tenuo-openshell
 #   TENUO_QS_DEMO_IMAGE        local image for ghcr.io/tenuo-ai/tenuo-openshell-demo
 #                              (scripts/build-demo-image.sh builds one)
+#   TENUO_QS_NAT_IMAGE         local image for ghcr.io/tenuo-ai/tenuo-openshell-nat-demo,
+#                              for the nat-agent guide
+#                              (scripts/build-nat-demo-image.sh builds one)
 #   TENUO_QS_OPENSHELL_BIN     directory that already holds the OpenShell v0.1.2
 #                              openshell and openshell-gateway for this host
 #
@@ -52,7 +61,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GUIDE="$ROOT/docs/quickstart.md"
+QUICKSTART="$ROOT/docs/quickstart.md"
+export GUIDE_NAME="${TENUO_QS_GUIDE:-quickstart}"
+case "$GUIDE_NAME" in
+  quickstart) SANDBOX=tenuo-demo POLICY_FILE=demo-policy.yaml ;;
+  nat-agent) SANDBOX=tenuo-nat POLICY_FILE=nat-policy.yaml ;;
+  *)
+    echo "TENUO_QS_GUIDE must be quickstart or nat-agent, not $GUIDE_NAME" >&2
+    exit 2
+    ;;
+esac
+GUIDE="$ROOT/docs/$GUIDE_NAME.md"
 OPENSHELL_VERSION=v0.1.2
 GATEWAY_PORT=17670
 FORWARDER=tenuo-quickstart-loopback
@@ -279,8 +298,8 @@ cleanup() {
     docker logs tenuo-openshell-dev 2>&1 | tail -30 >&2 || true
   fi
   local id
-  if id="$(openshell sandbox get tenuo-demo -o json 2>/dev/null | jq -er .id)"; then
-    openshell sandbox delete tenuo-demo >/dev/null 2>&1 || true
+  if id="$(openshell sandbox get "$SANDBOX" -o json 2>/dev/null | jq -er .id)"; then
+    openshell sandbox delete "$SANDBOX" >/dev/null 2>&1 || true
     docker ps -aq --filter "label=openshell.ai/sandbox-id=$id" | xargs docker rm -f >/dev/null 2>&1 || true
   fi
   if [[ -f "$GATEWAY_PID_FILE" ]]; then
@@ -307,7 +326,7 @@ cleanup() {
   fi
   docker rm -f tenuo-openshell-dev tenuo-openshell-dev-mcp "$FORWARDER" >/dev/null 2>&1 || true
   if [[ "$status" != 0 ]]; then
-    echo "quickstart check failed; output in $OUTPUT" >&2
+    echo "$GUIDE_NAME check failed; output in $OUTPUT" >&2
   else
     rm -rf "$WORK"
   fi
@@ -317,15 +336,32 @@ trap cleanup EXIT
 
 # --- The guide, with local substitutions -------------------------------------
 
+# A guide's ```bash blocks and check markers, in order. With stop=NAME, the
+# blocks end at the marker check: NAME.
+guide_script() {
+  awk -v stop="${2:-}" '
+    /^<!-- check: manual-begin -->$/ { manual = 1; next }
+    /^<!-- check: manual-end -->$/ { manual = 0; next }
+    manual { next }
+    /^<!-- check: [a-z-]+ -->$/ {
+      name = $3; gsub("-", "_", name); print "check_" name
+      if ($3 == stop) exit
+      next
+    }
+    /^```bash$/ { block = 1; next }
+    /^```$/ { block = 0 }
+    block' "$1"
+}
+
 {
   echo 'set -eu'
   # The functions a check marker calls.
   sed -n '/^# --- check functions/,/^# --- end check functions/p' "${BASH_SOURCE[0]}"
-  awk '
-    /^<!-- check: [a-z-]+ -->$/ { name = $3; gsub("-", "_", name); print "check_" name; next }
-    /^```bash$/ { block = 1; next }
-    /^```$/ { block = 0 }
-    block' "$GUIDE"
+  if [[ "$GUIDE_NAME" == nat-agent ]]; then
+    # Where the guide starts: the quickstart through its gateway registration.
+    guide_script "$QUICKSTART" register-gateway
+  fi
+  guide_script "$GUIDE"
 } >"$SCRIPT"
 
 # Each substitution must match the guide, so a renamed artifact or path fails
@@ -346,13 +382,13 @@ substitute "dev state directory" sed "s#~/.local/state/tenuo-openshell/dev#\"\$D
 if [[ "$INSTALL" == snap ]]; then
   # The guide's instruction for the snap, whose CLI cannot read ~/.local.
   # shellcheck disable=SC2088 # expanded in the script run from the guide
-  snap_policy="~/snap/openshell/common/tenuo-openshell/demo-policy.yaml"
+  snap_policy="~/snap/openshell/common/tenuo-openshell/$POLICY_FILE"
   grep -Fq -- "--policy $snap_policy" "$GUIDE" || {
-    echo "the guide no longer gives the snap's demo policy path" >&2
+    echo "the guide no longer gives the snap's sandbox policy path" >&2
     exit 1
   }
-  substitute "snap demo policy" \
-    sed "s#--policy \"\$DEV_DIR\"/demo-policy.yaml#--policy $snap_policy#"
+  substitute "snap sandbox policy" \
+    sed "s#--policy \"\$DEV_DIR\"/$POLICY_FILE#--policy $snap_policy#"
 fi
 # Nothing answers the approval prompt.
 substitute "unattended approval" sed "s#^tenuo-openshell approve --dev #tenuo-openshell approve --yes --dev #"
@@ -367,13 +403,28 @@ if [[ -n "${TENUO_QS_CLI:-}" ]]; then
     { skip = 0; print }'
   echo "using TENUO_QS_CLI=$cli"
 fi
-DEMO_IMAGE="$(grep -oE 'ghcr\.io/tenuo-ai/tenuo-openshell-demo:v[0-9][^ ]*' "$GUIDE" | head -1)"
+DEMO_IMAGE="$(grep -oE 'ghcr\.io/tenuo-ai/tenuo-openshell-demo:v[0-9][^ ]*' "$QUICKSTART" | head -1)"
 MIDDLEWARE_IMAGE="ghcr.io/tenuo-ai/tenuo-openshell:${DEMO_IMAGE##*:}"
 if [[ -n "${TENUO_QS_DEMO_IMAGE:-}" ]]; then
-  substitute "TENUO_QS_DEMO_IMAGE=$TENUO_QS_DEMO_IMAGE" \
-    sed -E "s#ghcr\.io/tenuo-ai/tenuo-openshell-demo:v[0-9][^ ]*#$TENUO_QS_DEMO_IMAGE#g"
+  # dev up runs it as the demo MCP server; only the quickstart names it.
+  if [[ "$GUIDE_NAME" == quickstart ]]; then
+    substitute "TENUO_QS_DEMO_IMAGE=$TENUO_QS_DEMO_IMAGE" \
+      sed -E "s#ghcr\.io/tenuo-ai/tenuo-openshell-demo:v[0-9][^ ]*#$TENUO_QS_DEMO_IMAGE#g"
+  fi
   DEMO_IMAGE="$TENUO_QS_DEMO_IMAGE"
   echo "using TENUO_QS_DEMO_IMAGE=$DEMO_IMAGE"
+fi
+if [[ "$GUIDE_NAME" == nat-agent ]]; then
+  NAT_IMAGE="$(grep -oE 'ghcr\.io/tenuo-ai/tenuo-openshell-nat-demo:v[0-9][^ ]*' "$GUIDE" | head -1)"
+  [[ "${NAT_IMAGE##*:}" == "${DEMO_IMAGE##*:}" || -n "${TENUO_QS_DEMO_IMAGE:-}" ]] || {
+    echo "the guides name different releases: $NAT_IMAGE and $DEMO_IMAGE" >&2
+    exit 1
+  }
+  if [[ -n "${TENUO_QS_NAT_IMAGE:-}" ]]; then
+    substitute "TENUO_QS_NAT_IMAGE=$TENUO_QS_NAT_IMAGE" \
+      sed -E "s#ghcr\.io/tenuo-ai/tenuo-openshell-nat-demo:v[0-9][^ ]*#$TENUO_QS_NAT_IMAGE#g"
+    echo "using TENUO_QS_NAT_IMAGE=$TENUO_QS_NAT_IMAGE"
+  fi
 fi
 if [[ -n "${TENUO_QS_MIDDLEWARE_IMAGE:-}" ]]; then
   MIDDLEWARE_IMAGE="$TENUO_QS_MIDDLEWARE_IMAGE"
@@ -448,7 +499,9 @@ fi
 
 cd "$WORK"
 started="$(date +%s)"
-bash "$SCRIPT" 2>&1 | tee "$OUTPUT"
+# Nothing types into the guide: `openshell sandbox exec` forwards its
+# standard input, and waits for it to end.
+bash "$SCRIPT" </dev/null 2>&1 | tee "$OUTPUT"
 elapsed="$(($(date +%s) - started))"
 
 expect() {
@@ -472,18 +525,45 @@ else
   expect "gateway     registered in $GATEWAY_CONFIG" "dev status found the registration"
 fi
 expect "approval restart_service needs 1 of 1 approver(s)" "the demo preset gates restart_service"
-expect "allowed  read_logs(service=payments, environment=staging): payments/staging" "call inside the task ran"
-expect "denied   read_logs(service=identity, environment=production) by the Tenuo agent, before it left the sandbox: constraint-violation" \
-  "call outside the task denied in the sandbox"
-expect "held     restart_service(service=payments, environment=staging, replicas=3): waiting for approval" "restart held for approval"
-expect "approved " "approval installed"
-expect "allowed  restart_service(service=payments, environment=staging, replicas=3): restarted payments in staging with 3 replicas" \
-  "approved restart ran"
-expect "by the Tenuo middleware in OpenShell: tenuo_missing_warrant" "call that skipped the agent denied by the middleware"
-[[ "$(grep -c '^RAN ' "$OUTPUT")" == 2 ]] || {
-  echo "FAIL the MCP server ran other than the two allowed calls" >&2
-  exit 1
+ran() {
+  [[ "$(grep -c '^RAN ' "$OUTPUT")" == "$1" ]] || {
+    echo "FAIL the MCP server ran other than the $1 allowed calls" >&2
+    exit 1
+  }
+  echo "PASS denied and held calls never reached the MCP server"
 }
-echo "PASS denied and held calls never reached the MCP server"
+case "$GUIDE_NAME" in
+  quickstart)
+    expect "allowed  read_logs(service=payments, environment=staging): payments/staging" "call inside the task ran"
+    expect "denied   read_logs(service=identity, environment=production) by the Tenuo agent, before it left the sandbox: constraint-violation" \
+      "call outside the task denied in the sandbox"
+    expect "held     restart_service(service=payments, environment=staging, replicas=3): waiting for approval" "restart held for approval"
+    expect "approved " "approval installed"
+    expect "allowed  restart_service(service=payments, environment=staging, replicas=3): restarted payments in staging with 3 replicas" \
+      "approved restart ran"
+    expect "by the Tenuo middleware in OpenShell: tenuo_missing_warrant" "call that skipped the agent denied by the middleware"
+    ran 2
+    ;;
+  nat-agent)
+    expect "allowed  read_logs(service=payments, environment=staging): payments/staging" "the agent's read inside the task ran"
+    expect "answer   read_logs ran: payments/staging" "the agent answered with the logs"
+    expect "denied   read_logs(service=identity, environment=production): Authorization denied: Constraint not satisfied" \
+      "the agent's read outside the task denied by the proxy"
+    expect "answer   read_logs did not run: Authorization denied: Constraint not satisfied." "the agent read the denial"
+    expect "approved " "approval installed"
+    expect "allowed  restart_service(service=payments, environment=staging, replicas=3): restarted payments in staging with 3 replicas" \
+      "the agent's approved restart ran"
+    # Before the approval, after it was spent, and through the plugin.
+    [[ "$(grep -c '^held     restart_service(service=payments, environment=staging, replicas=3): waiting for approval' "$OUTPUT")" == 3 ]] || {
+      echo "FAIL the agent's restart was not held three times" >&2
+      exit 1
+    }
+    echo "PASS restart held for approval, again once the approval was spent, and through the plugin"
+    expect "<urlopen error [Errno 13] Permission denied>" "the agent's Python could not reach the MCP server"
+    expect "denied   read_logs(service=identity, environment=production): Authorization denied (constraint_violation, ref=" \
+      "the plugin denied the read outside the task in the agent"
+    ran 2
+    ;;
+esac
 expect "restarted the gateway" "the gateway restarted without the middleware"
-echo "quickstart passed in ${elapsed}s"
+echo "$GUIDE_NAME passed in ${elapsed}s"

@@ -50,7 +50,7 @@ ALL PASS
 The script builds the binaries, installs NeMo Agent Toolkit 1.9 into a
 temporary environment, and runs the steps above against the demo MCP server.
 `scripted_llm.py` stands in for the model: an OpenAI-compatible endpoint that
-replays a fixed ReAct transcript, so NAT's standard `openai` client and
+calls the tools the prompt asks for, so NAT's standard `openai` client and
 LangChain path are the ones a hosted model would use.
 
 With a hosted model:
@@ -64,8 +64,11 @@ The live run uses [`workflow.yml`](workflow.yml) with a NIM model. The model
 chooses its own calls, so the script reports the run instead of asserting
 each step.
 
-This example runs on the host. [`scripts/openshell-e2e.sh`](../../scripts/openshell-e2e.sh)
-runs the same proxy and approval flow inside an OpenShell sandbox.
+This example runs on the host. To run the agent itself inside an OpenShell
+sandbox, next to the gateway you already run, follow
+[A NeMo Agent Toolkit agent in an OpenShell sandbox](../../docs/nat-agent.md).
+[`scripts/openshell-e2e.sh`](../../scripts/openshell-e2e.sh) runs the same
+proxy and approval flow inside an OpenShell sandbox.
 
 ## Files
 
@@ -73,7 +76,7 @@ runs the same proxy and approval flow inside an OpenShell sandbox.
 | --- | --- |
 | [`workflow.yml`](workflow.yml) | ReAct agent on a NIM model with MCP tools through the proxy. |
 | [`workflow-scripted.yml`](workflow-scripted.yml) | The same agent on the scripted model. |
-| [`scripted_llm.py`](scripted_llm.py) | OpenAI-compatible endpoint that replays the ReAct transcript. |
+| [`scripted_llm.py`](scripted_llm.py) | OpenAI-compatible endpoint that plays a scripted ReAct model. |
 | [`run.sh`](run.sh) | Sets up keys, warrant, servers, and proxy; runs and checks each step. |
 
 For in-process early denial inside Agent Toolkit itself, see the

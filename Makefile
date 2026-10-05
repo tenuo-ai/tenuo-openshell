@@ -1,4 +1,4 @@
-.PHONY: bench check demo e2e production-quickstart quickstart smoke test test-rust test-python
+.PHONY: bench check demo e2e nat-agent production-quickstart quickstart smoke test test-rust test-python
 
 bench:
 	scripts/bench.sh
@@ -22,6 +22,9 @@ smoke:
 
 quickstart:
 	scripts/quickstart-check.sh
+
+nat-agent:
+	TENUO_QS_GUIDE=nat-agent scripts/quickstart-check.sh
 
 production-quickstart:
 	scripts/production-quickstart-check.sh

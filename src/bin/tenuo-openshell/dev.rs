@@ -37,6 +37,8 @@ const DEFAULT_DEMO_IMAGE: &str = concat!(
     env!("CARGO_PKG_VERSION")
 );
 const DOCKER: &str = "docker";
+const DEMO_POLICY_FILE: &str = "demo-policy.yaml";
+const NAT_POLICY_FILE: &str = "nat-policy.yaml";
 
 #[derive(Subcommand)]
 pub enum DevCommand {
@@ -135,7 +137,12 @@ impl DevState {
     }
 
     pub fn sandbox_policy(&self) -> PathBuf {
-        self.dir.join("demo-policy.yaml")
+        self.dir.join(DEMO_POLICY_FILE)
+    }
+
+    /// The sandbox policy for the NeMo Agent Toolkit guide.
+    pub fn nat_sandbox_policy(&self) -> PathBuf {
+        self.dir.join(NAT_POLICY_FILE)
     }
 
     fn config_path(&self) -> PathBuf {
@@ -207,10 +214,17 @@ fn up(state: &DevState, args: &UpArgs) -> Result<()> {
     println!();
     let gateway = GatewayConfig::locate()?;
     if gateway.is_snap() {
-        // The snap's CLI cannot read the copy in the state directory.
-        let copy = sandbox_policy_for(state, &gateway)?;
-        fs::create_dir_all(copy.parent().ok_or("no parent directory")?)?;
-        write_atomic(&copy, demo_sandbox_policy(&config).as_bytes())?;
+        // The snap's CLI cannot read the copies in the state directory.
+        let dir = snap_policy_dir()?;
+        fs::create_dir_all(&dir)?;
+        write_atomic(
+            &dir.join(DEMO_POLICY_FILE),
+            demo_sandbox_policy(&config).as_bytes(),
+        )?;
+        write_atomic(
+            &dir.join(NAT_POLICY_FILE),
+            nat_sandbox_policy(&config).as_bytes(),
+        )?;
     }
     print!("{}", next_steps(state, &config, &gateway)?);
     Ok(())
@@ -253,6 +267,10 @@ fn prepare_state(state: &DevState, config: &DevConfig) -> Result<()> {
         demo_sandbox_policy(config).as_bytes(),
     )?;
     write_atomic(
+        &state.nat_sandbox_policy(),
+        nat_sandbox_policy(config).as_bytes(),
+    )?;
+    write_atomic(
         &state.config_path(),
         &[serde_json::to_vec_pretty(config)?.as_slice(), b"\n"].concat(),
     )?;
@@ -281,8 +299,34 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 /// only so `demo call --unsigned` can show the middleware deny a call that
 /// skips the agent.
 pub fn demo_sandbox_policy(config: &DevConfig) -> String {
+    sandbox_policy(
+        "# OpenShell sandbox policy for the Tenuo demo. Written by `tenuo-openshell dev up`.\n",
+        config,
+        "      - path: /usr/local/bin/tenuo-openshell-agent\n      \
+         # Only so `tenuo-openshell demo call --unsigned` can show a call\n      \
+         # that skips the agent. List only the agent in your own policy.\n      \
+         - path: /usr/bin/curl\n",
+    )
+}
+
+/// The OpenShell sandbox policy for the NeMo Agent Toolkit guide
+/// (docs/nat-agent.md). The agent is the only binary that may reach the MCP
+/// server. NAT's Python is in no rule, so it reaches only loopback in the
+/// sandbox: the agent's proxy and the scripted model. An attached provider
+/// adds its own rule for the model endpoint.
+pub fn nat_sandbox_policy(config: &DevConfig) -> String {
+    sandbox_policy(
+        "# OpenShell sandbox policy for the Tenuo NeMo Agent Toolkit guide. Written by\n\
+         # `tenuo-openshell dev up`. Only the Tenuo agent may reach the MCP server; the\n\
+         # agent's Python reaches it through the agent's proxy on loopback.\n",
+        config,
+        "      - path: /usr/local/bin/tenuo-openshell-agent\n",
+    )
+}
+
+fn sandbox_policy(header: &str, config: &DevConfig, binaries: &str) -> String {
     format!(
-        "# OpenShell sandbox policy for the Tenuo demo. Written by `tenuo-openshell dev up`.\n\
+        "{header}\
          version: 1\n\
          \n\
          network_middlewares:\n  \
@@ -308,11 +352,7 @@ pub fn demo_sandbox_policy(config: &DevConfig) -> String {
                    - allow: {{method: tools/list}}\n          \
                    - allow: {{method: tools/call, tool: read_logs}}\n          \
                    - allow: {{method: tools/call, tool: restart_service}}\n    \
-             binaries:\n      \
-               - path: /usr/local/bin/tenuo-openshell-agent\n      \
-               # Only so `tenuo-openshell demo call --unsigned` can show a call\n      \
-               # that skips the agent. List only the agent in your own policy.\n      \
-               - path: /usr/bin/curl\n",
+             binaries:\n{binaries}",
         port = config.mcp_port
     )
 }
@@ -649,14 +689,18 @@ fn registration_block(config: &DevConfig) -> Result<String> {
 /// The demo sandbox policy `openshell sandbox create` reads. The OpenShell
 /// snap's CLI is confined to non-hidden files in the home directory and its
 /// own snap directories, so it cannot read the state directory under
-/// `~/.local`. With the snap, `dev up` also writes the policy to
-/// `~/snap/openshell/common/tenuo-openshell/demo-policy.yaml`.
+/// `~/.local`. With the snap, `dev up` also writes the policies to
+/// `~/snap/openshell/common/tenuo-openshell/`.
 pub fn sandbox_policy_for(state: &DevState, gateway: &GatewayConfig) -> Result<PathBuf> {
     if gateway.is_snap() {
-        Ok(home()?.join("snap/openshell/common/tenuo-openshell/demo-policy.yaml"))
+        Ok(snap_policy_dir()?.join(DEMO_POLICY_FILE))
     } else {
         Ok(state.sandbox_policy())
     }
+}
+
+fn snap_policy_dir() -> Result<PathBuf> {
+    Ok(home()?.join("snap/openshell/common/tenuo-openshell"))
 }
 
 fn next_steps(state: &DevState, config: &DevConfig, gateway: &GatewayConfig) -> Result<String> {
@@ -1060,6 +1104,24 @@ mod tests {
             &["host.openshell.internal".to_string()],
         )
         .unwrap();
+
+        // The NeMo Agent Toolkit policy: the same route, and only the agent
+        // may take it.
+        let nat = fs::read_to_string(state.nat_sandbox_policy()).unwrap();
+        crate::reject_uncovered_routes(&nat, &["host.openshell.internal".to_string()]).unwrap();
+        let nat: serde_yaml::Value = serde_yaml::from_str(&nat).unwrap();
+        assert_eq!(
+            nat["network_policies"]["tenuo-demo-mcp"]["endpoints"],
+            yaml["network_policies"]["tenuo-demo-mcp"]["endpoints"]
+        );
+        assert_eq!(nat["network_middlewares"], yaml["network_middlewares"]);
+        assert_eq!(nat["network_policies"].as_mapping().unwrap().len(), 1);
+        let binaries: serde_yaml::Value =
+            serde_yaml::from_str("[{path: /usr/local/bin/tenuo-openshell-agent}]").unwrap();
+        assert_eq!(
+            nat["network_policies"]["tenuo-demo-mcp"]["binaries"],
+            binaries
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ task authority work.
 | Goal | Guide | What it demonstrates |
 | --- | --- | --- |
 | Make an allowed, a denied, and an approval-gated call next to your OpenShell gateway | [5-minute quickstart](quickstart.md) | Released artifacts, argument constraints, approvals, development mode |
+| Run a NeMo Agent Toolkit agent inside an OpenShell sandbox | [NAT agent guide](nat-agent.md) | A ReAct agent's MCP calls under a warrant, approvals, the in-process plugin, NIM through an OpenShell provider |
 | Run the same path with production settings | [Going to production](production-quickstart.md) | TLS and JWT middleware authentication, a signed policy |
 | See the complete security model | [Authenticated demo](../examples/demo/README.md) | Approvals, replay protection, holder binding, delegation, revocation, A2A, receipts |
 | Run an Agent Toolkit approval flow | [NeMo Agent Toolkit example](../examples/nemo-agent-toolkit/README.md) | ReAct tool use through the signing proxy, an exact-call human approval, no model key required |

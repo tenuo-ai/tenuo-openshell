@@ -358,3 +358,118 @@ async def test_registered_builder_uses_the_configured_root(read_logs):
                 )
                 == "ok"
             )
+
+
+def _restart_warrant(issuer: SigningKey, holder: SigningKey) -> Warrant:
+    approver = SigningKey.generate()
+    return (
+        Warrant.mint_builder()
+        .tool("read_logs")
+        .tool("restart_service")
+        .holder(holder.public_key)
+        .approval_gates({"restart_service": None})
+        .required_approvers([approver.public_key])
+        .min_approvals(1)
+        .ttl(3600)
+        .mint(issuer)
+    )
+
+
+def _write_authority(tmp_path, warrant: Warrant, holder: SigningKey):
+    """The files tenuo-openshell-agent keeps: a base64 stack and a raw 32-byte key."""
+    from tenuo import encode_warrant_stack
+
+    warrant_file = tmp_path / "warrant"
+    key_file = tmp_path / "holder.key"
+    warrant_file.write_text(encode_warrant_stack([warrant]))
+    key_file.write_bytes(holder.secret_key_bytes())
+    return str(warrant_file), str(key_file)
+
+
+def test_config_needs_both_files():
+    root = SigningKey.generate().public_key.to_bytes().hex()
+    with pytest.raises(ValueError, match="go together"):
+        TenuoMiddlewareConfig(trusted_roots=[root], warrant_file="/sandbox/.tenuo/warrant")
+    with pytest.raises(ValueError, match="raise"):
+        TenuoMiddlewareConfig(trusted_roots=[root], approval_required="allow")
+
+
+async def test_warrant_file_is_used_when_nothing_is_bound(tmp_path):
+    issuer, holder = SigningKey.generate(), SigningKey.generate()
+    files = _write_authority(tmp_path, _restart_warrant(issuer, holder), holder)
+    middleware = TenuoFunctionMiddleware(
+        trusted_roots=[issuer.public_key], warrant_file=files[0], holder_key_file=files[1]
+    )
+
+    async def call_next(value):
+        return f"read {value['service']}"
+
+    result = await middleware.function_middleware_invoke(
+        {"service": "payments"}, call_next=call_next, context=_context("read_logs")
+    )
+    assert result == "read payments"
+
+    # A bound warrant still takes precedence over the files.
+    _key, other = _bound("read_logs")
+    with authority(other):
+        with pytest.raises(AuthorizationDenied, match=r"untrusted_issuer"):
+            await middleware.function_middleware_invoke(
+                {"service": "payments"}, call_next=call_next, context=_context("read_logs")
+            )
+
+
+async def test_unreadable_warrant_file_is_a_missing_warrant(tmp_path):
+    issuer = SigningKey.generate()
+    middleware = TenuoFunctionMiddleware(
+        trusted_roots=[issuer.public_key],
+        warrant_file=str(tmp_path / "absent"),
+        holder_key_file=str(tmp_path / "absent.key"),
+    )
+
+    async def call_next(*_args, **_kwargs):
+        raise AssertionError("ran without a warrant")
+
+    with pytest.raises(AuthorizationDenied, match=r"missing_warrant, ref="):
+        await middleware.function_middleware_invoke(
+            {"service": "payments"}, call_next=call_next, context=_context("read_logs")
+        )
+
+
+async def test_function_group_names_need_stripping(read_logs):
+    key, bound = read_logs
+
+    async def call_next(*_args, **_kwargs):
+        return "ran"
+
+    qualified = TenuoFunctionMiddleware(trusted_roots=[key.public_key])
+    with pytest.raises(AuthorizationDenied, match=r"tool_denied"):
+        await _invoke(qualified, bound, "ops__read_logs", {"service": "api"}, call_next)
+
+    stripped = TenuoFunctionMiddleware(trusted_roots=[key.public_key], strip_function_group=True)
+    assert await _invoke(stripped, bound, "ops__read_logs", {"service": "api"}, call_next) == "ran"
+    with pytest.raises(AuthorizationDenied, match=r"tool_denied"):
+        await _invoke(stripped, bound, "ops__restart_service", {"service": "api"}, call_next)
+
+
+async def test_deferred_approval_reaches_the_next_stage_and_denials_do_not(tmp_path):
+    issuer, holder = SigningKey.generate(), SigningKey.generate()
+    bound = _restart_warrant(issuer, holder).bind(holder)
+    calls = []
+
+    async def call_next(value):
+        calls.append(value)
+        return "handed on"
+
+    deferring = TenuoFunctionMiddleware(trusted_roots=[issuer.public_key], approval_required="defer")
+    assert await _invoke(deferring, bound, "restart_service", {"service": "payments"}, call_next) == "handed on"
+    assert calls == [{"service": "payments"}]
+
+    # A tool the warrant does not name still stops here.
+    with pytest.raises(AuthorizationDenied, match=r"tool_denied"):
+        await _invoke(deferring, bound, "delete_service", {"service": "payments"}, call_next)
+    assert len(calls) == 1
+
+    raising = TenuoFunctionMiddleware(trusted_roots=[issuer.public_key])
+    with pytest.raises(ApprovalRequired):
+        await _invoke(raising, bound, "restart_service", {"service": "payments"}, call_next)
+    assert len(calls) == 1

@@ -1,0 +1,10 @@
+# NeMo Agent Toolkit 1.9 with the MCP client and the LangChain ReAct agent.
+# nvidia-nat-langchain installs model providers as extras: openai for the
+# scripted model, nvidia for NIM.
+nvidia-nat-core==1.9.0
+nvidia-nat-mcp==1.9.0
+nvidia-nat-langchain[openai,nvidia]==1.9.0
+# The in-process plugin's dependencies, installed from this repository
+# without its own resolution (python/nemo-agent-toolkit-tenuo).
+tenuo==0.3.2
+packaging
