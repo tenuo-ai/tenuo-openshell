@@ -36,7 +36,7 @@ case "$(uname -s)/$(uname -m)" in
   Linux/aarch64) target=aarch64-unknown-linux-musl ;;
 esac
 mkdir -p ~/.local/bin
-curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.4/tenuo-openshell-v0.1.4-$target.tar.gz" \
+curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.5/tenuo-openshell-v0.1.5-$target.tar.gz" \
   | tar -xz -C ~/.local/bin tenuo-openshell
 tenuo-openshell --version
 ```
@@ -118,7 +118,7 @@ each `tools/call` with a key that never leaves the sandbox:
 
 ```bash
 openshell sandbox create --name tenuo-demo \
-  --from ghcr.io/tenuo-ai/tenuo-openshell-demo:v0.1.4 \
+  --from ghcr.io/tenuo-ai/tenuo-openshell-demo:v0.1.5 \
   --policy ~/.local/state/tenuo-openshell/dev/demo-policy.yaml \
   --no-tty --detach -- tenuo-openshell-agent proxy --upstream http://host.openshell.internal:18680/mcp
 ```

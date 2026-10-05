@@ -30,7 +30,7 @@ Add the agent to the sandbox image. The image
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.4 \
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.5 \
   /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
 ```
 

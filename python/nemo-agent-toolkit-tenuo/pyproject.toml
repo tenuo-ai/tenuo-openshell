@@ -11,7 +11,7 @@ exclude = ["tests/test_outcome_matrix.py"]
 
 [project]
 name = "nemo-agent-toolkit-tenuo"
-version = "0.1.4"
+version = "0.1.5"
 description = "Task-scoped Tenuo authorization for NVIDIA NeMo Agent Toolkit"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

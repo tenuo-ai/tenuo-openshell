@@ -214,15 +214,15 @@ Deploy the middleware with the Helm chart. See the
 
 ```bash
 helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
-  --version 0.1.4 -f values.yaml
+  --version 0.1.5 -f values.yaml
 ```
 
-Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.4`.
+Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.5`.
 
 Add the agent to your sandbox image:
 
 ```dockerfile
-COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.4 \
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.5 \
   /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
 ```
 
