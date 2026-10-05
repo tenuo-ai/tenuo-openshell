@@ -10,9 +10,14 @@ on:
   pull_request:
     paths:
       - docs/quickstart.md
-      - src/bin/tenuo-openshell/**
+      - Cargo.lock
+      - Cargo.toml
+      - build.rs
+      - src/**
       - agent/**
+      - proto/**
       - deploy/demo-image/**
+      - .dockerignore
       - Dockerfile
       - scripts/quickstart-check.sh
       - scripts/build-demo-image.sh
@@ -48,14 +53,20 @@ jobs:
           - method: deb
             arch: x86_64
             runner: ubuntu-24.04
+            version: v0.1.2
           - method: deb
             arch: arm64
             runner: ubuntu-24.04-arm
+            version: v0.1.2
           - method: snap
             arch: x86_64
             runner: ubuntu-24.04
+            version: ""
     env:
       OPENSHELL_INSTALL_METHOD: ${{ matrix.method }}
+      # Native packages use the release this integration supports. The snap
+      # installer does not accept explicit versions and installs stable.
+      OPENSHELL_VERSION: ${{ matrix.version }}
       BUILD: ${{ github.event_name != 'workflow_dispatch' || inputs.artifacts == 'build' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,7 +87,9 @@ jobs:
 
       - name: Install OpenShell with its install script
         run: |
-          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+          # Pin the installer source to the audited OpenShell v0.1.2 commit.
+          # It still exercises NVIDIA's real package installation path.
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/6648bd0c290efbc41ba131ee9831ee45cd431f94/install.sh | sh
           echo /snap/bin >>"$GITHUB_PATH"
 
       - name: A plain OpenShell sandbox runs

@@ -360,6 +360,7 @@ if [[ -n "${TENUO_QS_CLI:-}" ]]; then
   cli="$(cd "$(dirname "$TENUO_QS_CLI")" && pwd)/$(basename "$TENUO_QS_CLI")"
   [[ -x "$cli" ]] || { echo "TENUO_QS_CLI is not executable: $cli" >&2; exit 1; }
   # Replace the two-line release download with a copy of the local binary.
+  # shellcheck disable=SC2016 # $BIN is expanded in the generated script.
   substitute "TENUO_QS_CLI=$cli" awk -v cli="$cli" '
     /releases\/download\/.*\/tenuo-openshell-v/ { print "cp \"" cli "\" \"$BIN/tenuo-openshell\""; skip = 1; next }
     skip && /\| tar -xz/ { skip = 0; next }
