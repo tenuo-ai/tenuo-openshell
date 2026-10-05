@@ -6,6 +6,23 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `nemo-agent-toolkit-tenuo` supports NVIDIA NeMo Agent Toolkit 1.9:
+  `nvidia-nat-core>=1.8,<1.10`. The plugin code is unchanged; the plugin
+  tests and `nat info components` discovery run in CI against both 1.8 and
+  1.9. `ci/nat-compat.sh` runs them against a chosen minor release.
+
+### Changed
+
+- The plugin's locked development environment uses Agent Toolkit 1.9, which
+  moves `cryptography` from 46.0.7 to 48.0.1.
+- The NeMo Agent Toolkit example runs on Agent Toolkit 1.9. Since 1.9,
+  `nvidia-nat-langchain` installs model providers as extras, so the example
+  installs `nvidia-nat-langchain[openai,nvidia]`.
+- The OpenShell end-to-end suite installs the plugin with
+  `nvidia-nat-core>=1.8,<1.10`.
+
 ## [0.1.2] - 2026-10-05
 
 ### Changed

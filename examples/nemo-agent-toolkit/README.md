@@ -1,6 +1,6 @@
 # NeMo Agent Toolkit agent under Tenuo
 
-A NeMo Agent Toolkit 1.8 ReAct agent whose MCP tools go through
+A NeMo Agent Toolkit 1.9 ReAct agent whose MCP tools go through
 `tenuo-openshell-agent proxy`. The agent's configuration has no Tenuo code:
 its `mcp_client` function group points at the loopback proxy, which signs each
 `tools/call` with the holder key. The warrant decides which calls leave.
@@ -33,7 +33,7 @@ Requirements: Rust, `uv`, `jq`, and `nc`. No model or API key is needed.
 examples/nemo-agent-toolkit/run.sh
 ```
 
-The script builds the binaries, installs NeMo Agent Toolkit 1.8 into a
+The script builds the binaries, installs NeMo Agent Toolkit 1.9 into a
 temporary environment, and runs the steps above against the demo MCP server.
 `scripted_llm.py` stands in for the model: an OpenAI-compatible endpoint that
 replays a fixed ReAct transcript, so NAT's standard `openai` client and

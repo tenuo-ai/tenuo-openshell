@@ -12,7 +12,7 @@ boundary.
 
 ## Install
 
-Install it into the same environment as Agent Toolkit 1.8:
+Install it into the same environment as Agent Toolkit 1.8 or 1.9:
 
 ```bash
 pip install nemo-agent-toolkit-tenuo
@@ -79,13 +79,21 @@ middleware continues after an allow.
 
 ## Compatibility and verification
 
-Tested with Python 3.11–3.13, `nvidia-nat-core` 1.8.x, and
-Tenuo 0.3.x. Run its tests and distribution build with:
+Tested with Python 3.11–3.13, `nvidia-nat-core` 1.8.x and 1.9.x, and
+Tenuo 0.3.x. The locked environment uses Agent Toolkit 1.9. Run its tests and
+distribution build with:
 
 ```bash
 uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test \
   pytest python/nemo-agent-toolkit-tenuo/tests -q
 uv build --project python/nemo-agent-toolkit-tenuo
+```
+
+To run the same tests and `nat info components` discovery against Agent
+Toolkit 1.8 in a fresh environment:
+
+```bash
+ci/nat-compat.sh 1.8
 ```
 
 See the repository [security policy](../../SECURITY.md) before reporting a

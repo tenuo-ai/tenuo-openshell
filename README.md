@@ -273,7 +273,7 @@ is enforced, and what remains.
 | --- | --- |
 | NVIDIA OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` |
 | Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` |
-| NVIDIA NeMo Agent Toolkit | `nvidia-nat-core` 1.8.x |
+| NVIDIA NeMo Agent Toolkit | `nvidia-nat-core` 1.8.x and 1.9.x |
 | Tenuo | 0.3.x, tested with 0.3.2 |
 
 A range moves only after the unit, plugin, container, and real-gateway suites
