@@ -38,7 +38,12 @@ struct Sandbox {
     revocation: Option<RevocationState>,
     destinations: Vec<Destination>,
     mcp: McpOptions,
-    single_use_tools: HashSet<String>,
+    /// Tools for which a resent identical proof is the same effect. Every
+    /// other tool reserves its proof once.
+    idempotent_tools: HashSet<String>,
+    /// Whether an allowed call keeps `params._meta.tenuo` on the forwarded
+    /// body. The sandbox attachment cannot turn strip into preserve.
+    forward_proof: MetaMode,
     pop_replay_ttl_secs: u64,
     max_result_bytes: Option<u64>,
 }
@@ -269,7 +274,16 @@ impl PolicySet {
                 .saturating_mul(u64::from(max_windows));
             let destinations = parse_destinations(entry)?;
             let mcp = parse_mcp_options(entry)?;
-            let single_use_tools = parse_single_use_tools(entry)?;
+            let single_use_tools = parse_tool_set(entry, "single_use_tools")?;
+            let idempotent_tools = parse_tool_set(entry, "idempotent_tools")?;
+            if single_use_tools
+                .intersection(&idempotent_tools)
+                .next()
+                .is_some()
+            {
+                return Err(PolicyError::Invalid);
+            }
+            let forward_proof = parse_forward_proof(entry)?;
             let max_result_bytes = match entry.get("max_result_bytes") {
                 Some(value) => Some(
                     value
@@ -364,7 +378,8 @@ impl PolicySet {
                     revocation,
                     destinations,
                     mcp,
-                    single_use_tools,
+                    idempotent_tools,
+                    forward_proof,
                     pop_replay_ttl_secs,
                     max_result_bytes,
                 },
@@ -388,12 +403,26 @@ impl PolicySet {
         self
     }
 
+    /// Proof forwarding for this sandbox. An unknown sandbox strips.
+    pub fn forward_proof(&self, sandbox_id: &str) -> MetaMode {
+        self.sandboxes
+            .get(sandbox_id)
+            .map(|sandbox| sandbox.forward_proof)
+            .unwrap_or(MetaMode::Strip)
+    }
+
+    /// `approval_replay_protection: false` leaves approval nonces reusable
+    /// until they expire.
+    pub fn reusable_approvals(&self) -> bool {
+        !self.approval_replay_enabled
+    }
+
     pub fn replay_store(&self) -> Option<&Arc<dyn ReplayStore>> {
-        let single_use = self
+        let proofs = self
             .sandboxes
             .values()
-            .any(|sandbox| !sandbox.single_use_tools.is_empty());
-        (self.approval_replay_enabled || single_use).then_some(&self.replay_store)
+            .any(|sandbox| sandbox.reserves_proofs());
+        (self.approval_replay_enabled || proofs).then_some(&self.replay_store)
     }
 
     fn replay_store_handle(&self) -> Arc<dyn ReplayStore> {
@@ -468,8 +497,9 @@ impl PolicySet {
             })
     }
 
-    /// Atomically reserve the approval nonces and, for a single-use tool, the
-    /// proof of possession of a call that already passed Guard validation.
+    /// Atomically reserve the approval nonces and the proof of possession of a
+    /// call that already passed Guard validation. Tools listed in
+    /// `idempotent_tools` do not reserve a proof.
     ///
     /// The store is deliberately integration-owned: Tenuo signs a unique nonce into every
     /// approval but leaves replay persistence to the enforcing application.
@@ -486,7 +516,7 @@ impl PolicySet {
         if approval_claims {
             reserved = claims(approvals).map_err(|_| reason::INVALID_AUTHORITY)?;
         }
-        if sandbox.single_use_tools.contains(tool) {
+        if !sandbox.idempotent_tools.contains(tool) {
             reserved.push(pop_claim(pop_signature, sandbox.pop_replay_ttl_secs));
         }
         if reserved.is_empty() {
@@ -524,6 +554,8 @@ pub struct PolicyManager {
     provider: Option<Arc<dyn PolicyProvider>>,
     current: ArcSwap<PolicySet>,
     replay_store: Arc<dyn ReplayStore>,
+    policy_key: Option<PublicKey>,
+    signature_path: Option<std::path::PathBuf>,
     last_document: Mutex<Vec<u8>>,
     last_success: AtomicU64,
     reload_failures: AtomicU64,
@@ -536,6 +568,8 @@ impl PolicyManager {
             provider: None,
             current: ArcSwap::from_pointee(initial),
             replay_store,
+            policy_key: None,
+            signature_path: None,
             last_document: Mutex::new(Vec::new()),
             last_success: AtomicU64::new(unix_time()),
             reload_failures: AtomicU64::new(0),
@@ -560,10 +594,18 @@ impl PolicyManager {
             provider: Some(provider),
             current: ArcSwap::from_pointee(initial),
             replay_store,
+            policy_key: None,
+            signature_path: None,
             last_document: Mutex::new(document),
             last_success: AtomicU64::new(unix_time()),
             reload_failures: AtomicU64::new(0),
         }
+    }
+
+    pub fn requiring_signature(mut self, key: PublicKey, signature: std::path::PathBuf) -> Self {
+        self.policy_key = Some(key);
+        self.signature_path = Some(signature);
+        self
     }
 
     pub fn snapshot(&self) -> Arc<PolicySet> {
@@ -591,6 +633,11 @@ impl PolicyManager {
         if unchanged {
             self.last_success.store(unix_time(), Ordering::Relaxed);
             return Ok(false);
+        }
+        if let Some(key) = &self.policy_key {
+            let path = self.signature_path.as_ref().ok_or(PolicyError::Invalid)?;
+            let signature = std::fs::read(path).map_err(PolicyError::Io)?;
+            verify_policy_document(&document, &signature, key)?;
         }
         let mut next = PolicySet::from_json(&document)?;
         let current_version = self.current.load().version();
@@ -726,8 +773,67 @@ fn parse_mcp_options(entry: &Value) -> Result<McpOptions, PolicyError> {
     })
 }
 
-fn parse_single_use_tools(entry: &Value) -> Result<HashSet<String>, PolicyError> {
-    let Some(value) = entry.get("single_use_tools") else {
+impl Sandbox {
+    /// A wildcard destination can admit a tool that is not listed, so it
+    /// always reserves. A named destination reserves unless every tool it
+    /// serves is declared idempotent.
+    fn reserves_proofs(&self) -> bool {
+        self.destinations
+            .iter()
+            .any(|destination| match &destination.tools {
+                ToolScope::Any => true,
+                ToolScope::Only(tools) => tools
+                    .iter()
+                    .any(|tool| !self.idempotent_tools.contains(tool)),
+            })
+    }
+}
+
+fn parse_forward_proof(entry: &Value) -> Result<MetaMode, PolicyError> {
+    match entry.get("forward_proof") {
+        None => Ok(MetaMode::Strip),
+        Some(value) => match value.as_str() {
+            Some("strip") => Ok(MetaMode::Strip),
+            Some("preserve") => Ok(MetaMode::Preserve),
+            _ => Err(PolicyError::Invalid),
+        },
+    }
+}
+
+/// Domain separation for a detached signature over the exact policy bytes.
+pub const POLICY_SIGNATURE_CONTEXT: &[u8] = b"tenuo-openshell-policy-v1";
+
+/// `<policy path>.sig`, so `policy.json` is signed as `policy.json.sig`.
+pub fn policy_signature_path(policy: &Path) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("{}.sig", policy.display()))
+}
+
+pub fn sign_policy_document(document: &[u8], key: &tenuo::SigningKey) -> String {
+    hex::encode(key.sign_raw(&policy_message(document)).to_bytes())
+}
+
+pub fn verify_policy_document(
+    document: &[u8],
+    signature_file: &[u8],
+    key: &PublicKey,
+) -> Result<(), PolicyError> {
+    let text = std::str::from_utf8(signature_file).map_err(|_| PolicyError::Invalid)?;
+    let bytes = hex::decode(text.trim()).map_err(|_| PolicyError::Invalid)?;
+    let bytes: [u8; 64] = bytes.try_into().map_err(|_| PolicyError::Invalid)?;
+    let signature = tenuo::Signature::from_bytes(&bytes).map_err(|_| PolicyError::Invalid)?;
+    key.verify_raw(&policy_message(document), &signature)
+        .map_err(|_| PolicyError::Invalid)
+}
+
+fn policy_message(document: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(POLICY_SIGNATURE_CONTEXT.len() + document.len());
+    message.extend_from_slice(POLICY_SIGNATURE_CONTEXT);
+    message.extend_from_slice(document);
+    message
+}
+
+fn parse_tool_set(entry: &Value, field: &str) -> Result<HashSet<String>, PolicyError> {
+    let Some(value) = entry.get(field) else {
         return Ok(HashSet::new());
     };
     let mut tools = HashSet::new();
@@ -763,7 +869,9 @@ pub fn meta_mode(config: &prost_types::Struct) -> Result<MetaMode, InvalidMiddle
         _ => return Err(InvalidMiddlewareConfig),
     };
     match text {
-        "preserve" => Ok(MetaMode::Preserve),
+        // The sandbox creator writes this attachment. Preserve is an
+        // operator decision (`forward_proof`) and is rejected here.
+        "preserve" => Err(InvalidMiddlewareConfig),
         "strip" => Ok(MetaMode::Strip),
         _ => Err(InvalidMiddlewareConfig),
     }
@@ -900,10 +1008,29 @@ mod tests {
         let mut disabled: Value = serde_json::from_slice(&unset).unwrap();
         disabled["approval_replay_protection"] = json!(false);
         let disabled = serde_json::to_vec(&disabled).unwrap();
-        assert!(PolicySet::from_json(&disabled)
-            .unwrap()
-            .replay_store()
-            .is_none());
+        assert!(
+            PolicySet::from_json(&disabled)
+                .unwrap()
+                .replay_store()
+                .is_some(),
+            "a wildcard destination still reserves proofs"
+        );
+
+        let idempotent = sandbox_document(
+            &root,
+            json!({
+                "destinations": [{"host": "mcp.test", "port": 443, "tools": ["read_logs"]}],
+                "idempotent_tools": ["read_logs"]
+            }),
+        );
+        let mut idempotent: Value = serde_json::from_slice(&idempotent).unwrap();
+        idempotent["approval_replay_protection"] = json!(false);
+        assert!(
+            PolicySet::from_json(&serde_json::to_vec(&idempotent).unwrap())
+                .unwrap()
+                .replay_store()
+                .is_none()
+        );
     }
 
     #[test]
@@ -942,19 +1069,28 @@ mod tests {
     }
 
     #[test]
-    fn single_use_tools_enable_the_replay_store() {
+    fn proofs_are_reserved_unless_every_named_tool_is_idempotent() {
         let root = SigningKey::generate();
         let document = sandbox_document(
             &root,
             json!({
-                "destinations": [{"host": "mcp.test", "port": 443, "tools": ["*"]}],
-                "single_use_tools": ["restart_service"]
+                "destinations": [{"host": "mcp.test", "port": 443, "tools": ["read_logs", "restart_service"]}],
+                "idempotent_tools": ["read_logs"]
             }),
         );
         assert!(PolicySet::from_json(&document)
             .unwrap()
             .replay_store()
             .is_some());
+        let overlap = sandbox_document(
+            &root,
+            json!({
+                "destinations": [{"host": "mcp.test", "port": 443, "tools": ["restart_service"]}],
+                "single_use_tools": ["restart_service"],
+                "idempotent_tools": ["restart_service"]
+            }),
+        );
+        assert!(PolicySet::from_json(&overlap).is_err());
     }
 
     #[test]
@@ -991,5 +1127,51 @@ mod tests {
             meta_mode(&prost_types::Struct::default()),
             Ok(MetaMode::Strip)
         );
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert(
+            "tenuo_meta".into(),
+            prost_types::Value {
+                kind: Some(prost_types::value::Kind::StringValue("preserve".into())),
+            },
+        );
+        assert!(meta_mode(&prost_types::Struct { fields }).is_err());
+    }
+
+    #[test]
+    fn forward_proof_defaults_to_strip() {
+        let root = SigningKey::generate();
+        let destinations = json!([{"host": "mcp.test", "port": 443, "tools": ["read_logs"]}]);
+        let policy = PolicySet::from_json(&sandbox_document(
+            &root,
+            json!({"destinations": destinations}),
+        ))
+        .unwrap();
+        assert_eq!(policy.forward_proof("sandbox"), MetaMode::Strip);
+        assert_eq!(policy.forward_proof("missing"), MetaMode::Strip);
+        let preserved = PolicySet::from_json(&sandbox_document(
+            &root,
+            json!({"destinations": destinations, "forward_proof": "preserve"}),
+        ))
+        .unwrap();
+        assert_eq!(preserved.forward_proof("sandbox"), MetaMode::Preserve);
+        assert!(PolicySet::from_json(&sandbox_document(
+            &root,
+            json!({"destinations": destinations, "forward_proof": "forward"}),
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn a_policy_signature_covers_the_exact_bytes() {
+        let key = SigningKey::generate();
+        let document = br#"{"version":1}"#;
+        let signature = sign_policy_document(document, &key);
+        assert!(verify_policy_document(document, signature.as_bytes(), &key.public_key()).is_ok());
+        assert!(verify_policy_document(
+            br#"{"version":2}"#,
+            signature.as_bytes(),
+            &key.public_key()
+        )
+        .is_err());
     }
 }

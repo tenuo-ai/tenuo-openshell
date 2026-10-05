@@ -12,8 +12,7 @@
           "path": "/mcp",
           "tools": ["read_logs", "restart_service"]
         }
-      ],
-      "single_use_tools": ["restart_service"]
+      ]
     }
   }
 }

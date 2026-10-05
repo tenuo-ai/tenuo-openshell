@@ -322,6 +322,7 @@ configure_supervisor_reachability() {
 }
 
 start_middleware() {
+  # The harness rewrites policy.json after startup, so the file is unsigned.
   TENUO_DECISION_LOG=1 "$MIDDLEWARE_BIN" \
     --policy "$FIXTURE_DIR/policy.json" \
     --listen "0.0.0.0:$MIDDLEWARE_PORT" \
@@ -331,6 +332,7 @@ start_middleware() {
     --openshell-gateway-id "$RUN_ID" \
     --openshell-jwt-key-id "$RUN_ID" \
     --allow-in-memory-replay \
+    --allow-unsigned-policy \
     --audience "$AUDIENCE" \
     --admin-listen "127.0.0.1:$ADMIN_PORT" \
     --evaluate-results \

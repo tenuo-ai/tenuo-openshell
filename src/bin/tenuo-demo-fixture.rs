@@ -691,7 +691,8 @@ fn issue(
             "path": "/mcp",
             "tools": ["read_logs", "restart_service"]
         }],
-        "single_use_tools": ["restart_service"]
+        "single_use_tools": ["restart_service"],
+        "forward_proof": "preserve"
     });
     sandboxes.insert(sandbox_id.to_string(), roots.clone());
     sandboxes.insert("bootstrap-delegate".to_string(), roots);

@@ -59,7 +59,7 @@ before forcing a restart.
 
 ## Replay-store outage
 
-Readiness fails, and approval-bearing requests and calls to `single_use_tools`
+Readiness fails, and approval-bearing requests and calls that reserve a proof
 deny `tenuo_verifier_failed`.
 Do not switch to in-memory replay during an incident: doing so invalidates the
 cross-replica single-use guarantee. Restore Redis or route to a separately
@@ -71,9 +71,9 @@ An approval nonce is committed before the middleware returns allow, so each
 approval authorizes at most one effect. If OpenShell or the destination fails
 after that point, the approval is spent even though the effect may not have
 happened. A retry denies `tenuo_approval_replayed`; request a new approval
-rather than clearing replay state. The same applies to calls to
-`single_use_tools`, which deny `tenuo_pop_replayed` until the client signs a
-fresh proof in the next time bucket.
+rather than clearing replay state. The same applies to every tool that is not
+listed in `idempotent_tools`: a resent proof denies `tenuo_pop_replayed` until
+the client signs a fresh proof in the next time bucket.
 
 ## Destination denials
 

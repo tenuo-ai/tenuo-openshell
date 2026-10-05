@@ -60,6 +60,8 @@ enum PolicyCommand {
     /// Add a sandbox, trust root, or MCP destination. Creates the file if needed
     /// and increments its version.
     Add(PolicyAddArgs),
+    /// Write `<policy>.sig` over the exact policy bytes.
+    Sign(PolicySignArgs),
 }
 
 #[derive(Args)]
@@ -78,12 +80,27 @@ struct PolicyAddArgs {
     /// Tools the destination serves, comma-separated, or `*`.
     #[arg(long, value_delimiter = ',', requires = "mcp")]
     tools: Vec<String>,
-    /// Tools whose signed calls are accepted once.
+    /// Accepted for compatibility. Every tool is already single-use unless it
+    /// is listed with --idempotent.
     #[arg(long, value_delimiter = ',')]
     single_use: Vec<String>,
+    /// Tools for which a resent identical call is the same effect. A captured
+    /// body for any other tool is denied `tenuo_pop_replayed`.
+    #[arg(long, value_delimiter = ',')]
+    idempotent: Vec<String>,
     /// Maximum warrant lifetime for a new policy file.
     #[arg(long, default_value_t = 3600)]
     max_warrant_lifetime_secs: u64,
+}
+
+#[derive(Args)]
+struct PolicySignArgs {
+    #[arg(long)]
+    policy: PathBuf,
+    /// Ed25519 secret key file. The matching public key is what the middleware
+    /// receives as `--policy-signing-key`.
+    #[arg(long)]
+    key: PathBuf,
 }
 
 #[derive(Args)]
@@ -99,9 +116,14 @@ struct RegisterArgs {
     mcp_host: Vec<String>,
     #[arg(long, default_value = DEFAULT_AUDIENCE)]
     audience: String,
-    /// Keep `_meta.tenuo` on forwarded requests for a destination that verifies it.
+    /// Mention in the printed block that the Tenuo policy sets
+    /// `forward_proof` to `preserve`. The sandbox attachment cannot do that.
     #[arg(long)]
     preserve_meta: bool,
+    /// OpenShell sandbox policy to check before printing. Refuses when a
+    /// protected host allows `tls: skip`, raw TCP, or a binary WebSocket.
+    #[arg(long)]
+    openshell_policy: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -231,8 +253,9 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Policy(PolicyCommand::Add(args)) => policy_add(&args),
+        Command::Policy(PolicyCommand::Sign(args)) => policy_sign(&args),
         Command::Register(args) => {
-            print!("{}", register(&args));
+            print!("{}", register(&args)?);
             Ok(())
         }
         Command::Warrant(WarrantCommand::Issue(args)) => {
@@ -273,6 +296,7 @@ fn policy_add(args: &PolicyAddArgs) -> Result<()> {
         &roots,
         destination,
         &args.single_use,
+        &args.idempotent,
     )?;
     let bytes = serde_json::to_vec_pretty(&document)?;
     PolicySet::from_json(&bytes)
@@ -294,6 +318,7 @@ fn add_to_policy(
     roots: &[String],
     destination: Option<Value>,
     single_use: &[String],
+    idempotent: &[String],
 ) -> Result<()> {
     let version = document["version"].as_u64().unwrap_or(0) + 1;
     document["version"] = json!(version);
@@ -312,6 +337,11 @@ fn add_to_policy(
         entry,
         "single_use_tools",
         single_use.iter().map(|tool| json!(tool)),
+    );
+    union(
+        entry,
+        "idempotent_tools",
+        idempotent.iter().map(|tool| json!(tool)),
     );
     if let Some(destination) = destination {
         let list = entry
@@ -386,18 +416,33 @@ fn destination(url: &str, tools: &[String]) -> Result<Value> {
     Ok(value)
 }
 
-fn register(args: &RegisterArgs) -> String {
+fn policy_sign(args: &PolicySignArgs) -> Result<()> {
+    let document = fs::read(&args.policy)?;
+    let key = read_secret(&args.key)?;
+    let signature = tenuo_openshell_middleware::policy::sign_policy_document(&document, &key);
+    let path = tenuo_openshell_middleware::policy::policy_signature_path(&args.policy);
+    fs::write(&path, format!("{signature}\n"))?;
+    println!("wrote {}", path.display());
+    Ok(())
+}
+
+fn register(args: &RegisterArgs) -> Result<String> {
+    if let Some(path) = &args.openshell_policy {
+        let document = fs::read_to_string(path)?;
+        reject_uncovered_routes(&document, &args.mcp_host)?;
+    }
     let hosts = args
         .mcp_host
         .iter()
         .map(|host| format!("        - {host}\n"))
         .collect::<String>();
-    let config = if args.preserve_meta {
-        "    config:\n      tenuo_meta: preserve\n"
+    let preserve = if args.preserve_meta {
+        "# Set \"forward_proof\": \"preserve\" on this sandbox in the Tenuo policy.\n\
+         # The sandbox attachment cannot forward the proof.\n"
     } else {
         ""
     };
-    format!(
+    Ok(format!(
         "# OpenShell gateway configuration\n\
          [[openshell.supervisor.middleware]]\n\
          name = \"tenuo/authorization\"\n\
@@ -409,18 +454,78 @@ fn register(args: &RegisterArgs) -> String {
          \n\
          # Sandbox policy. List {AGENT} as the only binary allowed to reach\n\
          # these hosts so every tools/call is signed in the sandbox.\n\
+         {preserve}\
          network_middlewares:\n  \
            tenuo-task-authority:\n    \
              middleware: tenuo/authorization\n    \
-             on_error: fail_closed\n\
-         {config}    \
+             on_error: fail_closed\n    \
              endpoints:\n      \
                include:\n\
          {hosts}",
         endpoint = args.middleware_endpoint,
         ca = args.ca,
         audience = args.audience,
-    )
+    ))
+}
+
+/// Refuse a printed registration when a protected host is reachable on a
+/// path this middleware does not see.
+fn reject_uncovered_routes(document: &str, hosts: &[String]) -> Result<()> {
+    let value: serde_yaml::Value = serde_yaml::from_str(document)
+        .map_err(|error| format!("OpenShell policy did not parse: {error}"))?;
+    let mut found = Vec::new();
+    walk_uncovered(&value, hosts, &mut found);
+    if found.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "protected hosts are reachable outside the middleware: {}",
+            found.join(", ")
+        )
+        .into())
+    }
+}
+
+fn walk_uncovered(value: &serde_yaml::Value, hosts: &[String], found: &mut Vec<String>) {
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            if let Some(reason) = uncovered_endpoint(map, hosts) {
+                found.push(reason);
+            }
+            for child in map.values() {
+                walk_uncovered(child, hosts, found);
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for child in items {
+                walk_uncovered(child, hosts, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn uncovered_endpoint(map: &serde_yaml::Mapping, hosts: &[String]) -> Option<String> {
+    let host = map
+        .get(serde_yaml::Value::String("host".into()))
+        .and_then(serde_yaml::Value::as_str)?;
+    if !hosts.iter().any(|item| item.eq_ignore_ascii_case(host)) {
+        return None;
+    }
+    let field = |name: &str| {
+        map.get(serde_yaml::Value::String(name.into()))
+            .and_then(serde_yaml::Value::as_str)
+    };
+    let reason = if field("tls") == Some("skip") {
+        "tls: skip"
+    } else if matches!(field("protocol"), Some("tcp" | "websocket" | "ws")) {
+        "uninspected protocol"
+    } else if field("websocket") == Some("binary") {
+        "binary websocket"
+    } else {
+        return None;
+    };
+    Some(format!("{host} ({reason})"))
 }
 
 fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
@@ -835,6 +940,7 @@ mod tests {
             std::slice::from_ref(&root),
             Some(read),
             &[],
+            &[],
         )
         .unwrap();
         let restart = destination("https://mcp.internal/mcp", &["restart_service".into()]).unwrap();
@@ -844,6 +950,7 @@ mod tests {
             std::slice::from_ref(&root),
             Some(restart),
             &["restart_service".into()],
+            &["read_logs".into()],
         )
         .unwrap();
         assert_eq!(document["version"], 5);
@@ -855,6 +962,7 @@ mod tests {
             json!(["read_logs", "restart_service"])
         );
         assert_eq!(sandbox["single_use_tools"], json!(["restart_service"]));
+        assert_eq!(sandbox["idempotent_tools"], json!(["read_logs"]));
         PolicySet::from_json(&serde_json::to_vec(&document).unwrap()).unwrap();
     }
 
@@ -1057,9 +1165,22 @@ mod tests {
             mcp_host: vec!["mcp.internal".into()],
             audience: DEFAULT_AUDIENCE.into(),
             preserve_meta: true,
-        });
+            openshell_policy: None,
+        })
+        .unwrap();
         assert!(text.contains("grpc_endpoint = \"https://tenuo:50051\""));
         assert!(text.contains("        - mcp.internal\n"));
-        assert!(text.contains("tenuo_meta: preserve"));
+        assert!(text.contains("forward_proof"));
+        assert!(!text.contains("tenuo_meta"));
+    }
+
+    #[test]
+    fn register_refuses_an_uncovered_route_to_a_protected_host() {
+        let allowed = "endpoints:\n  - host: other.internal\n    tls: skip\n";
+        assert!(reject_uncovered_routes(allowed, &["mcp.internal".into()]).is_ok());
+        let skipped = "endpoints:\n  - host: mcp.internal\n    protocol: mcp\n    tls: skip\n";
+        assert!(reject_uncovered_routes(skipped, &["mcp.internal".into()]).is_err());
+        let tcp = "endpoints:\n  - host: MCP.INTERNAL\n    protocol: tcp\n";
+        assert!(reject_uncovered_routes(tcp, &["mcp.internal".into()]).is_err());
     }
 }

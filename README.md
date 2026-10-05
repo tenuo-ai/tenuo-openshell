@@ -148,6 +148,7 @@ walks through it end to end.
   the agent.
 - **Production operation:**
   - TLS and JWT caller authentication
+  - a signed policy file
   - Redis-backed single-use approvals across replicas
   - versioned policy hot reload and signed revocation lists with rollback
     floors

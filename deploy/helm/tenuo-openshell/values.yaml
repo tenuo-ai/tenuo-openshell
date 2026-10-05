@@ -14,6 +14,11 @@ policy:
   key: policy.json
   reloadSeconds: 5
   maxStaleSeconds: 30
+  # Public key for `<policy.key>.sig` in the policy ConfigMap. Keep this
+  # Secret apart from the ConfigMap so writing policy is not the same as
+  # being able to sign it.
+  signingKeySecret: tenuo-openshell-policy-key
+  signingKeyKey: public
 
 tls:
   existingSecret: tenuo-openshell-tls
@@ -28,6 +33,7 @@ openshell:
   jwtPublicKeyKey: public.pem
 
 replay:
+  # The secret URL must be rediss:// with a password. Production refuses other forms.
   redisSecret: tenuo-openshell-redis
   redisUrlKey: url
   cluster: false

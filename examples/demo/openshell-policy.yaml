@@ -9,8 +9,6 @@ network_middlewares:
     name: Tenuo task-scoped authority
     middleware: tenuo/authorization
     order: 10
-    config:
-      tenuo_meta: preserve
     on_error: fail_closed
     endpoints:
       include:

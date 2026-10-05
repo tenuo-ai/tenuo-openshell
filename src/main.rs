@@ -6,11 +6,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tenuo_openshell_middleware::auth::ExtensionJwtVerifier;
-use tenuo_openshell_middleware::policy::{PolicyManager, PolicySet};
+use tenuo_openshell_middleware::policy::{
+    policy_signature_path, verify_policy_document, PolicyManager, PolicySet,
+};
 use tenuo_openshell_middleware::proto::openshell::middleware::v1::http_response_pre_return_server::HttpResponsePreReturnServer;
 use tenuo_openshell_middleware::proto::openshell::middleware::v1::supervisor_middleware_server::SupervisorMiddlewareServer;
 use tenuo_openshell_middleware::receipt::ReceiptLog;
-use tenuo_openshell_middleware::replay::RedisReplayStore;
+use tenuo_openshell_middleware::replay::{require_confidential_replay_url, RedisReplayStore};
 use tenuo_openshell_middleware::result::PendingResults;
 use tenuo_openshell_middleware::service::MiddlewareService;
 use tenuo_openshell_middleware::telemetry::Telemetry;
@@ -144,6 +146,25 @@ struct Args {
     #[arg(long)]
     allow_in_memory_replay: bool,
 
+    /// Explicitly accept a replay Redis URL that is not `rediss://` with a
+    /// password. A plaintext or unauthenticated store can be rewritten by
+    /// anyone on its network, which defeats single-use proofs and approvals.
+    #[arg(long)]
+    allow_plaintext_replay: bool,
+
+    /// Public key that must sign the policy file. Production requires it.
+    /// The file is 64 hex characters, or a path to that text.
+    #[arg(long, env = "TENUO_POLICY_SIGNING_KEY")]
+    policy_signing_key: Option<String>,
+
+    /// Explicitly run production without a signed policy file.
+    #[arg(long)]
+    allow_unsigned_policy: bool,
+
+    /// Explicitly allow `approval_replay_protection: false`.
+    #[arg(long)]
+    allow_reusable_approvals: bool,
+
     /// Credential-free health and Prometheus listener.
     #[arg(long, default_value = "127.0.0.1:9090")]
     admin_listen: SocketAddr,
@@ -246,6 +267,11 @@ async fn serve(args: Args) -> ExitCode {
         args.replay_redis_cluster_urls.as_slice(),
     ) {
         (Some(url), []) => {
+            if let Err(error) =
+                require_replay_transport(security.is_some(), args.allow_plaintext_replay, [url])
+            {
+                return usage_error(error);
+            }
             let store = match RedisReplayStore::connect(url, &args.replay_key_prefix).await {
                 Ok(store) => store,
                 Err(_) => return usage_error("Redis replay store is unavailable".to_string()),
@@ -259,6 +285,13 @@ async fn serve(args: Args) -> ExitCode {
         }
         (None, []) => {}
         (None, urls) => {
+            if let Err(error) = require_replay_transport(
+                security.is_some(),
+                args.allow_plaintext_replay,
+                urls.iter().map(String::as_str),
+            ) {
+                return usage_error(error);
+            }
             let store = match RedisReplayStore::connect_cluster(urls, &args.replay_key_prefix).await
             {
                 Ok(store) => store,
@@ -270,7 +303,49 @@ async fn serve(args: Args) -> ExitCode {
         }
         (Some(_), _) => unreachable!("conflicting replay options were rejected"),
     }
-    let policy = Arc::new(PolicyManager::new(policy_path, policy, policy_document));
+    if security.is_some() && policy.reusable_approvals() && !args.allow_reusable_approvals {
+        return usage_error(
+            "production refuses approval_replay_protection set to false; pass --allow-reusable-approvals to keep approvals reusable until they expire"
+                .to_string(),
+        );
+    }
+    if args.allow_unsigned_policy && args.policy_signing_key.is_some() {
+        return usage_error(
+            "--allow-unsigned-policy cannot be combined with --policy-signing-key".to_string(),
+        );
+    }
+    let signing_key = match args.policy_signing_key.as_deref() {
+        Some(value) => match load_policy_key(value) {
+            Ok(key) => Some(key),
+            Err(error) => return usage_error(error),
+        },
+        None if security.is_some() && !args.allow_unsigned_policy => {
+            return usage_error(
+                "production requires --policy-signing-key, or --allow-unsigned-policy".to_string(),
+            );
+        }
+        None => None,
+    };
+    let signature_path = policy_signature_path(&policy_path);
+    if let Some(key) = &signing_key {
+        let signature = match std::fs::read(&signature_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return usage_error(format!(
+                    "policy signature {}: {error}",
+                    signature_path.display()
+                ));
+            }
+        };
+        if verify_policy_document(&policy_document, &signature, key).is_err() {
+            return usage_error("policy signature does not match --policy-signing-key".to_string());
+        }
+    }
+    let mut manager = PolicyManager::new(policy_path, policy, policy_document);
+    if let Some(key) = signing_key {
+        manager = manager.requiring_signature(key, signature_path);
+    }
+    let policy = Arc::new(manager);
     // Export is off, and nothing is sent, unless an OTLP endpoint is set.
     let (telemetry, otel_guard) = match tenuo_openshell_middleware::otel::from_env() {
         Ok(Some((tracer, guard))) => (Telemetry::default().with_tracer(tracer), Some(guard)),
@@ -409,6 +484,33 @@ fn configure(
     } else {
         service
     }
+}
+
+fn load_policy_key(value: &str) -> Result<tenuo::PublicKey, String> {
+    let text = match std::fs::read_to_string(value) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => value.to_string(),
+        Err(error) => return Err(format!("policy signing key: {error}")),
+    };
+    let bytes = hex::decode(text.trim()).map_err(|_| "policy signing key must be 32 bytes")?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| "policy signing key must be 32 bytes")?;
+    tenuo::PublicKey::from_bytes(&bytes).map_err(|error| error.to_string())
+}
+
+fn require_replay_transport<'a>(
+    production: bool,
+    allow_plaintext: bool,
+    urls: impl IntoIterator<Item = &'a str>,
+) -> Result<(), String> {
+    if !production || allow_plaintext {
+        return Ok(());
+    }
+    for url in urls {
+        require_confidential_replay_url(url).map_err(str::to_string)?;
+    }
+    Ok(())
 }
 
 fn production_security(args: &Args) -> Result<Option<ProductionSecurity>, String> {

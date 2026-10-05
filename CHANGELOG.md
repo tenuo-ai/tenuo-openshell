@@ -6,6 +6,24 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Every tool accepts a signed call once. A resent identical proof is
+  `tenuo_pop_replayed` unless the tool is listed in `idempotent_tools`.
+  `single_use_tools` is still accepted and no longer changes that default.
+- Production refuses a replay Redis URL that is not `rediss://` with a
+  password and hostname verification. `--allow-plaintext-replay` is the
+  explicit exception.
+- `forward_proof` on the operator policy decides whether a destination
+  receives the proof. An attachment `tenuo_meta: preserve` is rejected.
+- Production requires `--policy-signing-key` over the exact policy bytes.
+  `--allow-unsigned-policy` is the explicit exception.
+- Production refuses `approval_replay_protection: false` unless
+  `--allow-reusable-approvals` is set.
+- `tenuo-openshell register --openshell-policy` refuses to print a gateway
+  block when a protected host allows `tls: skip`, raw TCP, or a binary
+  WebSocket.
+
 ## [0.1.1] - 2026-10-04
 
 ### Added
