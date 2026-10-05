@@ -62,7 +62,7 @@ Before the first `publish=true` run:
    immutable digests.
 7. Create and push a signed Git tag, then dispatch `.github/workflows/release.yml`
    from `main` for that exact tag
-   (`gh workflow run release.yml --ref main -f tag=v0.1.3 -f publish=false`).
+   (`gh workflow run release.yml --ref main -f tag=v0.1.4 -f publish=false`).
    Signatures name the workflow and the ref it ran from; the verification
    commands below expect `main`. Publish the Python package, container, and
    binaries only from that workflow; the Rust crate remains `publish = false`
@@ -133,7 +133,7 @@ signature, and the provenance. The bundles use the Sigstore bundle format
 that cosign 3 writes. cosign 2 cannot read them.
 
 ```bash
-tag=v0.1.3
+tag=v0.1.4
 archive="tenuo-openshell-agent-$tag-x86_64-unknown-linux-musl.tar.gz"
 
 sha256sum --ignore-missing -c SHA256SUMS
@@ -159,7 +159,7 @@ already copied into a sandbox image.
 ## Verifying the image, chart, and package
 
 ```bash
-tag=v0.1.3
+tag=v0.1.4
 
 identity=(--certificate-identity "https://github.com/tenuo-ai/tenuo-openshell/.github/workflows/release.yml@refs/heads/main"
   --certificate-oidc-issuer https://token.actions.githubusercontent.com)

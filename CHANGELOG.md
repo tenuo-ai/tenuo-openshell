@@ -6,7 +6,7 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.3] - 2026-10-05
+## [0.1.4] - 2026-10-05
 
 ### Added
 
@@ -40,6 +40,10 @@ All notable changes will be documented here. The format follows
 
 ### Changed
 
+- Restored the canonical Apache License 2.0 text in source and release
+  artifacts.
+- Clarified that the documented middleware security scope applies to the
+  pinned OpenShell release and removed a broken documentation index link.
 - The previous quickstart is now [Going to production](docs/production-quickstart.md),
   run by `make production-quickstart`.
 - `tenuo-openshell approve` takes `--request` as optional when one request is
@@ -53,6 +57,11 @@ All notable changes will be documented here. The format follows
   installs `nvidia-nat-langchain[openai,nvidia]`.
 - The OpenShell end-to-end suite installs the plugin with
   `nvidia-nat-core>=1.8,<1.10`.
+
+## [0.1.3] - 2026-10-05
+
+Unpublished release candidate. Superseded by 0.1.4 before artifacts were
+published.
 
 ## [0.1.2] - 2026-10-05
 
@@ -246,7 +255,8 @@ First release.
 - NVIDIA NeMo Agent Toolkit `nvidia-nat-core` 1.8.x.
 - Tenuo 0.3.2 or later within 0.3.
 
-[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.0...v0.1.1
