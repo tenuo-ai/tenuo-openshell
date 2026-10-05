@@ -4,33 +4,45 @@
 [![OpenShell E2E](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Per-task, argument-level authorization for MCP tool calls in OpenShell
-sandboxes.** Tenuo runs as an OpenShell supervisor middleware. It checks every
-`tools/call` against a signed, task-scoped warrant before OpenShell injects
-provider credentials.
+**Give each agent task in an OpenShell sandbox only the tool calls it needs:
+which tools, which argument values, for how long, and with whose approval.**
+
+Tenuo plugs into OpenShell as a supervisor middleware. Every MCP `tools/call`
+that leaves the sandbox is checked against the task's *warrant* before
+OpenShell attaches any credentials. A warrant is a signed grant held by one
+task, and it can only narrow when the task delegates. The agent's code does not
+change.
+
+[Run the demo](examples/demo/README.md) ·
+[Put an agent under Tenuo](docs/sandbox-agent.md) ·
+[Deploy](docs/deployment.md)
 
 ## Why
 
-An OpenShell sandbox policy decides which binaries may reach which MCP server,
-and which tool names they may call. In v0.1.2 the MCP matcher sees only
-`params.name`
-([source](docs/openshell-gap-analysis.md)). A sandbox that may call
-`restart_service` can restart any service, in any environment, at any scale,
-for any task that runs in it.
+An OpenShell sandbox policy answers one question: may this sandbox call
+`restart_service` on this server? The policy is written once per sandbox, and
+its MCP matcher reads only the tool name
+([`sandbox.proto` at v0.1.2](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/proto/sandbox.proto)).
+Every task in that sandbox gets the same answer, for any service, environment,
+or replica count.
 
-Tenuo adds the per-call decision. Each task carries a warrant that names its
-tools and the argument values it may send. The warrant is bound to a key held
-by that task and can only narrow as it is delegated. Here is the same sandbox
-policy and the same tool, from the [demo](examples/demo/README.md):
+Tenuo answers a narrower question: may *this task* make *this call*? The
+warrant names the task's tools and the argument values it may send. It is
+bound to a key only that task holds. It can require a human approval for a
+specific call, and revoking it stops the task and everything the task
+delegated.
+
+Here is the same sandbox policy and the same tool, from the
+[demo](examples/demo/README.md):
 
 | Call | OpenShell alone | OpenShell + Tenuo |
 | --- | --- | --- |
-| Restart `payments` in staging, 3 replicas, approved | Runs | Runs once |
-| Send the same approval again | Runs | Denied `tenuo_approval_replayed` |
+| Restart `payments` in staging, 3 replicas, with an approval | Runs | Runs |
+| Replay that approval | Runs again | Denied `tenuo_approval_replayed` |
 | Restart `auth` in staging | Runs | Denied `tenuo_constraint_denied` |
 | Restart `payments` with 8 replicas | Runs | Denied `tenuo_constraint_denied` |
 | Read `identity` logs in production | Runs | Denied `tenuo_constraint_denied` |
-| Another task signs with this task's warrant | Runs | Denied `tenuo_invalid_authority` |
+| Use a stolen warrant from another task | Runs | Denied `tenuo_invalid_authority` |
 | Sub-agent in a second sandbox, after an ancestor warrant is revoked | Runs | Denied `tenuo_revoked` |
 
 Denied calls never reach the MCP server, and no credential is attached to them.
