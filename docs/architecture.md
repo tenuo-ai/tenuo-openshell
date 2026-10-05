@@ -169,11 +169,11 @@ Within a configured destination:
 | Request | Default | Configurable |
 | --- | --- | --- |
 | `POST` `tools/call` | Warrant, proof, arguments, approvals, and a single-use proof | `idempotent_tools` |
-| `POST` lifecycle: `initialize`, `ping`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` | Forwarded | — |
+| `POST` lifecycle: `initialize`, `ping`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` | Forwarded | Not applicable |
 | `POST` other methods, such as `resources/read` or `prompts/get` | Denied | `mcp.passthrough_methods` |
 | `POST` JSON-RPC responses to server-initiated sampling, elicitation, or roots requests | Denied | `mcp.allow_client_responses` |
-| Bodyless `GET` (server-to-client stream) and `DELETE` (session end) | Forwarded | — |
-| Batches, other HTTP methods, `GET`/`DELETE` with a body | Denied | — |
+| Bodyless `GET` (server-to-client stream) and `DELETE` (session end) | Forwarded | Not applicable |
+| Batches, other HTTP methods, `GET`/`DELETE` with a body | Denied | Not applicable |
 
 Passthrough methods and client responses carry no warrant check. Enable them
 only for servers whose resources and prompts the sandbox may read freely.

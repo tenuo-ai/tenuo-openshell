@@ -13,9 +13,9 @@ on disclosure timing with the reporter.
 
 ## Supported versions
 
-Before the first release, only the current `main` branch is supported. After
-publication, the latest released minor version and `main` will receive security
-fixes unless a release note states otherwise.
+The latest released minor version and `main` receive security fixes unless a
+release note states otherwise. Upgrade to the latest patch release before
+reporting a vulnerability that may already be fixed.
 
 ## Security boundary
 

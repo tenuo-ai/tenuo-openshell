@@ -4,49 +4,72 @@
 [![OpenShell E2E](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml/badge.svg)](https://github.com/tenuo-ai/tenuo-openshell/actions/workflows/openshell-e2e.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Give each agent task in an OpenShell sandbox only the tool calls it needs:
-which tools, which argument values, for how long, and with whose approval.**
+**Portable task authority for agents secured by NVIDIA OpenShell.**
 
-Tenuo plugs into OpenShell as a supervisor middleware. Every MCP `tools/call`
-that leaves the sandbox is checked against the task's *warrant* before
-OpenShell attaches any credentials. A warrant is a signed grant held by one
-task, and it can only narrow when the task delegates. The agent's code does not
-change.
+OpenShell provides the secure runtime boundary: sandbox isolation, network
+policy, and protected credential injection. Tenuo builds on that boundary by
+giving each agent task only the authority it needs: which tools it may call,
+which arguments it may send, for how long, and with whose approval.
+
+Tenuo checks every covered MCP `tools/call` before OpenShell attaches provider
+credentials. Authority is carried in a signed *warrant* held by the task and
+can only become narrower when work is delegated. No fork of OpenShell and no
+Tenuo code in the agent are required.
 
 [Quickstart](docs/quickstart.md) ·
 [Run the demo](examples/demo/README.md) ·
 [Put an agent under Tenuo](docs/sandbox-agent.md) ·
-[Deploy](docs/deployment.md)
+[Deploy](docs/deployment.md) ·
+[All guides](docs/README.md)
 
-## Why
+## What Tenuo adds to OpenShell
 
-An OpenShell sandbox policy answers one question: may this sandbox call
-`restart_service` on this server? The policy is written once per sandbox, and
-its MCP matcher reads only the tool name
-([`sandbox.proto` at v0.1.2](https://github.com/NVIDIA/OpenShell/blob/6648bd0c290efbc41ba131ee9831ee45cd431f94/proto/sandbox.proto)).
-Every task in that sandbox gets the same answer, for any service, environment,
-or replica count.
+OpenShell and Tenuo enforce different, complementary scopes:
 
-Tenuo answers a narrower question: may *this task* make *this call*? The
-warrant names the task's tools and the argument values it may send. It is
-bound to a key only that task holds. It can require a human approval for a
-specific call, and revoking it stops the task and everything the task
-delegated.
-
-Here is the same sandbox policy and the same tool, from the
-[demo](examples/demo/README.md):
-
-| Call | OpenShell alone | OpenShell + Tenuo |
+| Layer | Question it answers | Examples |
 | --- | --- | --- |
-| Restart `payments` in staging, 3 replicas, with an approval | Runs | Runs |
-| Replay that approval | Runs again | Denied `tenuo_approval_replayed` |
-| Restart `auth` in staging | Runs | Denied `tenuo_constraint_denied` |
-| Restart `payments` with 8 replicas | Runs | Denied `tenuo_constraint_denied` |
-| Read `identity` logs in production | Runs | Denied `tenuo_constraint_denied` |
-| Use a stolen warrant from another task | Runs | Denied `tenuo_invalid_authority` |
-| Sub-agent in a second sandbox, after an ancestor warrant is revoked | Runs | Denied `tenuo_revoked` |
+| OpenShell runtime policy | May this sandbox reach this resource? | Process, filesystem, network destination, credential use |
+| Tenuo task authority | May this task make this exact call? | Tool, argument values, expiry, approval, delegation chain |
+
+The OpenShell policy first admits traffic to an approved MCP endpoint. Tenuo
+then verifies that the current task has authority for the requested operation.
+Both checks must allow before OpenShell injects credentials and forwards the
+call.
+
+For example, one sandbox can host several tasks that can reach the same
+operations server while their warrants grant different authority:
+
+| Task attempt | Task authority check | Result |
+| --- | --- | --- |
+| Restart `payments` in staging with the required approval | Tool, arguments, and approval match | Allowed |
+| Replay the same approval | Approval was already consumed | Denied |
+| Restart `payments` with 8 replicas | Exceeds the warrant's argument limit | Denied |
+| Read `identity` logs in production | Outside the task's service and environment scope | Denied |
+| Use a warrant copied from another task | Holder proof does not match | Denied |
+| Continue after an ancestor warrant is revoked | Delegation chain contains a revoked warrant | Denied |
 
 Denied calls never reach the MCP server, and no credential is attached to them.
+
+## Get started
+
+Choose the shortest path that demonstrates the capability you care about:
+
+| Goal | What you will see | Start |
+| --- | --- | --- |
+| Prove task-level enforcement | A real OpenShell sandbox makes one allowed and two denied MCP calls using released artifacts | [`make quickstart`](docs/quickstart.md) |
+| See a human approval flow | A NeMo Agent Toolkit ReAct agent pauses a restart until an approver signs the exact call | [`examples/nemo-agent-toolkit/run.sh`](examples/nemo-agent-toolkit/README.md) |
+| Exercise the complete security model | Constraints, approval replay protection, holder binding, delegation, revocation, A2A, and signed receipts | [`make demo`](examples/demo/README.md) |
+| Protect an existing OpenShell agent | Add the signing proxy, register the middleware, and provision task authority | [Integration guide](docs/sandbox-agent.md) |
+
+The quickstart takes about 10 minutes, builds nothing, and keeps its gateway
+separate from any OpenShell gateway you already run. The Agent Toolkit example
+uses a deterministic model stub, so it needs no model account or API key.
+
+```bash
+git clone https://github.com/tenuo-ai/tenuo-openshell.git
+cd tenuo-openshell
+make quickstart
+```
 
 ## How it fits OpenShell
 
@@ -80,32 +103,10 @@ OpenShell credential injection ──► MCP server
 - **Leaves the agent alone.** The agent's MCP client points at a loopback
   proxy in the sandbox, which signs each call. The agent needs no Tenuo code.
 
-Register the middleware with the gateway:
-
-```toml
-[[openshell.supervisor.middleware]]
-name = "tenuo/authorization"
-grpc_endpoint = "https://tenuo-middleware.example:50051"
-tls_ca_cert_path = "/etc/openshell/tenuo-middleware-ca.pem"
-audience = "urn:openshell:extension:middleware:tenuo/authorization"
-max_payload_bytes = 262144
-timeout = "2s"
-```
-
-Attach it in the sandbox policy:
-
-```yaml
-network_middlewares:
-  tenuo-task-authority:
-    middleware: tenuo/authorization
-    on_error: fail_closed
-    endpoints:
-      include:
-        - mcp.internal
-```
-
-Then issue the task's warrant. This one allows payments log reads in staging or
-dev, and restarts of payments in staging up to 5 replicas:
+The operator CLI prints the OpenShell gateway and sandbox configuration, then
+provisions a holder key and warrant inside the sandbox. The agent points its
+MCP client at the loopback proxy. This example authority allows payments log
+reads in staging or dev, and payments restarts in staging up to 5 replicas:
 
 ```json
 {
@@ -121,12 +122,11 @@ dev, and restarts of payments in staging up to 5 replicas:
 }
 ```
 
-`tenuo-openshell register` prints the gateway and sandbox blocks for your
-endpoints. `tenuo-openshell provision` generates the holder key inside the
-sandbox and installs the warrant. [Running an agent under Tenuo](docs/sandbox-agent.md)
-walks through it end to end.
+The [integration guide](docs/sandbox-agent.md) walks through registration,
+policy signing, warrant provisioning, proxy configuration, delegation, and
+approvals end to end.
 
-## Capabilities
+## Core capabilities
 
 - **Argument constraints:** exact values, allowed sets, glob patterns, and
   numeric ranges per argument. Once a tool lists constraints, arguments it
@@ -164,39 +164,7 @@ reserved in Redis, took 0.76 ms at p50 and 1.6 ms at p99, most of it two
 round trips to a local Redis. One replica decided about 27,000 single-use
 calls per second with 64 concurrent callers, or about 12,000 with required
 receipts. The middleware timeout is 2 s. See [Performance](docs/performance.md)
-for the method, the full tables, and `make bench` to rerun them.
-
-## Try it
-
-The [quickstart](docs/quickstart.md) takes about 10 minutes and builds
-nothing. It downloads the released OpenShell v0.1.2 and Tenuo v0.1.2
-artifacts, starts a gateway with the middleware registered over TLS and JWT,
-and makes one allowed and two denied MCP calls from a sandbox. It needs
-Docker, `curl`, `jq`, and `python3`. `make quickstart` runs it unattended.
-
-Check a checkout without Docker or OpenShell. This needs Rust, Python 3, and
-`curl`:
-
-```bash
-make smoke
-```
-
-Run the full comparison against a real, pinned OpenShell gateway:
-
-```bash
-make demo
-```
-
-The demo needs Docker 28+ or Podman 5+, Rust 1.91+, Python 3.11+, `git`,
-`curl`, `jq`, `nc`, `openssl`, and `make`. The first run builds the pinned
-OpenShell components and takes 10–20 minutes. It runs every scenario twice,
-with and without Tenuo, and confirms denied calls never reach the tool. It
-writes `results/outcome-matrix.md` and verifies every receipt offline. See the
-[demo guide](examples/demo/README.md).
-
-To run an Agent Toolkit ReAct agent with a human approval step, use
-[the NeMo Agent Toolkit example](examples/nemo-agent-toolkit/README.md). It
-needs no model or API key.
+for the method, full tables, and `make bench` to reproduce them.
 
 ## Install
 
@@ -232,6 +200,10 @@ Install the Agent Toolkit plugin from PyPI:
 pip install nemo-agent-toolkit-tenuo
 ```
 
+The published `v0.1.2` plugin supports Agent Toolkit 1.8. The current source
+also passes the complete plugin suite on Agent Toolkit 1.9 and will ship in the
+next package release.
+
 Images, the chart, and the binaries are signed with keyless cosign and carry
 build provenance. See [Verifying a release](docs/releasing.md#verifying-the-image-chart-and-package).
 To build from source instead, run `cargo build --release --locked --bins`.
@@ -240,19 +212,12 @@ To build from source instead, run `cargo build --release --locked --bins`.
 
 | Goal | Guide |
 | --- | --- |
+| Find the right evaluation, integration, or operations path | [Documentation index](docs/README.md) |
 | Try it in 10 minutes from released artifacts | [Quickstart](docs/quickstart.md) |
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) and the [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
-| Issue warrants in production (Tenuo Cloud, or your own keys) | [Production issuance](docs/production-issuance.md) |
-| Size replicas and place Redis | [Performance](docs/performance.md) |
-| Understand the components and trust boundaries | [Architecture](docs/architecture.md) |
-| Review attackers, controls, and residual risk | [Threat model](docs/threat-model.md) |
-| Verify and export receipts | [Receipts](docs/receipts.md) |
-| Add in-process checks to Agent Toolkit | [Agent Toolkit plugin](python/nemo-agent-toolkit-tenuo/README.md) |
-| Connect a control plane | [Provider contract](docs/providers.md) |
-| Check the pinned OpenShell contract | [Upstream verification](docs/upstream-verification.md) |
-| Contribute | [Contributing](CONTRIBUTING.md) |
+| Issue warrants per request, with Tenuo Cloud or your own issuer | [Production issuance](docs/production-issuance.md) |
 
 ## Security scope
 
@@ -273,7 +238,7 @@ is enforced, and what remains.
 | --- | --- |
 | NVIDIA OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` |
 | Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` |
-| NVIDIA NeMo Agent Toolkit | `nvidia-nat-core` 1.8.x and 1.9.x |
+| NVIDIA NeMo Agent Toolkit | Release `v0.1.2`: 1.8.x; current source: 1.8.x and 1.9.x |
 | Tenuo | 0.3.x, tested with 0.3.2 |
 
 A range moves only after the unit, plugin, container, and real-gateway suites
