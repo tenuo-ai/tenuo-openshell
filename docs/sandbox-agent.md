@@ -19,28 +19,30 @@ Two binaries are involved:
 | `tenuo-openshell` | Operator machine or orchestrator | Edit the trust policy, print OpenShell configuration, issue and provision warrants. |
 | `tenuo-openshell-agent` | Inside the sandbox | Hold the key, hold the warrant, sign calls through a loopback MCP proxy. |
 
-Build both from a pinned revision:
+Add the agent to the sandbox image. The image
+`ghcr.io/tenuo-ai/tenuo-openshell-agent` holds only the static binary, for
+`linux/amd64` and `linux/arm64`, so it works on any base image:
 
-```bash
-cargo build --release --locked --bins
+```dockerfile
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.1 \
+  /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
 ```
 
-Copy `target/release/tenuo-openshell-agent` into the sandbox image, for
-example at `/usr/local/bin/tenuo-openshell-agent`. The
-[demo image](../examples/demo/Dockerfile.sandbox) shows a two-stage build.
 The agent verifies the MCP server's TLS certificate against the system trust
-store, so the image needs CA certificates (for example the `ca-certificates`
-package). The demo image installs them.
+store, so the image needs CA certificates. Pin the agent image by digest in
+production.
 
-Tagged releases also publish both binaries. The agent archives are static Linux binaries for `x86_64` and
-`aarch64`; the `tenuo-openshell` archives cover Linux and macOS arm64. Verify
-the archive as described in [Verifying a release binary](releasing.md#verifying-a-release-binary),
-then install the agent into the image:
+Get `tenuo-openshell` for Linux or macOS arm64 from the
+[latest release](https://github.com/tenuo-ai/tenuo-openshell/releases/latest).
+See [Verifying a release binary](releasing.md#verifying-a-release-binary).
+The release also has the agent as static Linux archives, for images built
+without a registry.
 
-```bash
-tar -xzf tenuo-openshell-agent-<tag>-x86_64-unknown-linux-musl.tar.gz \
-  -C /usr/local/bin tenuo-openshell-agent
-```
+To build both from source, run `cargo build --release --locked --bins`. The
+[demo image](../examples/demo/Dockerfile.sandbox) shows a two-stage build.
 
 ## 1. Trust policy
 

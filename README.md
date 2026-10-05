@@ -188,22 +188,41 @@ needs no model or API key.
 
 ## Install
 
-Build the three binaries from a pinned revision:
-
-```bash
-cargo build --release --locked --bins
-```
-
-| Binary | Runs | Role |
+| Component | Runs | Role |
 | --- | --- | --- |
 | `tenuo-openshell-middleware` | Next to the OpenShell gateway | The supervisor middleware |
 | `tenuo-openshell-agent` | Inside each sandbox | Holds the task's key and warrant, and signs calls through a loopback MCP proxy |
 | `tenuo-openshell` | Operator machine or orchestrator | Edits the trust policy, prints OpenShell configuration, and provisions, delegates, and approves |
+| `nemo-agent-toolkit-tenuo` | In the Agent Toolkit process | Denies unauthorized function calls before they run |
 
-Tagged releases add signed static binaries, a signed container image, and the
-Helm chart. See [Releasing](docs/releasing.md) for how to verify them.
-Install the Agent Toolkit plugin from
-[`python/nemo-agent-toolkit-tenuo`](python/nemo-agent-toolkit-tenuo/README.md).
+Deploy the middleware with the Helm chart. See the
+[chart README](deploy/helm/tenuo-openshell/README.md) for the values to set:
+
+```bash
+helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
+  --version 0.1.1 -f values.yaml
+```
+
+Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.1`.
+
+Add the agent to your sandbox image:
+
+```dockerfile
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.1 \
+  /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
+```
+
+Download `tenuo-openshell` for Linux or macOS from the
+[latest release](https://github.com/tenuo-ai/tenuo-openshell/releases/latest).
+Install the Agent Toolkit plugin from PyPI:
+
+```bash
+pip install nemo-agent-toolkit-tenuo
+```
+
+Images, the chart, and the binaries are signed with keyless cosign and carry
+build provenance. See [Verifying a release](docs/releasing.md#verifying-the-image-chart-and-package).
+To build from source instead, run `cargo build --release --locked --bins`.
 
 ## Guides
 

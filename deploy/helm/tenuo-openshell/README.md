@@ -5,11 +5,17 @@ Redis-backed atomic approval replay protection, versioned policy reload,
 health probes, persistent revocation rollback floors and receipts, and a
 default-deny NetworkPolicy.
 
-The default image is the signed release image for the chart's version. To run
-an unreleased revision, build the image from it and override
-`image.repository` and `image.tag`. Git releases and images use the same
-`vMAJOR.MINOR.PATCH` tag; the Helm chart version omits the `v` as required by
-Helm's semantic-version format.
+Install from GHCR:
+
+```bash
+helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
+  --version 0.1.1 -f values.yaml
+```
+
+The chart and its default image, `ghcr.io/tenuo-ai/tenuo-openshell`, are signed
+release artifacts. Releases and images use the `vMAJOR.MINOR.PATCH` tag; the
+chart version omits the `v`, as Helm requires. To run an unreleased revision,
+build the image and override `image.repository` and `image.tag`.
 
 Give every environment and independent deployment its own `replay.keyPrefix`.
 The prefix defines the replay namespace: deployments that share it can consume
