@@ -6,7 +6,22 @@
 # the quickstart's step 2 ends: the quickstart's blocks up to its gateway
 # registration run first. The guide's section between
 # `<!-- check: manual-begin -->` and `<!-- check: manual-end -->` needs an
-# NVIDIA API key and is not run.
+# NVIDIA API key and is not run, unless TENUO_QS_NIM=1.
+#
+# TENUO_QS_NIM=1 (nat-agent only) runs that section too, against a real NVIDIA
+# model, with the key in NVIDIA_API_KEY. The key goes only to `openshell
+# provider create --credential NVIDIA_API_KEY`, as in the guide; nothing here
+# prints it. `printenv NVIDIA_API_KEY` in the sandbox is replaced by a check
+# that prints only whether the sandbox sees OpenShell's placeholder, and
+# `check: nim-outcomes` runs the guide's prompts on the real model and checks
+# what reached the MCP server, not the model's wording. A prompt on which the
+# model calls no tool is run at most twice more. The outcomes and the model go
+# to $NIM_DIR/summary.md, and each run's verbose output to $NIM_DIR; NIM_DIR
+# is TENUO_QS_NIM_DIR, or a directory in the work directory.
+#
+# TENUO_QS_LOG_DIR, when set, receives the guide's output, `openshell logs`
+# for the sandbox, and the middleware's and MCP server's container logs when
+# the check fails, before they are removed.
 #
 # The guide starts with OpenShell installed and its local gateway running.
 # This script stands in for the installer without installing anything
@@ -84,6 +99,27 @@ case "$MODE" in
     ;;
 esac
 
+export NIM="${TENUO_QS_NIM:-0}"
+export NIM_BEGIN="--- the real-model section ---" NIM_END="--- end of the real-model section ---"
+case "$NIM" in
+  0) unset NVIDIA_API_KEY ;;
+  1)
+    [[ "$GUIDE_NAME" == nat-agent ]] || {
+      echo "TENUO_QS_NIM=1 runs the nat-agent guide's real-model section; set TENUO_QS_GUIDE=nat-agent" >&2
+      exit 2
+    }
+    [[ -n "${NVIDIA_API_KEY:-}" ]] || {
+      echo "TENUO_QS_NIM=1 needs an NVIDIA API key in NVIDIA_API_KEY" >&2
+      exit 2
+    }
+    export NVIDIA_API_KEY
+    ;;
+  *)
+    echo "TENUO_QS_NIM must be 0 or 1, not $NIM" >&2
+    exit 2
+    ;;
+esac
+
 prerequisites=(docker curl jq python3)
 [[ "$MODE" == installed ]] && prerequisites+=(openshell)
 for command in "${prerequisites[@]}"; do
@@ -131,6 +167,11 @@ export WORK
 SCRIPT="$WORK/quickstart.sh"
 OUTPUT="$WORK/output.log"
 export BIN="$WORK/bin"
+export NIM_DIR="${TENUO_QS_NIM_DIR:-$WORK/nim}"
+if [[ "$NIM" == 1 ]]; then
+  mkdir -p "$NIM_DIR"
+  : >"$NIM_DIR/summary.md"
+fi
 if [[ "$MODE" == standin ]]; then
   export XDG_CONFIG_HOME="$WORK/config"
   export XDG_STATE_HOME="$WORK/state"
@@ -290,6 +331,130 @@ check_unregister_gateway() {
   restore_gateway_config || true
   restart_gateway
 }
+
+# --- The real-model section (TENUO_QS_NIM=1) ---
+
+nim_note() {
+  printf '%s\n' "$*" >>"$NIM_DIR/summary.md"
+}
+
+nim_fail() {
+  nim_note "- **FAIL** $1"
+  echo "FAIL $1" >&2
+  exit 1
+}
+
+# In place of the guide's `printenv NVIDIA_API_KEY` in the sandbox: the sandbox
+# must see OpenShell's placeholder, not the key. Prints neither.
+check_placeholder() {
+  local value
+  value="$(openshell sandbox exec --name tenuo-nat --no-tty -- printenv NVIDIA_API_KEY | tr -d '\r\n')"
+  if [[ "$value" == openshell:resolve:env:* && "$value" != *"$NVIDIA_API_KEY"* ]]; then
+    echo "placeholder: yes"
+    nim_note "- (a) \`NVIDIA_API_KEY\` in the sandbox is OpenShell's placeholder, not the key: yes"
+  else
+    echo "placeholder: no"
+    nim_fail "(a) \`NVIDIA_API_KEY\` in the sandbox is not OpenShell's placeholder"
+  fi
+}
+
+# The calls the MCP server ran so far.
+nim_ran() {
+  docker logs tenuo-openshell-dev-mcp 2>&1 | grep '^RAN ' || true
+}
+
+# The calls the MCP server ran after the first $1, shown and kept in $NEW.
+nim_ran_since() {
+  NEW="$NIM_DIR/new-calls"
+  nim_ran | tail -n "+$(($1 + 1))" >"$NEW"
+  sed 's/^/nim mcp| /' "$NEW"
+}
+
+# What NVIDIA's endpoint answers when the key or the model is refused.
+NIM_REFUSED='\[(401|403|404|410)\]|Error code: (401|403|404|410)|[Ss]tatus[_ ]?[Cc]ode[=: ]+(401|403|404|410)|(401|403|404|410),? (Unauthorized|Forbidden|Not Found|Gone)'
+
+# nim_agent NAME PROMPT: run the agent once on the nim workflow. A live model
+# chooses whether to call a tool; when it calls none, the prompt runs again, at
+# most twice. NIM_LOG is the last run's output.
+nim_agent() {
+  local name="$1" prompt="$2" attempt status
+  for attempt in 1 2 3; do
+    NIM_LOG="$NIM_DIR/$name-$attempt.log"
+    status=0
+    tenuo-openshell demo agent --workflow nim --verbose "$prompt" >"$NIM_LOG" 2>&1 || status=$?
+    # demo agent's own lines, after NAT's.
+    grep -E '^(allowed  |denied   |held     |unknown  |answer   |         approve it with)' "$NIM_LOG" |
+      sed "s/^/nim $name| /" || true
+    if grep -Eq "$NIM_REFUSED" "$NIM_LOG"; then
+      grep -Eo "$NIM_REFUSED" "$NIM_LOG" | sort -u | sed "s/^/nim $name| endpoint: /"
+      nim_fail "(b) NVIDIA's endpoint refused the model call on \"$prompt\": $(grep -Eo "$NIM_REFUSED" "$NIM_LOG" | sort -u | paste -sd, -)"
+    fi
+    if grep -Eq '^(allowed  |denied   |held     |unknown  )' "$NIM_LOG"; then
+      if [[ "$status" != 0 ]]; then
+        tail -5 "$NIM_LOG" | sed "s/^/nim $name| /"
+        nim_fail "(b) the NAT run on \"$prompt\" did not complete"
+      fi
+      if ((attempt > 1)); then
+        nim_note "- retried \"$prompt\" $((attempt - 1)) time(s): the model called no tool"
+      fi
+      echo "$((attempt - 1))" >>"$NIM_DIR/retries"
+      return 0
+    fi
+    echo "nim $name| the model called no tool (run $attempt, exit $status)"
+    if [[ "$status" != 0 ]]; then
+      tail -5 "$NIM_LOG" | sed "s/^/nim $name| /"
+    fi
+  done
+  nim_fail "the model called no tool on \"$prompt\" in 3 runs"
+}
+
+# The guide's prompts on the real model, checked by what reached the MCP
+# server. The guide's own run follows, as written.
+check_nim_outcomes() {
+  local model before request pending
+  model="$(openshell sandbox exec --name tenuo-nat --no-tty -- sed -n 's/^ *model_name: *//p' /etc/tenuo-nat/nim.yml | tr -d '\r')"
+  echo "model: $model"
+  nim_note "- model: \`$model\` (\`/etc/tenuo-nat/nim.yml\` in the sandbox image)"
+
+  before="$(nim_ran | wc -l)"
+  nim_agent in-task "Check the payments logs in staging"
+  nim_ran_since "$before"
+  grep -q '^RAN read_logs .*"environment": "staging".*"service": "payments"' "$NEW" ||
+    nim_fail "(c) the in-task prompt ran no read_logs for payments in staging"
+  nim_note "- (b) the model calls succeeded and each NAT run completed: yes"
+  nim_note "- (c) \"Check the payments logs in staging\": the MCP server ran read_logs for payments in staging"
+
+  before="$(nim_ran | wc -l)"
+  nim_agent out-of-task "Check the identity logs in production"
+  nim_ran_since "$before"
+  if [[ -s "$NEW" ]]; then
+    nim_fail "(d) the out-of-task prompt reached the MCP server"
+  fi
+  grep -q '^denied   ' "$NIM_LOG" || nim_fail "(d) the out-of-task prompt's call was not denied"
+  nim_note "- (d) \"Check the identity logs in production\": denied; the MCP server ran nothing"
+
+  before="$(nim_ran | wc -l)"
+  nim_agent restart "Restart payments in staging"
+  nim_ran_since "$before"
+  if grep -q '^RAN restart_service' "$NEW"; then
+    nim_fail "(e) the restart ran without an approval"
+  fi
+  request="$(sed -n 's/^ *approve it with: tenuo-openshell approve --dev --sandbox tenuo-nat --request \([0-9a-f]*\)$/\1/p' "$NIM_LOG" | tail -1)"
+  [[ -n "$request" ]] || nim_fail "(e) the restart was not held for approval"
+  pending="$(openshell sandbox exec --name tenuo-nat --no-tty -- tenuo-openshell-agent pending --json | tail -1)"
+  jq -e --arg request "$request" \
+    'any(.[]; .tool == "restart_service" and (.request_hash | startswith($request)))' <<<"$pending" >/dev/null ||
+    nim_fail "(e) no pending approval for request $request"
+  echo "nim restart| pending approval: $request"
+  tenuo-openshell approve --yes --dev --sandbox tenuo-nat --request "$request"
+  before="$(nim_ran | wc -l)"
+  nim_agent restart-approved "Restart payments in staging"
+  nim_ran_since "$before"
+  [[ "$(grep -c '^RAN restart_service' "$NEW" || true)" == 1 ]] ||
+    nim_fail "(e) the approved restart did not run exactly once"
+  nim_note "- (e) \"Restart payments in staging\": held as request \`$request\`, approved, then ran exactly once"
+  nim_note "- retries when the model called no tool: $(awk '{ n += $1 } END { print n + 0 }' "$NIM_DIR/retries") over 4 prompts"
+}
 # --- end check functions -----------------------------------------------------
 
 # gateway.toml as it was before the guide, to restore.
@@ -324,11 +489,24 @@ cleanup() {
     gateway_log >&2 || true
     echo "--- middleware ---" >&2
     docker logs tenuo-openshell-dev 2>&1 | tail -30 >&2 || true
+    if [[ -n "${TENUO_QS_LOG_DIR:-}" ]]; then
+      mkdir -p "$TENUO_QS_LOG_DIR"
+      cp "$OUTPUT" "$TENUO_QS_LOG_DIR/guide-output.log" 2>/dev/null || true
+      openshell logs "$SANDBOX" -n 1000 >"$TENUO_QS_LOG_DIR/openshell-$SANDBOX.log" 2>&1 || true
+      for name in tenuo-openshell-dev tenuo-openshell-dev-mcp; do
+        docker logs "$name" >"$TENUO_QS_LOG_DIR/$name.log" 2>&1 || true
+      done
+    fi
   fi
   local id
   if id="$(openshell sandbox get "$SANDBOX" -o json 2>/dev/null | jq -er .id)"; then
     openshell sandbox delete "$SANDBOX" >/dev/null 2>&1 || true
     docker ps -aq --filter "label=openshell.ai/sandbox-id=$id" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+  if [[ "$NIM" == 1 ]]; then
+    # The guide's provider and profile, if it did not get to removing them.
+    openshell provider delete nvidia >/dev/null 2>&1 || true
+    openshell profile delete nvidia-nat >/dev/null 2>&1 || true
   fi
   if [[ -f "$GATEWAY_PID_FILE" ]]; then
     kill "$(cat "$GATEWAY_PID_FILE")" 2>/dev/null || true
@@ -367,9 +545,18 @@ trap cleanup EXIT
 # A guide's ```bash blocks and check markers, in order. With stop=NAME, the
 # blocks end at the marker check: NAME.
 guide_script() {
-  awk -v stop="${2:-}" '
-    /^<!-- check: manual-begin -->$/ { manual = 1; next }
-    /^<!-- check: manual-end -->$/ { manual = 0; next }
+  awk -v stop="${2:-}" -v nim="$NIM" '
+    # With TENUO_QS_NIM=1 the section runs, between two lines that set its
+    # output apart from the rest.
+    /^<!-- check: manual-begin -->$/ {
+      if (nim == 1) print "echo \"$NIM_BEGIN\""; else manual = 1
+      next
+    }
+    /^<!-- check: manual-end -->$/ {
+      if (nim == 1) print "echo \"$NIM_END\""
+      manual = 0
+      next
+    }
     manual { next }
     /^<!-- check: [a-z-]+ -->$/ {
       name = $3; gsub("-", "_", name); print "check_" name
@@ -420,6 +607,11 @@ if [[ "$INSTALL" == snap ]]; then
 fi
 # Nothing answers the approval prompt.
 substitute "unattended approval" sed "s#^tenuo-openshell approve --dev #tenuo-openshell approve --yes --dev #"
+if [[ "$NIM" == 1 ]]; then
+  # Print whether the sandbox sees the placeholder, not the placeholder.
+  substitute "sandbox's NVIDIA_API_KEY" \
+    sed "s#^openshell sandbox exec --name tenuo-nat -- printenv NVIDIA_API_KEY\$#check_placeholder#"
+fi
 if [[ -n "${TENUO_QS_CLI:-}" ]]; then
   cli="$(cd "$(dirname "$TENUO_QS_CLI")" && pwd)/$(basename "$TENUO_QS_CLI")"
   [[ -x "$cli" ]] || { echo "TENUO_QS_CLI is not executable: $cli" >&2; exit 1; }
@@ -532,8 +724,19 @@ started="$(date +%s)"
 bash "$SCRIPT" </dev/null 2>&1 | tee "$OUTPUT"
 elapsed="$(($(date +%s) - started))"
 
+# The guide's outcomes, before and after its real-model section, which checks
+# its own.
+CHECKED="$OUTPUT"
+if [[ "$NIM" == 1 ]]; then
+  CHECKED="$WORK/checked.log"
+  awk -v begin="$NIM_BEGIN" -v end="$NIM_END" '$0 == begin { skip = 1 } !skip { print } $0 == end { skip = 0 }' \
+    "$OUTPUT" >"$CHECKED"
+  grep -Fxq -- "$NIM_END" "$OUTPUT" || { echo "FAIL the real-model section did not finish" >&2; exit 1; }
+  echo "PASS the real-model section: $(grep -c '^- (' "$NIM_DIR/summary.md") outcomes, in $NIM_DIR/summary.md"
+fi
+
 expect() {
-  grep -Fq -- "$1" "$OUTPUT" || {
+  grep -Fq -- "$1" "$CHECKED" || {
     echo "FAIL $2" >&2
     exit 1
   }
@@ -554,7 +757,7 @@ else
 fi
 expect "approval restart_service needs 1 of 1 approver(s)" "the demo preset gates restart_service"
 ran() {
-  [[ "$(grep -c '^RAN ' "$OUTPUT")" == "$1" ]] || {
+  [[ "$(grep -c '^RAN ' "$CHECKED")" == "$1" ]] || {
     echo "FAIL the MCP server ran other than the $1 allowed calls" >&2
     exit 1
   }
@@ -582,7 +785,7 @@ case "$GUIDE_NAME" in
     expect "allowed  restart_service(service=payments, environment=staging, replicas=3): restarted payments in staging with 3 replicas" \
       "the agent's approved restart ran"
     # Before the approval, after it was spent, and through the plugin.
-    [[ "$(grep -c '^held     restart_service(service=payments, environment=staging, replicas=3): waiting for approval' "$OUTPUT")" == 3 ]] || {
+    [[ "$(grep -c '^held     restart_service(service=payments, environment=staging, replicas=3): waiting for approval' "$CHECKED")" == 3 ]] || {
       echo "FAIL the agent's restart was not held three times" >&2
       exit 1
     }

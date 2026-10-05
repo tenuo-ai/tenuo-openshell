@@ -373,6 +373,8 @@ ones: `openshell policy get tenuo-nat --full` shows `_provider_nvidia`, which
 lets only `/usr/local/bin/python3.12` reach `integrate.api.nvidia.com:443`.
 The MCP server is still reachable only through the Tenuo agent.
 
+<!-- check: nim-outcomes -->
+
 Run the agent on `/etc/tenuo-nat/nim.yml`. It is `scripted.yml` with NAT's
 `nim` model, `nvidia/nemotron-3-super-120b-a12b`, which reads
 `NVIDIA_API_KEY`:
