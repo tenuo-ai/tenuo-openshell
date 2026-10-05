@@ -159,5 +159,14 @@ driver's `grpc_endpoint` to it.
 | `TENUO_DEMO_DRIVER=podman` | Use Podman instead of Docker. |
 | `TENUO_DEMO_PYTHON` | Use an interpreter that already has `tenuo` installed. |
 | `TENUO_DEMO_SUPERVISOR_IMAGE`, `TENUO_DEMO_SANDBOX_RUNTIME_IMAGE`, `TENUO_DEMO_WORKLOAD_IMAGE` | Use private mirrors; keep them pinned by digest. A workload override must already contain curl and a `sandbox` account with UID and GID 1000. |
+| `TENUO_DEMO_EXEC_TIMEOUT` | Seconds before a hung `openshell sandbox exec` is killed. The default is 120 and the minimum is 60. |
+
+Each `sandbox exec` has a deadline. If one hangs, the launcher prints a
+`STALL` line and saves the CLI's state, the gateway and middleware logs, the
+sandbox log, and the container logs under `logs/exec-*` in the retained
+artifacts. It sends a request a second time only when the request provably
+never reached the MCP server: the request was guarded so it could not start
+late, the middleware has no line for its JSON-RPC id, and no effect was
+recorded. Everything else fails the run.
 
 `results/` is local output and is not part of the source tree.
