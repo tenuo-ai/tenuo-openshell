@@ -13,6 +13,7 @@ OpenShell attaches any credentials. A warrant is a signed grant held by one
 task, and it can only narrow when the task delegates. The agent's code does not
 change.
 
+[Quickstart](docs/quickstart.md) ·
 [Run the demo](examples/demo/README.md) ·
 [Put an agent under Tenuo](docs/sandbox-agent.md) ·
 [Deploy](docs/deployment.md)
@@ -163,6 +164,12 @@ numbers in its outcome matrix.
 
 ## Try it
 
+The [quickstart](docs/quickstart.md) takes about 10 minutes and builds
+nothing. It downloads the released OpenShell v0.1.2 and Tenuo v0.1.1
+artifacts, starts a gateway with the middleware registered over TLS and JWT,
+and makes one allowed and two denied MCP calls from a sandbox. It needs
+Docker, `curl`, `jq`, and `python3`. `make quickstart` runs it unattended.
+
 Check a checkout without Docker or OpenShell. This needs Rust, Python 3, and
 `curl`:
 
@@ -229,6 +236,7 @@ To build from source instead, run `cargo build --release --locked --bins`.
 
 | Goal | Guide |
 | --- | --- |
+| Try it in 10 minutes from released artifacts | [Quickstart](docs/quickstart.md) |
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) and the [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |

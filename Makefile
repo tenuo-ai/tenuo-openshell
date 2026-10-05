@@ -1,4 +1,4 @@
-.PHONY: check demo e2e smoke test test-rust test-python
+.PHONY: check demo e2e quickstart smoke test test-rust test-python
 
 check:
 	ci/check.sh
@@ -16,3 +16,6 @@ demo e2e:
 
 smoke:
 	scripts/onboarding-smoke.sh
+
+quickstart:
+	scripts/quickstart-check.sh
