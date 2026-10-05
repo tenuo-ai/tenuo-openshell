@@ -43,21 +43,40 @@ jobs:
       - run: helm lint deploy/helm/tenuo-openshell
 
   agent-toolkit-plugin:
+    # The locked environment carries the newest supported Agent Toolkit
+    # release; its jobs keep the names branch protection requires, e.g.
+    # "agent-toolkit-plugin (3.12)". Older releases in the supported range
+    # run unlocked, e.g. "agent-toolkit-plugin (3.11, nat 1.8)".
+    name: agent-toolkit-plugin (${{ matrix.python }}${{ matrix.nat != 'locked' && format(', nat {0}', matrix.nat) || '' }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.11", "3.12", "3.13"]
+        nat: ["locked"]
+        include:
+          - python: "3.11"
+            nat: "1.8"
+          - python: "3.13"
+            nat: "1.8"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test
-      - run: uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q
+      - if: matrix.nat == 'locked'
+        run: uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test
+      - if: matrix.nat == 'locked'
+        run: uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test pytest python/nemo-agent-toolkit-tenuo/tests -q
       - name: Verify plugin discovery
+        if: matrix.nat == 'locked'
         run: uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test nat info components | grep -F tenuo
-      - run: uv build --project python/nemo-agent-toolkit-tenuo
+      - if: matrix.nat == 'locked'
+        run: uv build --project python/nemo-agent-toolkit-tenuo
+      - name: Plugin tests and discovery on Agent Toolkit ${{ matrix.nat }}
+        if: matrix.nat != 'locked'
+        run: ci/nat-compat.sh "${{ matrix.nat }}" "${{ matrix.python }}"
 
   nemo-agent-toolkit-example:
     runs-on: ubuntu-latest
@@ -77,7 +96,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y jq
-      - run: bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh scripts/quickstart-check.sh ci/check.sh ci/release-binary.sh ci/release-notes.sh
+      - run: bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh scripts/quickstart-check.sh ci/check.sh ci/nat-compat.sh ci/release-binary.sh ci/release-notes.sh
       - run: python3 -m py_compile examples/nemo-agent-toolkit/scripted_llm.py examples/demo/mcp_client.py examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py examples/interoperability/a2a_handoff.py examples/issuance/issuer_service.py examples/issuance/test_issuer_service.py
       - run: cargo run --locked --bin tenuo-demo-fixture -- --output /tmp/tenuo-fixtures --sandbox-id ci-sandbox
       - run: jq -e '.sandboxes["ci-sandbox"]' /tmp/tenuo-fixtures/policy.json

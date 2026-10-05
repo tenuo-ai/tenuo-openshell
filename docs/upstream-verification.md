@@ -95,15 +95,51 @@ The scenario consequences are in `docs/openshell-gap-analysis.md`.
 
 The in-process plugin is a separate package. This service does not import it.
 
+The supported dependency is `nvidia-nat-core>=1.8,<1.10`. The partner-owned distribution is `nemo-agent-toolkit-tenuo`, with the NVIDIA namespace-preserving import `nat.plugins.tenuo` and entry point `nat_tenuo`. The plugin code is the same on both releases.
+
+### 1.8
+
 Checked against the 1.8 public docs on 2026-09-28:
 
 - https://docs.nvidia.com/nemo/agent-toolkit/1.8/extend/plugin-api.html
 - https://docs.nvidia.com/nemo/agent-toolkit/1.8/extend/third-party-plugins.html
 - https://docs.nvidia.com/nemo/agent-toolkit/1.8/build-workflows/advanced/middleware.html
 
-Third-party packages import `nat.plugin_api` and register through the `nat.plugins` entry point. `register_middleware` is on that public surface. `FunctionMiddleware.function_middleware_invoke` receives `call_next` and can return without calling it. The plugin intentionally subclasses `FunctionMiddleware` so denial can return before invoking the protected function. Its 1.8.x test matrix and `nat info components` discovery check run in CI.
+Third-party packages import `nat.plugin_api` and register through the `nat.plugins` entry point. `register_middleware` is on that public surface. `FunctionMiddleware.function_middleware_invoke` receives `call_next` and can return without calling it. The plugin intentionally subclasses `FunctionMiddleware` so denial can return before invoking the protected function.
 
-The supported dependency is `nvidia-nat-core>=1.8,<1.9`; this repository does not claim 1.9 compatibility. The partner-owned distribution is `nemo-agent-toolkit-tenuo`, with the NVIDIA namespace-preserving import `nat.plugins.tenuo` and entry point `nat_tenuo`.
+### 1.9
+
+Checked on 2026-10-04 against the `nvidia-nat-core` 1.9.0 wheel from PyPI (released 2026-09-10, sha256 `4a5192f094a115e62a1a6db84df96e5cc18c4f556df2252a43ff998689b30a8d`), diffed file by file against the 1.8.0 wheel. NVIDIA had not published versioned 1.9 docs: the `1.9/` paths return 404 and `latest/` still reports 1.8.
+
+Unchanged between 1.8.0 and 1.9.0 (byte-identical):
+
+| Surface | File |
+|---|---|
+| `register_middleware` (line 337) | `nat/cli/register_workflow.py` |
+| Type registry | `nat/cli/type_registry.py` |
+| Entry-point discovery; `discover_entrypoints` (line 128) reads `nat.plugins` (line 140) | `nat/runtime/loader.py` |
+| `FunctionMiddlewareBaseConfig` | `nat/data_models/middleware.py` |
+| `Function.configure_middleware` (line 133) and the invoke path, which awaits the middleware chain in the caller's task (line 200) | `nat/builder/function.py` |
+| Builders | `nat/builder/builder.py`, `workflow_builder.py`, `child_builder.py`, `per_user_workflow_builder.py` |
+
+Changed, all additive for this plugin:
+
+| Change | File | Effect on the plugin |
+|---|---|---|
+| `InvocationAction.SKIP` and `InvocationContext.action` | `nat/middleware/middleware.py` (line 73) | Read only by the default `function_middleware_invoke` and `function_middleware_stream` after `pre_invoke`. The plugin overrides both, so it never consults them. |
+| Default stream drops a chunk whose `post_invoke` output is `None` | `nat/middleware/function_middleware.py` (line 208) | Default implementation only; the plugin overrides it. |
+| `validate_middleware` (line 367) drops repeated instances of the same middleware, keeping the first | `nat/middleware/function_middleware.py` | The plugin builds one instance per configured middleware, so it runs once per call as before. |
+| `nat.plugin_api` adds `Context`, `ContextState`, `InvocationAction`, circuit-breaker, HITL, and interactive-prompt exports | `nat/plugin_api/__init__.py` | Every symbol the plugin imports (`Builder`, `FunctionMiddleware`, `FunctionMiddlewareBaseConfig`, `FunctionMiddlewareContext`, `register_middleware`) is still exported. |
+| Run, trace, and function IDs come from `nat.utils.providers` instead of `uuid4` | `nat/runtime/runner.py`, `nat/builder/context.py` | None. The plugin's warrant binding is its own `ContextVar` and does not read NAT context. |
+| `cryptography>=48,<49` (1.8 pinned `>=46.0.6,<47`) | package metadata | Transitive only. |
+
+`FunctionMiddlewareContext` has the same fields, and `FunctionMiddleware.function_middleware_invoke` (line 149) has the same signature and still receives `call_next`. `nvidia-nat-core` 1.9 still imports `packaging` without declaring it, so the plugin keeps that dependency.
+
+Outside the core package, `nvidia-nat-langchain` 1.9 moved its model-provider integrations (`langchain-openai`, `langchain-nvidia-ai-endpoints`, and others) from dependencies to extras. The repository example installs `nvidia-nat-langchain[openai,nvidia]`. The plugin does not depend on `nvidia-nat-langchain`.
+
+### Executable checks
+
+CI runs the plugin tests and `nat info components` discovery in the locked environment (Agent Toolkit 1.9.0) on Python 3.11, 3.12, and 3.13, and against Agent Toolkit 1.8.0 on Python 3.11 and 3.13 through `ci/nat-compat.sh 1.8`. `examples/nemo-agent-toolkit/run.sh` runs the ReAct agent, approval, and single-use approval flow on Agent Toolkit 1.9.0.
 
 ## Links from the specification
 
@@ -111,6 +147,7 @@ The supported dependency is `nvidia-nat-core>=1.8,<1.9`; this repository does no
 |---|---|
 | NeMo Agent Toolkit plugin API (1.8) | Resolves |
 | NeMo Agent Toolkit middleware (1.8) | Resolves |
+| NeMo Agent Toolkit 1.9 docs (`/agent-toolkit/1.9/...`) | 404 on 2026-10-04. Verified against the 1.9.0 package source instead. |
 | OpenShell supervisor middleware docs | Resolves |
 | OpenShell supervisor middleware RFC | Resolves |
 | `github.com/NVIDIA/OpenShell` `docs/extensibility/supervisor-middleware.mdx` | 404. The spec now cites the docs site and the RFC. |
@@ -127,6 +164,6 @@ the response binding: allowed calls get result receipts linked to their
 authorization receipts, and a policy reload with `max_result_bytes` shows a
 read that runs while OpenShell withholds its result. `make check`
 covers Rust formatting, linting, tests and release builds, JWT negative cases, signed
-fixture generation, Agent Toolkit 1.8 plugin tests, entry-point discovery, and
+fixture generation, Agent Toolkit 1.9 plugin tests, entry-point discovery, and
 package builds. The full gateway suite requires a supported container runtime
 and is therefore a separate manual/weekly CI job.
