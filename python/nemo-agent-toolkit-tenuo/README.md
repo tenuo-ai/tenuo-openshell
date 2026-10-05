@@ -1,4 +1,4 @@
-# NVIDIA NeMo Agent Toolkit — Tenuo
+# Tenuo for NVIDIA NeMo Agent Toolkit
 
 Provider-owned Agent Toolkit middleware that checks a Tenuo warrant before a
 function runs. Unauthorized calls stop before `call_next`, so protected

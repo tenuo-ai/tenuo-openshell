@@ -1,9 +1,10 @@
 # Authenticated OpenShell demo
 
 The demo runs a real, pinned OpenShell gateway with the Tenuo middleware
-registered over authenticated HTTPS. Each scenario goes through sandboxes
-twice: once with Tenuo and once with OpenShell alone. The demo checks that
-every call Tenuo denies is absent from the MCP server's effect log, and it
+registered over authenticated HTTPS. Each scenario runs with the task-authority
+layer enabled and against the same base sandbox policy without task authority.
+This shows how the two policy scopes compose. The demo checks that every call
+denied by task authority is absent from the MCP server's effect log, and it
 verifies every signed receipt offline.
 
 ```bash
@@ -11,8 +12,8 @@ make demo
 ```
 
 The result is `results/outcome-matrix.md`, with one row per scenario. Each row
-gives both outcomes, the enforcement point, the reason code, and the decision
-time.
+gives the base sandbox-policy outcome, the task-authority outcome, the
+enforcement point, the reason code, and the decision time.
 
 ## Setup
 
@@ -37,11 +38,14 @@ path instead: an unmodified MCP Python SDK client talks to
 
 ## Scenarios
 
-With OpenShell alone, every call below that reaches OpenShell runs.
+The base OpenShell policy intentionally admits both demo tools so the task
+warrants can demonstrate narrower authority over arguments, approvals,
+holders, and delegation. This is a layered-policy comparison, not a replacement
+for OpenShell's runtime controls.
 
 ### Task authority
 
-| # | Call | With Tenuo |
+| # | Call | Task authority outcome |
 | --- | --- | --- |
 | 1 | Task A reads staging payments logs | Allowed |
 | 2 | Task B reads staging payments logs | Allowed |
@@ -57,7 +61,7 @@ With OpenShell alone, every call below that reaches OpenShell runs.
 
 ### Delegation
 
-| # | Call | With Tenuo |
+| # | Call | Task authority outcome |
 | --- | --- | --- |
 | 12 | The narrowed child reads staging payments logs | Allowed |
 | 13 | The narrowed child restarts | Denied `tenuo_tool_denied` |
@@ -65,7 +69,7 @@ With OpenShell alone, every call below that reaches OpenShell runs.
 
 ### The agent in the sandbox
 
-| # | Call | With Tenuo |
+| # | Call | Task authority outcome |
 | --- | --- | --- |
 | 15 | The MCP SDK client lists tools and reads staging payments logs through the signing proxy | Allowed. Checked by the middleware and again by the MCP server. |
 | 16 | The client asks for a restart | Held in the sandbox with `approval-required`. After an approver signs it with `tenuo-openshell approve`, the retry runs once. |

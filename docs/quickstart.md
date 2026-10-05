@@ -8,12 +8,23 @@ the OpenShell v0.1.2 binaries, the Tenuo v0.1.2 images, and the
 It starts its own OpenShell gateway on port 18670, so a gateway you already
 run is not touched. Run every command in one shell, in order.
 
+From a repository checkout, the fastest path is `make quickstart`. It executes
+the commands in this guide, checks every expected outcome, and cleans up. The
+steps below explain the complete setup and can also be run manually.
+
 | You end with | Where |
 | --- | --- |
 | An OpenShell v0.1.2 gateway with Tenuo registered over TLS and JWT | Host process |
 | The Tenuo middleware | Docker container `tenuo-quickstart-middleware` |
 | An MCP server with `read_logs` and `restart_service` | Host process |
 | A sandbox whose task may read `payments` logs in `staging` or `dev` | Sandbox `tenuo-quickstart` |
+
+By the end, you will have verified three distinct behaviors:
+
+1. a call within the task's warrant reaches the MCP server;
+2. a call outside the warrant is denied locally for clear agent feedback; and
+3. a call that bypasses the local proxy is independently denied by the
+   OpenShell middleware before credentials are attached.
 
 ## Requirements
 
@@ -449,7 +460,7 @@ cd .. && rm -rf tenuo-quickstart
 | Put your own agent under Tenuo | [Running an agent under Tenuo](sandbox-agent.md) |
 | Add approvals, delegation, and sub-agents | [Running an agent under Tenuo](sandbox-agent.md#approvals) |
 | Run the middleware in production | [Deployment](deployment.md) and the [Helm chart](../deploy/helm/tenuo-openshell/README.md) |
-| See every scenario with and without Tenuo | [Demo](../examples/demo/README.md) (`make demo`, builds from source) |
+| See the base sandbox policy and task authority compose across every scenario | [Demo](../examples/demo/README.md) (`make demo`, builds from source) |
 
 To add Tenuo to a gateway you already run, put the `register` block in its
 `gateway.toml`, start the middleware with that gateway's JWT public key and
