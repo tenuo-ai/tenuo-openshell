@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+cmp -s LICENSE python/nemo-agent-toolkit-tenuo/LICENSE || {
+  echo "Python package LICENSE must match the repository LICENSE" >&2
+  exit 1
+}
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 # fmt and clippy cover the fuzz crate; test and build use the default members,
