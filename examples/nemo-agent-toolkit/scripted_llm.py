@@ -44,7 +44,9 @@ def plan(question: str) -> list[tuple[str, dict]]:
     if "log" in text or "investigate" in text:
         calls.append(("read_logs", dict(target)))
     if "restart" in text or "fix" in text:
-        replicas = re.search(r"(\d+)\s+replicas?", text)
+        # Bounded: the prompt is untrusted, and an unbounded digit run makes
+        # this search polynomial.
+        replicas = re.search(r"\b(\d{1,4}) {0,3}replicas?\b", text[:4096])
         calls.append(("restart_service", {**target, "replicas": int(replicas.group(1)) if replicas else 3}))
     return calls or [("read_logs", dict(target))]
 
