@@ -532,7 +532,7 @@ mod tests {
         }
 
         fn metrics(&self) -> String {
-            self.telemetry.prometheus(1, 0)
+            self.telemetry.prometheus(1, 1, 0)
         }
     }
 

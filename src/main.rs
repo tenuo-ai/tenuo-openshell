@@ -241,6 +241,13 @@ async fn serve(args: Args) -> ExitCode {
     };
     let policy_document = match std::fs::read(&policy_path) {
         Ok(document) => document,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return usage_error(format!(
+                "policy load failed: {} does not exist; create it with `tenuo-openshell policy init --policy {}`",
+                policy_path.display(),
+                policy_path.display()
+            ));
+        }
         Err(error) => return usage_error(format!("policy load failed: {error}")),
     };
     let mut policy = match PolicySet::from_json(&policy_document) {
@@ -302,6 +309,11 @@ async fn serve(args: Args) -> ExitCode {
             policy = policy.with_replay_store(Arc::new(store));
         }
         (Some(_), _) => unreachable!("conflicting replay options were rejected"),
+    }
+    if policy.sandbox_count() == 0 {
+        eprintln!(
+            "warning: the policy trusts no sandboxes; every request is denied until `tenuo-openshell policy add` adds one"
+        );
     }
     let deprecated = policy.deprecated_single_use_tools();
     if !deprecated.is_empty() {
@@ -493,17 +505,11 @@ fn configure(
     }
 }
 
+/// 64 hex characters, or a file holding them, as `tenuo-openshell keygen`
+/// prints and writes. The same form as `--trusted-root` and `--verify-with`.
 fn load_policy_key(value: &str) -> Result<tenuo::PublicKey, String> {
-    let text = match std::fs::read_to_string(value) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => value.to_string(),
-        Err(error) => return Err(format!("policy signing key: {error}")),
-    };
-    let bytes = hex::decode(text.trim()).map_err(|_| "policy signing key must be 32 bytes")?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| "policy signing key must be 32 bytes")?;
-    tenuo::PublicKey::from_bytes(&bytes).map_err(|error| error.to_string())
+    tenuo_openshell_middleware::export::load_public_key(value)
+        .map_err(|error| format!("policy signing key: {error}"))
 }
 
 fn require_replay_transport<'a>(

@@ -150,7 +150,6 @@ pub enum PolicyError {
     Io(std::io::Error),
     Json,
     Invalid,
-    Empty,
 }
 
 /// Supplies complete policy snapshots outside the authorization hot path.
@@ -198,7 +197,6 @@ impl std::fmt::Display for PolicyError {
             Self::Invalid => {
                 formatter.write_str("policy file is missing roots, destinations, or a lifetime")
             }
-            Self::Empty => formatter.write_str("policy file has no sandboxes"),
         }
     }
 }
@@ -242,9 +240,9 @@ impl PolicySet {
             .get("sandboxes")
             .and_then(Value::as_object)
             .ok_or(PolicyError::Invalid)?;
-        if sandboxes.is_empty() {
-            return Err(PolicyError::Empty);
-        }
+        // An empty `sandboxes` object is valid: no sandbox is trusted, so
+        // every request denies. It lets the middleware start before the
+        // first sandbox exists.
         let mut loaded = HashMap::new();
         for (sandbox_id, entry) in sandboxes {
             if sandbox_id.is_empty() {
@@ -400,6 +398,11 @@ impl PolicySet {
 
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    /// Number of trusted sandboxes. Zero is valid and denies every request.
+    pub fn sandbox_count(&self) -> usize {
+        self.sandboxes.len()
     }
 
     pub fn with_replay_store(mut self, store: Arc<dyn ReplayStore>) -> Self {
@@ -989,6 +992,51 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = b"not-json".to_vec();
         assert!(manager.reload_once().await.is_err());
         assert_eq!(manager.snapshot().version(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_empty_policy_loads_denies_and_is_ready() {
+        let empty = serde_json::to_vec(&json!({
+            "version": 1,
+            "max_warrant_lifetime_secs": 300,
+            "sandboxes": {}
+        }))
+        .unwrap();
+        let policy = PolicySet::from_json(&empty).unwrap();
+        assert_eq!(policy.sandbox_count(), 0);
+        assert!(matches!(
+            policy.guard("sandbox"),
+            Err(reason::VERIFIER_FAILED)
+        ));
+        assert!(matches!(
+            policy.mcp_options("sandbox"),
+            Err(reason::VERIFIER_FAILED)
+        ));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("policy.json");
+        std::fs::write(&path, &empty).unwrap();
+        let manager = PolicyManager::new(path.clone(), policy, empty);
+        assert!(manager.ready(Duration::from_secs(30)).await);
+
+        // The first sandbox arrives by reload, and removing the last one is a
+        // valid later version too.
+        let root = SigningKey::generate();
+        std::fs::write(&path, document(&root, 2)).unwrap();
+        assert!(manager.reload_once().await.unwrap());
+        assert!(manager.snapshot().guard("sandbox").is_ok());
+        let emptied = serde_json::to_vec(&json!({
+            "version": 3,
+            "max_warrant_lifetime_secs": 300,
+            "sandboxes": {}
+        }))
+        .unwrap();
+        std::fs::write(&path, emptied).unwrap();
+        assert!(manager.reload_once().await.unwrap());
+        assert_eq!(manager.snapshot().sandbox_count(), 0);
+        assert!(manager.ready(Duration::from_secs(30)).await);
+
+        assert!(PolicySet::from_json(br#"{"max_warrant_lifetime_secs": 300}"#).is_err());
     }
 
     #[test]

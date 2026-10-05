@@ -79,7 +79,9 @@ async fn ready(State(state): State<AdminState>) -> impl IntoResponse {
 
 async fn metrics(State(state): State<AdminState>) -> String {
     let snapshot = state.policy.snapshot();
-    state
-        .telemetry
-        .prometheus(snapshot.version(), state.policy.reload_failures())
+    state.telemetry.prometheus(
+        snapshot.version(),
+        snapshot.sandbox_count(),
+        state.policy.reload_failures(),
+    )
 }

@@ -57,7 +57,10 @@ protocol.
 
 ## Register with OpenShell
 
-Register the service with the same audience used by the middleware:
+Register the service with the same audience used by the middleware.
+`tenuo-openshell register` prints both blocks below; `--only gateway` or
+`--only sandbox` prints one, ready to append to `gateway.toml` or a sandbox
+policy:
 
 ```toml
 [[openshell.supervisor.middleware]]
@@ -86,6 +89,11 @@ forwards the request. Set `forward_proof` to `preserve` on the sandbox in
 this policy when the destination verifies the warrant again itself. The
 sandbox attachment cannot request that.
 
+`register` requires an `https://` endpoint and `--ca`. For a middleware
+started with `--insecure-dev`, `register --insecure-dev` takes an `http://`
+endpoint and prints `allow_insecure_transport = true` with no CA. OpenShell
+then sends no caller credential, so use it only for local development.
+
 The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
 `HTTP_REQUEST / PRE_CREDENTIALS`. See the
 [upstream verification](upstream-verification.md) for the exact contract.
@@ -93,7 +101,20 @@ The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
 ## Configure trust policy
 
 Trust is selected by OpenShell's authenticated `sandbox_id`, never by a
-reusable display name:
+reusable display name. A sandbox has an ID only after `openshell sandbox
+create`, and the gateway needs the middleware first, so start from a policy
+that trusts no sandboxes:
+
+```bash
+tenuo-openshell policy init --policy /etc/tenuo/openshell-policy.json
+```
+
+The middleware starts on it, denies every request, and logs a warning until
+`tenuo-openshell policy add` adds a sandbox. Running replicas load the new
+version on their next poll; no restart is needed. A missing policy file is
+still a startup error.
+
+A policy with sandboxes looks like this:
 
 ```json
 {
@@ -151,11 +172,18 @@ a signing key once, sign every policy version with it, and give the middleware
 only the public key:
 
 ```bash
-tenuo-openshell policy keygen --out policy-signing.key
+tenuo-openshell keygen --out policy-signing.key --public-out policy-signing.pub
 # prints the public key, for --policy-signing-key
 tenuo-openshell policy sign --policy policy.json --key policy-signing.key
 # writes policy.json.sig
 ```
+
+`tenuo-openshell keygen` makes every operator key: issuer, approver, and
+policy signing. It writes the secret as 64 hex characters, mode 0600, never
+overwrites a file, and prints the public key as 64 hex characters. The same
+text, or a file holding it, is what `--trusted-root`, `--policy-signing-key`,
+and `receipts export --verify-with` accept. `policy keygen` remains as an
+alias.
 
 The signature is Ed25519 over a fixed context string and the SHA-256 of the
 policy file, 57 bytes in all. A key held in a KMS or HSM with a message-size
@@ -285,6 +313,11 @@ target cluster. The cluster CNI must enforce ingress and egress NetworkPolicy.
 
 `/live` reports process health. `/ready` additionally requires a valid policy,
 fresh revocation state when configured, and a reachable replay backend.
+A policy with no sandboxes is ready: the replica is serving its policy
+correctly, and that policy denies everything. Readiness that waited for a
+sandbox would keep the middleware out of service while the first sandbox is
+created, and would take it out again when the last one is removed. Alert on
+`tenuo_openshell_policy_sandboxes` instead if an empty policy is unexpected.
 Prometheus metrics are exposed on the separate admin listener.
 
 Use the [operations runbook](operations.md) for policy rollout, replay-store
@@ -293,5 +326,6 @@ outages, receipt failures, key compromise, upgrades, and rollback.
 ## Local development
 
 For isolated local development only, `--insecure-dev` enables plaintext calls
-without caller authentication. It cannot be combined with production security
+without caller authentication. Register it with `tenuo-openshell register
+--insecure-dev --middleware-endpoint http://...`. It cannot be combined with production security
 options. Production startup refuses partial TLS or JWT configuration.

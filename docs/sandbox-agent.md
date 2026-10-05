@@ -46,8 +46,24 @@ To build both from source, run `cargo build --release --locked --bins`. The
 
 ## 1. Trust policy
 
-Add the sandbox, the issuer that signs its warrants, and each MCP server it may
-reach:
+Create the issuer key that signs warrants. `tenuo-openshell keygen` writes the
+secret key (mode 0600, never overwriting a file) and the public key, and prints
+the public key:
+
+```bash
+tenuo-openshell keygen --out issuer.key --public-out issuer.pub
+```
+
+The middleware needs a policy file before the first sandbox exists. Create one
+that trusts no sandboxes; the middleware starts on it and denies every request:
+
+```bash
+tenuo-openshell policy init --policy /etc/tenuo/openshell-policy.json
+```
+
+Once the sandbox exists, add it, the issuer that signs its warrants, and each
+MCP server it may reach. The sandbox ID comes from
+`openshell sandbox get <name> -o json`:
 
 ```bash
 tenuo-openshell policy add \
@@ -77,7 +93,10 @@ tenuo-openshell register \
 ```
 
 This prints the gateway registration block and the sandbox policy
-`network_middlewares` block. `--openshell-policy` refuses to print that block
+`network_middlewares` block. `--only gateway` or `--only sandbox` prints just
+one, to append to `gateway.toml` or a sandbox policy. For a local middleware
+started with `--insecure-dev`, pass `--insecure-dev` and an `http://`
+endpoint, and leave out `--ca`. `--openshell-policy` refuses to print that block
 when a protected host allows `tls: skip`, raw TCP, or a binary WebSocket. In
 the sandbox policy's `network_policies` entry
 for the MCP server, list the agent as the binary allowed to reach it:
@@ -195,8 +214,29 @@ failure:
 ```
 
 `message` carries the reason because many MCP clients show only that field.
-`source` is `agent` for a local denial and `openshell` for a middleware denial,
-whose `code` is the middleware reason code, such as `tenuo_constraint_denied`.
+`source` is `agent` for a local denial and `openshell` for a denial that came
+back from OpenShell as HTTP 403. Then `code` says who denied it:
+
+- A code starting `tenuo_`, such as `tenuo_constraint_denied`, is the Tenuo
+  middleware's reason.
+- Any other code is OpenShell's own: its L7 policy (`policy_denied`), an MCP
+  check such as `mcp_protocol_version_not_allowed`, an unreachable middleware
+  (`middleware_failed`), or another middleware's reason code. `message`
+  includes OpenShell's `detail`, so check the sandbox policy, not the warrant.
+
+`data.tenuo.openshell` carries OpenShell's `error`, `reason_code`, `detail`,
+`layer`, `protocol`, `policy`, `middleware`, and `rule` fields when present,
+each at most 256 bytes:
+
+```json
+{"code": -32001,
+ "message": "Authorization denied: OpenShell denied this call (policy_denied): …",
+ "data": {"tenuo": {"code": "policy_denied", "source": "openshell",
+                    "message": "OpenShell denied this call (policy_denied): …",
+                    "openshell": {"error": "policy_denied", "policy": "demo-mcp",
+                                  "rule": "POST /mcp", "layer": "l7", "detail": "…"}}}}
+```
+
 Approval-gated calls use `-32002`; see below.
 
 ## Approvals
@@ -211,7 +251,10 @@ without one, the proxy records the pending request in the sandbox and returns
  "data": {"tenuo": {"code": "approval-required", "request_hash": "88c6…55ba", "source": "agent"}}}
 ```
 
-An approver reviews and signs it from outside the sandbox:
+An approver reviews and signs it from outside the sandbox. Create the
+approver key once with `tenuo-openshell keygen --out approver.key
+--public-out approver.pub`; `approver.pub` is the key the warrant must name as
+a required approver:
 
 ```bash
 tenuo-openshell approve --sandbox my-sandbox --request 88c676b2 \

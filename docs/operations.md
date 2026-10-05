@@ -9,8 +9,10 @@ replay backend. Provider-synchronized policies also require an unexpired
 unready pod from service; do not route around a failed authorization dependency.
 
 Prometheus metrics on the admin port report allow/deny counts, verifier
-failures, aggregate enforcement-decision time, active policy version, and
-policy reload failures. Decision time includes configured replay-store and
+failures, aggregate enforcement-decision time, active policy version, the
+number of trusted sandboxes (`tenuo_openshell_policy_sandboxes`), and policy
+reload failures. A policy with no sandboxes is valid and ready, and denies
+every request. Decision time includes configured replay-store and
 receipt-persistence I/O. Metrics never contain warrant bodies, arguments,
 approvals, keys, or OpenShell display names.
 
