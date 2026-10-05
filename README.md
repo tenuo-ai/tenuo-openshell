@@ -232,6 +232,7 @@ To build from source instead, run `cargo build --release --locked --bins`.
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) and the [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
+| Issue warrants in production (Tenuo Cloud, or your own keys) | [Production issuance](docs/production-issuance.md) |
 | Understand the components and trust boundaries | [Architecture](docs/architecture.md) |
 | Review attackers, controls, and residual risk | [Threat model](docs/threat-model.md) |
 | Verify and export receipts | [Receipts](docs/receipts.md) |

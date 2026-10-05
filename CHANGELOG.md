@@ -77,6 +77,15 @@ these changes when they upgrade:
 
 - `single_use_tools` and `tenuo-openshell policy add --single-use` have no
   effect and log a warning.
+### Added
+
+- [Issuing warrants in production](docs/production-issuance.md): where each
+  key lives, issuer custody with files today and KMS or HSM signing once core
+  supports it, per-request issuance for multi-user platforms (#17), and
+  rotation.
+- `examples/issuance/`, a minimal per-request issuance service on the public
+  `tenuo` Python package, with a test that installs its warrants with the
+  real agent.
 
 ## [0.1.1] - 2026-10-04
 
