@@ -5,6 +5,8 @@ replay protection, revocation, result evidence, traces, and Kubernetes. Read
 it with the [architecture](architecture.md),
 [operations runbook](operations.md), and
 [pinned upstream contract](upstream-verification.md).
+Where the issuer, approver, and other signing keys live, and how to issue a
+warrant per request, is in [Production issuance](production-issuance.md).
 
 ## Production requirements
 
@@ -175,7 +177,9 @@ the signing key is as sensitive as the issuer keys:
 - Mount the policy read-only, and keep the public key in a separate secret
   from the policy file.
 - Review policy changes like code: a new trusted root or a wider destination
-  grants authority.
+  grants authority. See
+  [Production issuance](production-issuance.md#roles-and-keys) for where
+  the keys behind each root should live.
 - A provider that fetches snapshots must authenticate them before returning
   them; see [Provider integration](providers.md).
 - Keep `version` monotonic. The middleware refuses a lower version, so an old
