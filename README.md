@@ -16,7 +16,13 @@ credentials. Authority is carried in a signed *warrant* held by the task and
 can only become narrower when work is delegated. No fork of OpenShell and no
 Tenuo code in the agent are required.
 
+Inside the NVIDIA stack, the same authority can be checked early in NeMo Agent
+Toolkit and independently at the OpenShell boundary. When a workflow crosses
+into another agent runtime, the warrant travels with the task instead of being
+rebuilt as a framework-specific allowlist.
+
 [Quickstart](docs/quickstart.md) ·
+[Agent Toolkit](docs/agent-toolkit.md) ·
 [Run the demo](examples/demo/README.md) ·
 [Put an agent under Tenuo](docs/sandbox-agent.md) ·
 [Deploy](docs/deployment.md) ·
@@ -57,8 +63,9 @@ Choose the shortest path that demonstrates the capability you care about:
 | Goal | What you will see | Start |
 | --- | --- | --- |
 | Prove task-level enforcement | A real OpenShell sandbox makes one allowed and two denied MCP calls using released artifacts | [`make quickstart`](docs/quickstart.md) |
+| Add authorization to Agent Toolkit | Choose in-process function checks, OpenShell enforcement for MCP calls, or both | [Agent Toolkit guide](docs/agent-toolkit.md) |
 | See a human approval flow | A NeMo Agent Toolkit ReAct agent pauses a restart until an approver signs the exact call | [`examples/nemo-agent-toolkit/run.sh`](examples/nemo-agent-toolkit/README.md) |
-| Exercise the complete security model | Constraints, approval replay protection, holder binding, delegation, revocation, A2A, and signed receipts | [`make demo`](examples/demo/README.md) |
+| Exercise the complete security model | Constraints, approval replay protection, holder binding, cross-runtime delegation, revocation, and signed receipts | [`make demo`](examples/demo/README.md) |
 | Protect an existing OpenShell agent | Add the signing proxy, register the middleware, and provision task authority | [Integration guide](docs/sandbox-agent.md) |
 
 The quickstart takes about 10 minutes, builds nothing, and keeps its gateway
@@ -70,6 +77,11 @@ git clone https://github.com/tenuo-ai/tenuo-openshell.git
 cd tenuo-openshell
 make quickstart
 ```
+
+Agent Toolkit has two integration paths. The PyPI plugin protects native
+functions in process, while the signing proxy and OpenShell middleware protect
+MCP calls at the sandbox boundary. The [Agent Toolkit guide](docs/agent-toolkit.md)
+shows both and links to the no-model approval example.
 
 ## How it fits OpenShell
 
@@ -168,12 +180,30 @@ for the method, full tables, and `make bench` to reproduce them.
 
 ## Install
 
+### Agent Toolkit plugin
+
+For Agent Toolkit applications, install the published plugin from PyPI. This
+is the recommended path for application developers:
+
+```bash
+pip install nemo-agent-toolkit-tenuo
+nat info components
+```
+
+The package metadata selects compatible `nvidia-nat-core` and Tenuo versions.
+Current source supports Agent Toolkit 1.8 and 1.9; use a source checkout only
+to test changes that have not reached PyPI yet.
+
+### OpenShell components
+
+The OpenShell integration has three components because each belongs at a
+different trust boundary:
+
 | Component | Runs | Role |
 | --- | --- | --- |
 | `tenuo-openshell-middleware` | Next to the OpenShell gateway | The supervisor middleware |
 | `tenuo-openshell-agent` | Inside each sandbox | Holds the task's key and warrant, and signs calls through a loopback MCP proxy |
 | `tenuo-openshell` | Operator machine or orchestrator | Edits the trust policy, prints OpenShell configuration, and provisions, delegates, and approves |
-| `nemo-agent-toolkit-tenuo` | In the Agent Toolkit process | Denies unauthorized function calls before they run |
 
 Deploy the middleware with the Helm chart. See the
 [chart README](deploy/helm/tenuo-openshell/README.md) for the values to set:
@@ -194,15 +224,6 @@ COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.2 \
 
 Download `tenuo-openshell` for Linux or macOS from the
 [latest release](https://github.com/tenuo-ai/tenuo-openshell/releases/latest).
-Install the Agent Toolkit plugin from PyPI:
-
-```bash
-pip install nemo-agent-toolkit-tenuo
-```
-
-The published `v0.1.2` plugin supports Agent Toolkit 1.8. The current source
-also passes the complete plugin suite on Agent Toolkit 1.9 and will ship in the
-next package release.
 
 Images, the chart, and the binaries are signed with keyless cosign and carry
 build provenance. See [Verifying a release](docs/releasing.md#verifying-the-image-chart-and-package).
@@ -214,6 +235,7 @@ To build from source instead, run `cargo build --release --locked --bins`.
 | --- | --- |
 | Find the right evaluation, integration, or operations path | [Documentation index](docs/README.md) |
 | Try it in 10 minutes from released artifacts | [Quickstart](docs/quickstart.md) |
+| Add Tenuo to Agent Toolkit | [Agent Toolkit integration paths](docs/agent-toolkit.md) |
 | Put an existing agent under Tenuo | [Running an agent under Tenuo](docs/sandbox-agent.md) |
 | Deploy the middleware | [Deployment](docs/deployment.md) and the [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
@@ -238,13 +260,13 @@ is enforced, and what remains.
 | --- | --- |
 | NVIDIA OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` |
 | Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` |
-| NVIDIA NeMo Agent Toolkit | Release `v0.1.2`: 1.8.x; current source: 1.8.x and 1.9.x |
+| NVIDIA NeMo Agent Toolkit | Current source: 1.8.x and 1.9.x; released range is declared on PyPI |
 | Tenuo | 0.3.x, tested with 0.3.2 |
 
 A range moves only after the unit, plugin, container, and real-gateway suites
 pass against the new version.
 
-## Beyond OpenShell
+## Portable across agent runtimes
 
 The same warrant chain is verified at every boundary it crosses. A task can
 start in LangGraph, delegate over A2A to an agent in OpenShell, and reach an

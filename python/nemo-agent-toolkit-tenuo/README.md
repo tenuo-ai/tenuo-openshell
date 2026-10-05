@@ -12,12 +12,17 @@ boundary.
 
 ## Install
 
-Install it into the same environment as Agent Toolkit 1.8 or 1.9:
+Install the published plugin into the same environment as Agent Toolkit. PyPI
+is the recommended installation path:
 
 ```bash
 pip install nemo-agent-toolkit-tenuo
 nat info components
 ```
+
+The package metadata selects a compatible Agent Toolkit range. Current source
+is tested with Agent Toolkit 1.8 and 1.9. Use the checkout path below only when
+testing support that has not reached the latest PyPI release.
 
 To install from a checkout instead, run this from the repository root:
 
@@ -41,6 +46,12 @@ The package uses NVIDIA's third-party plugin convention:
 | Entry point | `nat_tenuo` |
 | Middleware `_type` | `tenuo` |
 
+For a runnable ReAct workflow with an approval step, see the
+[Agent Toolkit example](../../examples/nemo-agent-toolkit/README.md). That
+example protects MCP calls with the signing proxy. This plugin is the path for
+native Agent Toolkit functions; the [integration guide](../../docs/agent-toolkit.md)
+explains how the two compose.
+
 ## Bind task authority
 
 Bind authority in application-controlled task scope. Do not accept a warrant
@@ -53,9 +64,29 @@ with authority(warrant.bind(holder)):
     result = await workflow.ainvoke(input)
 ```
 
+`holder` is the task's signing key and must match the leaf holder named by the
+warrant. For a local-only smoke test, application code can mint both with the
+public Tenuo API:
+
+```python
+from tenuo import SigningKey, Warrant
+
+holder = SigningKey.generate()
+warrant = Warrant.mint_builder().tool("read_logs").ttl(300).mint(holder)
+```
+
+In production, bind the short-lived warrant issued for the authenticated task
+or end user. Do not mint broad authority inside the agent process. See
+[Production issuance](../../docs/production-issuance.md).
+
 The binding follows Python context propagation, including async tasks created
 inside the block. The middleware does not write MCP `_meta.tenuo`; use Tenuo's
 `SecureMCPClient` when the same authority must cross an MCP boundary.
+
+That authority is not tied to Agent Toolkit. The same warrant can be verified
+again by the OpenShell middleware, an MCP server, an A2A worker, or another
+supported agent runtime, so delegation does not require translating authority
+into a new framework-specific policy.
 
 ## Configure middleware
 
