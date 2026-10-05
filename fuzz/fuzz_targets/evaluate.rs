@@ -57,11 +57,12 @@ fn fixture() -> &'static Fixture {
                 "sbx": {
                     "trusted_roots": [root],
                     "destinations": destinations,
-                    "single_use_tools": ["restart_service"]
+                    "idempotent_tools": ["read_logs"]
                 },
                 "sbx-permissive": {
                     "trusted_roots": [root],
                     "destinations": destinations,
+                    "idempotent_tools": ["read_logs"],
                     "mcp": {
                         "passthrough_methods": ["resources/read"],
                         "allow_client_responses": true
@@ -169,7 +170,7 @@ fuzz_target!(|data: &[u8]| {
         None,
     ));
     // The harness's own signed call is inside the warrant, and `read_logs` is
-    // not single-use, so it must be allowed every time. This keeps the allow
+    // listed in `idempotent_tools`, so it must be allowed every time. This keeps the allow
     // path under test.
     if signed.as_ref() == Some(&body) {
         assert!(outcome.allow, "signed call denied: {}", outcome.reason_code);
