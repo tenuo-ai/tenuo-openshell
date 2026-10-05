@@ -19,6 +19,9 @@ llms:
     _type: nim
     model_name: nvidia/nemotron-3-super-120b-a12b
     temperature: 0.0
+    # The default, 300, cuts a reasoning model off mid-thought, and the ReAct
+    # parser then fails on the partial step.
+    max_tokens: 1024
 
 workflow:
   _type: react_agent
@@ -26,3 +29,11 @@ workflow:
   llm_name: nim
   verbose: true
   pass_tool_call_errors_to_agent: true
+  parse_agent_response_max_retries: 2
+  # Without this, a real model treats a denial as a puzzle and retries with
+  # other arguments (other service names, "prod" for "production"). The
+  # warrant denies every attempt, but the run never ends cleanly.
+  additional_instructions: >-
+    A tool error that says "Authorization denied" or "Approval required" is
+    final for this task. Do not retry the call with other arguments. Report
+    the error in your Final Answer.

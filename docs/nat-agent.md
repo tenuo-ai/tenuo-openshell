@@ -388,6 +388,13 @@ but each call it makes gets the same treatment: a staging read runs,
 anything outside the task is denied, and a restart is held for
 `tenuo-openshell approve --dev --sandbox tenuo-nat`.
 
+A real model may also try to get around a denial. In testing, Nemotron
+answered a denied production read by retrying with other service names
+(`identity-service`, `auth`, `auth-service`) and with `prod` for
+`production`. The warrant denied every attempt, and none reached the MCP
+server. `nim.yml` tells the agent that a denial is final so the run ends
+cleanly; remove that instruction to watch the attempts.
+
 To use another model, copy the workflow, change `model_name`, upload the copy
 with `openshell sandbox upload`, and pass its path in the sandbox to
 `--workflow`.
