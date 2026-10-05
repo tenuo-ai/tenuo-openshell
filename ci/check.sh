@@ -46,6 +46,8 @@ test "$(wc -c <"$fixture_dir/signers/task-b/key" | tr -d ' ')" = 32
 # server needs, so the destination check always runs here.
 TENUO_DEMO_EFFECT_LOG=/tmp/unused uv run --locked --project python/nemo-agent-toolkit-tenuo \
   python examples/demo/test_destination.py --fixture "$fixture_dir"
+uv run --locked --project python/nemo-agent-toolkit-tenuo \
+  python examples/issuance/test_issuer_service.py --agent target/release/tenuo-openshell-agent
 
 uv run --locked --project python/nemo-agent-toolkit-tenuo --extra test \
   pytest python/nemo-agent-toolkit-tenuo/tests -q
