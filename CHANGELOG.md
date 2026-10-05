@@ -47,7 +47,8 @@ these changes when they upgrade:
   approver, and policy signing keys. It never overwrites a file and prints the
   public key in the form `--trusted-root` and `--policy-signing-key` accept.
   `policy keygen` is an alias.
-- `tenuo-openshell policy sign`.
+- `tenuo-openshell policy sign`, and `--sign-with KEY` on `policy init` and
+  `policy add`, which sign each version as it is written.
 - `tenuo-openshell policy init` creates a policy that trusts no sandboxes.
 - The middleware starts on a policy with `"sandboxes": {}`, denies every
   request, and reports ready. It no longer needs a placeholder sandbox before

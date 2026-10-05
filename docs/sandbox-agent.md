@@ -58,8 +58,13 @@ The middleware needs a policy file before the first sandbox exists. Create one
 that trusts no sandboxes; the middleware starts on it and denies every request:
 
 ```bash
-tenuo-openshell policy init --policy /etc/tenuo/openshell-policy.json
+tenuo-openshell keygen --out policy-signing.key --public-out policy-signing.pub
+tenuo-openshell policy init --policy /etc/tenuo/openshell-policy.json \
+  --sign-with policy-signing.key
 ```
+
+`--sign-with` writes `openshell-policy.json.sig` next to the policy. Production
+requires it; see [Policy integrity](deployment.md#policy-integrity).
 
 Once the sandbox exists, add it, the issuer that signs its warrants, and each
 MCP server it may reach. The sandbox ID comes from
@@ -71,15 +76,14 @@ tenuo-openshell policy add \
   --sandbox-id 5ba15c63-8170-4e78-a4aa-df0f94f49642 \
   --trusted-root issuer.pub \
   --mcp https://mcp.internal/mcp \
-  --tools read_logs,restart_service
-
-tenuo-openshell policy sign \
-  --policy /etc/tenuo/openshell-policy.json \
-  --key policy-signing.key
+  --tools read_logs,restart_service \
+  --sign-with policy-signing.key
 ```
 
 The command creates the file if needed, merges into an existing sandbox entry,
 increments `version`, and refuses to write a policy the middleware would reject.
+With `--sign-with` it writes the signature before the policy, so a running
+middleware never pairs the new policy with the old signature.
 Running middleware replicas pick up the new version on their next poll.
 
 ## 2. OpenShell configuration

@@ -174,9 +174,13 @@ only the public key:
 ```bash
 tenuo-openshell keygen --out policy-signing.key --public-out policy-signing.pub
 # prints the public key, for --policy-signing-key
-tenuo-openshell policy sign --policy policy.json --key policy-signing.key
-# writes policy.json.sig
+tenuo-openshell policy add --policy policy.json ... --sign-with policy-signing.key
+# writes policy.json.sig, then policy.json
 ```
+
+`policy init` and `policy add` sign as they write when given `--sign-with`.
+For a policy edited another way, sign it afterwards with
+`tenuo-openshell policy sign --policy policy.json --key policy-signing.key`.
 
 `tenuo-openshell keygen` makes every operator key: issuer, approver, and
 policy signing. It writes the secret as 64 hex characters, mode 0600, never

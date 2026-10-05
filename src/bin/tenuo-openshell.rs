@@ -84,6 +84,10 @@ struct PolicyInitArgs {
     /// Longest warrant lifetime the middleware accepts, in seconds.
     #[arg(long, default_value_t = 3600)]
     max_warrant_lifetime_secs: u64,
+    /// Also sign the written policy with this key, writing `<policy>.sig`.
+    /// The key is a secret from `tenuo-openshell keygen`.
+    #[arg(long, value_name = "KEY")]
+    sign_with: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -113,6 +117,10 @@ struct PolicyAddArgs {
     /// Maximum warrant lifetime for a new policy file.
     #[arg(long, default_value_t = 3600)]
     max_warrant_lifetime_secs: u64,
+    /// Also sign the written policy with this key, writing `<policy>.sig`.
+    /// The key is a secret from `tenuo-openshell keygen`.
+    #[arg(long, value_name = "KEY")]
+    sign_with: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -347,6 +355,22 @@ fn policy_init(args: &PolicyInitArgs) -> Result<()> {
         .map_err(|error| format!("{}: {error}", args.policy.display()))?;
     file.write_all(&bytes)?;
     println!("wrote {} version 1", args.policy.display());
+    if let Some(key) = &args.sign_with {
+        write_policy_signature(&args.policy, &bytes, key)?;
+    }
+    Ok(())
+}
+
+/// Sign `bytes`, the exact contents of `policy`, into `<policy>.sig`, through
+/// a staging file so a reader never sees a partial signature.
+fn write_policy_signature(policy: &Path, bytes: &[u8], key: &Path) -> Result<()> {
+    let key = read_secret(key)?;
+    let signature = tenuo_openshell_middleware::policy::sign_policy_document(bytes, &key);
+    let path = tenuo_openshell_middleware::policy::policy_signature_path(policy);
+    let staging = path.with_extension("sig.tmp");
+    fs::write(&staging, format!("{signature}\n"))?;
+    fs::rename(&staging, &path)?;
+    println!("wrote {}", path.display());
     Ok(())
 }
 
@@ -385,8 +409,14 @@ fn policy_add(args: &PolicyAddArgs) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(&document)?;
     PolicySet::from_json(&bytes)
         .map_err(|error| format!("resulting policy is invalid: {error}"))?;
+    let bytes = [bytes.as_slice(), b"\n"].concat();
+    // Signature first: a running middleware skips the reload until the policy
+    // bytes change, so it never pairs the new policy with the old signature.
+    if let Some(key) = &args.sign_with {
+        write_policy_signature(&args.policy, &bytes, key)?;
+    }
     let staging = args.policy.with_extension("tmp");
-    fs::write(&staging, [bytes.as_slice(), b"\n"].concat())?;
+    fs::write(&staging, &bytes)?;
     fs::rename(&staging, &args.policy)?;
     println!(
         "wrote {} version {}",
@@ -1484,12 +1514,52 @@ mod tests {
     }
 
     #[test]
+    fn sign_with_signs_every_policy_version_written() {
+        use tenuo_openshell_middleware::policy::{policy_signature_path, verify_policy_document};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("policy.json");
+        let key_path = directory.path().join("policy-signing.key");
+        let key = SigningKey::generate();
+        fs::write(&key_path, hex::encode(key.secret_key_bytes())).unwrap();
+        let verify = || {
+            let document = fs::read(&path).unwrap();
+            let signature = fs::read(policy_signature_path(&path)).unwrap();
+            verify_policy_document(&document, &signature, &key.public_key())
+        };
+
+        policy_init(&PolicyInitArgs {
+            policy: path.clone(),
+            max_warrant_lifetime_secs: 600,
+            sign_with: Some(key_path.clone()),
+        })
+        .unwrap();
+        assert!(verify().is_ok());
+
+        let root = hex::encode(SigningKey::generate().public_key().to_bytes());
+        policy_add(&PolicyAddArgs {
+            policy: path.clone(),
+            sandbox_id: "sbx".into(),
+            trusted_root: vec![root],
+            mcp: Some("https://mcp.internal/mcp".into()),
+            tools: vec!["read_logs".into()],
+            single_use: vec![],
+            idempotent: vec![],
+            max_warrant_lifetime_secs: 600,
+            sign_with: Some(key_path),
+        })
+        .unwrap();
+        assert!(verify().is_ok());
+        assert_eq!(PolicySet::load(&path).unwrap().version(), 2);
+    }
+
+    #[test]
     fn policy_init_creates_an_empty_policy_once() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("policy.json");
         let args = PolicyInitArgs {
             policy: path.clone(),
             max_warrant_lifetime_secs: 600,
+            sign_with: None,
         };
         policy_init(&args).unwrap();
         let policy = PolicySet::load(&path).unwrap();
