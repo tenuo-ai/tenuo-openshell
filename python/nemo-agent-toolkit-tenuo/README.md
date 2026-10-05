@@ -12,8 +12,14 @@ boundary.
 
 ## Install
 
-Tagged releases publish the package to PyPI. To install from a checkout, run
-this from the repository root in the same environment as Agent Toolkit 1.8:
+Install it into the same environment as Agent Toolkit 1.8:
+
+```bash
+pip install nemo-agent-toolkit-tenuo
+nat info components
+```
+
+To install from a checkout instead, run this from the repository root:
 
 ```bash
 uv sync --locked --project python/nemo-agent-toolkit-tenuo --extra test

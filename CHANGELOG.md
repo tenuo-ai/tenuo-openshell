@@ -6,6 +6,20 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-04
+
+### Added
+
+- `ghcr.io/tenuo-ai/tenuo-openshell-agent`, a signed `linux/amd64` and
+  `linux/arm64` image that holds only the static agent binary. A sandbox
+  Dockerfile adds the agent with one `COPY --from` line.
+- The Helm chart is published to GHCR as
+  `oci://ghcr.io/tenuo-ai/charts/tenuo-openshell` and signed with cosign.
+
+### Changed
+
+- The release builds each middleware image platform on a native runner.
+
 ## [0.1.0] - 2026-10-04
 
 First release.
@@ -95,5 +109,6 @@ First release.
 - NVIDIA NeMo Agent Toolkit `nvidia-nat-core` 1.8.x.
 - Tenuo 0.3.2 or later within 0.3.
 
-[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tenuo-ai/tenuo-openshell/releases/tag/v0.1.0

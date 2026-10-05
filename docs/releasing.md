@@ -7,14 +7,16 @@ have notes in `CHANGELOG.md`. It then runs `make check` and builds:
 
 - the Python wheel and sdist;
 - the Helm chart;
-- the operator and sandbox binaries; and
-- the multi-platform image.
+- the operator and sandbox binaries;
+- the multi-platform middleware image; and
+- the agent image, from the same sandbox binaries.
 
 It attests the build provenance of all of them.
 
 - `publish=false` is a dry run. The artifacts stay in the workflow run.
-- `publish=true` also pushes the image to GHCR and signs it, signs the binary
-  archives, publishes the Python package to PyPI, and creates the GitHub
+- `publish=true` also pushes and signs the middleware image, the agent image,
+  and the Helm chart (as `oci://ghcr.io/tenuo-ai/charts/tenuo-openshell`) on
+  GHCR, signs the binary archives, publishes the Python package to PyPI, and creates the GitHub
   release from the `CHANGELOG.md` section.
 
 ## One-time setup
@@ -34,8 +36,9 @@ Before the first `publish=true` run:
 3. **Tag signing.** Configure a key for signed tags, for example an SSH
    signing key registered with GitHub:
    `git config gpg.format ssh`, `git config user.signingkey <key>`.
-4. **GHCR package.** After the first push, open the
-   `ghcr.io/tenuo-ai/tenuo-openshell` package settings:
+4. **GHCR packages.** After the first push of each package
+   (`tenuo-openshell`, `tenuo-openshell-agent`, `charts/tenuo-openshell`),
+   open its package settings:
    - link the package to this repository;
    - set it to public when the repository is public.
 
@@ -57,7 +60,7 @@ Before the first `publish=true` run:
    immutable digests.
 7. Create and push a signed Git tag, then dispatch `.github/workflows/release.yml`
    from `main` for that exact tag
-   (`gh workflow run release.yml --ref main -f tag=v0.1.0 -f publish=false`).
+   (`gh workflow run release.yml --ref main -f tag=v0.1.1 -f publish=false`).
    Signatures name the workflow and the ref it ran from; the verification
    commands below expect `main`. Publish the Python package, container, and
    binaries only from that workflow; the Rust crate remains `publish = false`
@@ -113,7 +116,7 @@ signature, and the provenance. The bundles use the Sigstore bundle format
 that cosign 3 writes. cosign 2 cannot read them.
 
 ```bash
-tag=v0.1.0
+tag=v0.1.1
 archive="tenuo-openshell-agent-$tag-x86_64-unknown-linux-musl.tar.gz"
 
 sha256sum --ignore-missing -c SHA256SUMS
@@ -139,17 +142,17 @@ already copied into a sandbox image.
 ## Verifying the image, chart, and package
 
 ```bash
-tag=v0.1.0
+tag=v0.1.1
 
-cosign verify "ghcr.io/tenuo-ai/tenuo-openshell:$tag" \
-  --certificate-identity "https://github.com/tenuo-ai/tenuo-openshell/.github/workflows/release.yml@refs/heads/main" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+identity=(--certificate-identity "https://github.com/tenuo-ai/tenuo-openshell/.github/workflows/release.yml@refs/heads/main"
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com)
 
-gh attestation verify "tenuo-openshell-${tag#v}.tgz" \
-  --repo tenuo-ai/tenuo-openshell \
-  --signer-workflow tenuo-ai/tenuo-openshell/.github/workflows/release.yml \
-  --source-ref "refs/heads/main"
-helm install tenuo-openshell "tenuo-openshell-${tag#v}.tgz" -f my-values.yaml
+cosign verify "ghcr.io/tenuo-ai/tenuo-openshell:$tag" "${identity[@]}"
+cosign verify "ghcr.io/tenuo-ai/tenuo-openshell-agent:$tag" "${identity[@]}"
+cosign verify "ghcr.io/tenuo-ai/charts/tenuo-openshell:${tag#v}" "${identity[@]}"
+
+helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
+  --version "${tag#v}" -f my-values.yaml
 
 python -m pip install "nemo-agent-toolkit-tenuo==${tag#v}"
 nat info components
