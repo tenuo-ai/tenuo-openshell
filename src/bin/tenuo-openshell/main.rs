@@ -1166,7 +1166,7 @@ fn only_request(listing: &Value) -> Result<&Value> {
             pending
                 .iter()
                 .filter_map(|request| request["request_hash"].as_str())
-                .map(|hash| &hash[..hash.len().min(12)])
+                .map(|hash| hash.chars().take(12).collect::<String>())
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -1697,10 +1697,11 @@ mod tests {
             vec![&"restart_service".to_string()]
         );
         assert_eq!(leaf.approval_threshold(), 2);
-        assert_eq!(
-            leaf.required_approvers().unwrap(),
-            &vec![approvers[0].public_key(), approvers[1].public_key()]
-        );
+        let mut required = leaf.required_approvers().unwrap().clone();
+        let mut expected = vec![approvers[0].public_key(), approvers[1].public_key()];
+        required.sort_by_key(PublicKey::to_bytes);
+        expected.sort_by_key(PublicKey::to_bytes);
+        assert_eq!(required, expected);
         let payments = json!({"service": "payments"});
         assert_eq!(
             guard_check(leaf, &issuer, holder.clone(), "read_logs", payments.clone()),
@@ -1804,6 +1805,15 @@ mod tests {
             json!([{"request_hash": "aaaa1111bbbb2222"}, {"request_hash": "cccc3333dddd4444"}]);
         let error = only_request(&two).unwrap_err().to_string();
         assert!(error.contains("aaaa1111bbbb, cccc3333dddd"), "{error}");
+
+        // The sandbox supplies this listing. Malformed, non-ASCII hashes must
+        // be reported rather than panicking at a UTF-8 byte boundary.
+        let malformed = json!([
+            {"request_hash": "a💥💥💥"},
+            {"request_hash": "dddd4444eeee5555"}
+        ]);
+        let error = only_request(&malformed).unwrap_err().to_string();
+        assert!(error.contains("a💥💥💥, dddd4444eeee"), "{error}");
     }
 
     #[test]

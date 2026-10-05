@@ -23,7 +23,10 @@ LABEL org.opencontainers.image.title="tenuo-openshell-demo" \
       org.opencontainers.image.licenses="Apache-2.0"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl python3 \
+    && useradd --system --uid 10001 --create-home --home-dir /home/tenuo tenuo \
     && rm -rf /var/lib/apt/lists/*
 COPY LICENSE /usr/share/doc/tenuo-openshell-demo/LICENSE
 COPY ${TARGETARCH}/tenuo-openshell-agent /usr/local/bin/tenuo-openshell-agent
 COPY tenuo-demo-mcp /usr/local/bin/tenuo-demo-mcp
+ENV HOME=/home/tenuo
+USER 10001

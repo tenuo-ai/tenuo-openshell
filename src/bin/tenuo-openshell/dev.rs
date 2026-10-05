@@ -366,18 +366,49 @@ fn spec_hash(spec: &[String]) -> String {
     hex::encode(&Sha256::digest(spec.join("\0").as_bytes())[..8])
 }
 
-/// Run `docker run -d <spec>` as `name`, unless a container with that name
-/// already runs the same spec. Returns whether it started one.
-fn ensure_container(name: &str, spec: &[String]) -> Result<bool> {
-    let hash = spec_hash(spec);
-    let format = format!("{{{{.State.Running}}}} {{{{index .Config.Labels \"{SPEC_LABEL}\"}}}}");
+/// Whether a container is running and the dev spec that owns it. A missing
+/// ownership label means the fixed name belongs to somebody else.
+fn inspect_container(name: &str) -> Result<Option<(bool, Option<String>)>> {
+    let format = format!("{{{{.State.Running}}}}\t{{{{index .Config.Labels \"{SPEC_LABEL}\"}}}}");
     let inspected = Process::new(DOCKER)
         .args(["inspect", "--type", "container", "--format", &format, name])
         .stderr(Stdio::null())
         .output()
         .map_err(|error| format!("{DOCKER}: {error}"))?;
-    if inspected.status.success() {
-        if String::from_utf8_lossy(&inspected.stdout).trim() == format!("true {hash}") {
+    if !inspected.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8(inspected.stdout)?;
+    Ok(Some(parse_container_inspection(name, &text)?))
+}
+
+fn parse_container_inspection(name: &str, text: &str) -> Result<(bool, Option<String>)> {
+    let (running, label) = text
+        .trim_end_matches(&['\r', '\n'][..])
+        .split_once('\t')
+        .ok_or_else(|| format!("could not inspect container {name}"))?;
+    let running = running
+        .parse::<bool>()
+        .map_err(|_| format!("could not inspect container {name}"))?;
+    let label = match label.trim() {
+        "" | "<no value>" => None,
+        value => Some(value.to_string()),
+    };
+    Ok((running, label))
+}
+
+/// Run `docker run -d <spec>` as `name`, unless a container with that name
+/// already runs the same spec. Returns whether it started one.
+fn ensure_container(name: &str, spec: &[String]) -> Result<bool> {
+    let hash = spec_hash(spec);
+    if let Some((running, owner)) = inspect_container(name)? {
+        let Some(owner) = owner else {
+            return Err(format!(
+                "container {name} already exists but was not created by `tenuo-openshell dev`; rename or remove it first"
+            )
+            .into());
+        };
+        if running && owner == hash {
             return Ok(false);
         }
         remove_container(name)?;
@@ -396,22 +427,14 @@ fn ensure_container(name: &str, spec: &[String]) -> Result<bool> {
 
 /// Remove a container. Returns whether one existed.
 fn remove_container(name: &str) -> Result<bool> {
-    let exists = Process::new(DOCKER)
-        .args([
-            "inspect",
-            "--type",
-            "container",
-            "--format",
-            "{{.Id}}",
-            name,
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|error| format!("{DOCKER}: {error}"))?
-        .success();
-    if !exists {
+    let Some((_, owner)) = inspect_container(name)? else {
         return Ok(false);
+    };
+    if owner.is_none() {
+        return Err(format!(
+            "container {name} exists but was not created by `tenuo-openshell dev`; refusing to remove it"
+        )
+        .into());
     }
     let output = Process::new(DOCKER).args(["rm", "-f", name]).output()?;
     if !output.status.success() {
@@ -928,5 +951,22 @@ mod tests {
             ..config()
         });
         assert_ne!(spec_hash(&mcp), spec_hash(&moved));
+    }
+
+    #[test]
+    fn container_inspection_distinguishes_owned_names_from_collisions() {
+        assert_eq!(
+            parse_container_inspection("demo", "true\tabc123\n").unwrap(),
+            (true, Some("abc123".to_string()))
+        );
+        assert_eq!(
+            parse_container_inspection("demo", "false\t<no value>\n").unwrap(),
+            (false, None)
+        );
+        assert_eq!(
+            parse_container_inspection("demo", "true\t\n").unwrap(),
+            (true, None)
+        );
+        assert!(parse_container_inspection("demo", "not-docker-output").is_err());
     }
 }

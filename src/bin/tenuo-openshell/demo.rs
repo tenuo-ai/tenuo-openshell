@@ -148,7 +148,7 @@ impl Outcome {
             Outcome::Allowed(text) => format!("allowed  {call}: {text}\n"),
             Outcome::Denied { code, by } => format!("denied   {call} by {by}: {code}\n"),
             Outcome::Held { request } => {
-                let short = &request[..request.len().min(12)];
+                let short = request.chars().take(12).collect::<String>();
                 format!(
                     "held     {call}: waiting for approval, request {short}\n         \
                      approve it with: tenuo-openshell approve --dev --sandbox {sandbox} --request {short}\n"
@@ -294,6 +294,11 @@ mod tests {
         assert!(text.contains(
             "tenuo-openshell approve --dev --sandbox tenuo-demo --request 88c676b2aabb\n"
         ));
+        let malformed = Outcome::Held {
+            request: "a💥💥💥".into(),
+        }
+        .render("restart_service()", "tenuo-demo");
+        assert!(malformed.contains("request a💥💥💥\n"));
 
         let unsigned = r#"{"binary":"/usr/bin/curl","error":"middleware_denied","middleware":"tenuo","reason_code":"tenuo_missing_warrant"}"#;
         assert_eq!(
