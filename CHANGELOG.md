@@ -6,6 +6,17 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A nightly upstream drift workflow, `openshell-upstream.yml`, that compares
+  the vendored protocol files with OpenShell `main` and runs the full demo
+  against it. Failures open or update one issue labeled `upstream-drift`. It
+  does not gate pull requests; the pinned E2E stays the release gate.
+- `OPENSHELL_REF` for `make e2e` and `scripts/bootstrap-openshell.sh`: build an
+  OpenShell branch, tag, or commit, with the supervisor and sandbox images
+  OpenShell published for that commit. The default is still the verified pin.
+- `scripts/openshell-upstream.sh` with `resolve`, `images`, and `proto-drift`.
+
 ## [0.1.6] - 2026-10-05
 
 ### Added

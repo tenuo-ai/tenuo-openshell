@@ -3,11 +3,38 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXAMPLE_DIR="$ROOT/examples/demo"
-OPENSHELL_ROOT="${OPENSHELL_SOURCE:-$($ROOT/scripts/bootstrap-openshell.sh)}"
 COMPUTE_DRIVER="${TENUO_DEMO_DRIVER:-docker}"
 AUDIENCE="urn:openshell:extension:middleware:tenuo/authorization"
 PINNED_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:0.1.2@sha256:d7b5264bb6bc56f4796e6fa3617b8e4a8d785be0b7293542efd8cc250b0fb67a"
 PINNED_SANDBOX_RUNTIME_IMAGE="ghcr.io/nvidia/openshell/sandbox:0.1.2@sha256:bf4797b6c511f2d8ba02955dbba4bf76c1f0dd6d83531420c5408d5f1fb9d72f"
+SUPERVISOR_IMAGE="${TENUO_DEMO_SUPERVISOR_IMAGE:-}"
+SANDBOX_RUNTIME_IMAGE="${TENUO_DEMO_SANDBOX_RUNTIME_IMAGE:-}"
+OPENSHELL_REF="${OPENSHELL_REF:-}"
+if [[ -z "$OPENSHELL_REF" ]]; then
+  # The release gate: the pinned OpenShell and NVIDIA's images for it.
+  OPENSHELL_ROOT="${OPENSHELL_SOURCE:-$($ROOT/scripts/bootstrap-openshell.sh)}"
+  SUPERVISOR_IMAGE="${SUPERVISOR_IMAGE:-$PINNED_SUPERVISOR_IMAGE}"
+  SANDBOX_RUNTIME_IMAGE="${SANDBOX_RUNTIME_IMAGE:-$PINNED_SANDBOX_RUNTIME_IMAGE}"
+else
+  # Upstream drift tracking. OpenShell's CI publishes supervisor and sandbox
+  # images tagged with each main commit, so build the newest commit on the ref
+  # that has both, and run it with exactly those images. Supplying both image
+  # overrides builds the ref itself instead.
+  OPENSHELL_CHECKOUT_REF="$OPENSHELL_REF"
+  if [[ -z "$SUPERVISOR_IMAGE" || -z "$SANDBOX_RUNTIME_IMAGE" ]]; then
+    UPSTREAM_RESOLVED="$("$ROOT/scripts/openshell-upstream.sh" resolve "$OPENSHELL_REF")"
+    while IFS='=' read -r key value; do
+      case "$key" in
+        OPENSHELL_COMMIT) OPENSHELL_CHECKOUT_REF="$value" ;;
+        TENUO_DEMO_SUPERVISOR_IMAGE) SUPERVISOR_IMAGE="${SUPERVISOR_IMAGE:-$value}" ;;
+        TENUO_DEMO_SANDBOX_RUNTIME_IMAGE) SANDBOX_RUNTIME_IMAGE="${SANDBOX_RUNTIME_IMAGE:-$value}" ;;
+      esac
+    done <<<"$UPSTREAM_RESOLVED"
+  fi
+  OPENSHELL_ROOT="$(OPENSHELL_REF="$OPENSHELL_CHECKOUT_REF" "$ROOT/scripts/bootstrap-openshell.sh")"
+  printf 'INFO upstream OpenShell %s at %s\nINFO supervisor image %s\nINFO sandbox runtime image %s\n' \
+    "$OPENSHELL_REF" "$(git -C "$OPENSHELL_ROOT" rev-parse HEAD)" "$SUPERVISOR_IMAGE" "$SANDBOX_RUNTIME_IMAGE"
+fi
 
 case "$COMPUTE_DRIVER" in
   docker | podman) ;;
@@ -151,8 +178,6 @@ FIXTURE_LOG="$LOG_DIR/fixture.log"
 RUN_ID="tenuo-demo-$$-$RANDOM"
 RESULTS_DIR="$ROOT/results"
 SANDBOX_NAME="tn-$$-$RANDOM"
-SUPERVISOR_IMAGE="${TENUO_DEMO_SUPERVISOR_IMAGE:-$PINNED_SUPERVISOR_IMAGE}"
-SANDBOX_RUNTIME_IMAGE="${TENUO_DEMO_SANDBOX_RUNTIME_IMAGE:-$PINNED_SANDBOX_RUNTIME_IMAGE}"
 WORKLOAD_IMAGE="${TENUO_DEMO_WORKLOAD_IMAGE:-localhost/tenuo-openshell/workload:$RUN_ID}"
 SANDBOX_CREATED=0
 RECEIPT_DIR="$RUN_DIR/receipts"
@@ -1272,9 +1297,10 @@ run_timing() {
   jq -n \
     --arg commit "$(git -C "$ROOT" rev-parse HEAD)" \
     --arg openshell_ref "$(git -C "$OPENSHELL_ROOT" rev-parse HEAD)" \
+    --arg openshell_requested_ref "${OPENSHELL_REF:-pinned}" \
     --arg supervisor_image "$SUPERVISOR_IMAGE" \
     --arg sandbox_runtime_image "$SANDBOX_RUNTIME_IMAGE" \
-    '{commit:$commit,openshell_ref:$openshell_ref,supervisor_image:$supervisor_image,sandbox_runtime_image:$sandbox_runtime_image}' \
+    '{commit:$commit,openshell_ref:$openshell_ref,openshell_requested_ref:$openshell_requested_ref,supervisor_image:$supervisor_image,sandbox_runtime_image:$sandbox_runtime_image}' \
     >"$RESULTS_DIR/evidence/manifest.json"
 }
 
