@@ -12,7 +12,7 @@ walkthrough sets up what production needs instead:
 
 It goes from nothing to one allowed and two denied MCP tool calls in about 10
 minutes. It uses only released artifacts: the OpenShell v0.1.2 binaries, the
-Tenuo v0.1.2 images, and the `tenuo-openshell` v0.1.2 CLI. Nothing is built
+Tenuo v0.1.3 images, and the `tenuo-openshell` v0.1.3 CLI. Nothing is built
 from source. For Redis replay protection and Kubernetes, continue with
 [Deployment](deployment.md) and the
 [Helm chart](../deploy/helm/tenuo-openshell/README.md).
@@ -82,7 +82,7 @@ curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshe
   | tar -xz -C bin
 curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell-gateway-$gateway.tar.gz" \
   | tar -xz -C bin
-curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.2/tenuo-openshell-v0.1.2-$cli.tar.gz" \
+curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.3/tenuo-openshell-v0.1.3-$cli.tar.gz" \
   | tar -xz -C bin tenuo-openshell
 openshell --version && openshell-gateway --version && tenuo-openshell --version
 ```
@@ -132,7 +132,7 @@ docker run -d --name tenuo-quickstart-middleware \
   -v "$PWD/tenuo:/etc/tenuo:ro" \
   -v "$PWD/pki/server:/tls:ro" \
   -v "$PWD/pki/jwt/public.pem:/jwt/public.pem:ro" \
-  ghcr.io/tenuo-ai/tenuo-openshell:v0.1.2 \
+  ghcr.io/tenuo-ai/tenuo-openshell:v0.1.3 \
   --policy /etc/tenuo/policy.json \
   --policy-signing-key "$(cat policy-signing.pub)" \
   --listen 0.0.0.0:50051 \
@@ -262,7 +262,7 @@ cat > Dockerfile <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.2 \
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.3 \
   /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
 EOF
 docker build -q -t tenuo-quickstart-sandbox:latest .
