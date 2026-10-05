@@ -6,6 +6,8 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-05
+
 ### Changed
 
 This release tightens production defaults, and existing deployments need
@@ -72,17 +74,12 @@ these changes when they upgrade:
 - The sandbox proxy explains `tenuo_pop_replayed` as a duplicate of a call
   that was already accepted.
 - The demo signs every policy version it writes.
-
-### Deprecated
-
-- `single_use_tools` and `tenuo-openshell policy add --single-use` have no
-  effect and log a warning.
-### Added
-
-- [Issuing warrants in production](docs/production-issuance.md): where each
-  key lives, issuer custody with files today and KMS or HSM signing once core
-  supports it, per-request issuance for multi-user platforms (#17), and
-  rotation.
+- [Quickstart](docs/quickstart.md): one allowed and two denied calls on an
+  OpenShell gateway from released artifacts, checked end to end by
+  `make quickstart`.
+- [Issuing warrants in production](docs/production-issuance.md): Tenuo Cloud
+  as the managed issuer, where each key lives, per-request issuance for
+  multi-user platforms (#17), and rotation.
 - `examples/issuance/`, a minimal per-request issuance service on the public
   `tenuo` Python package, with a test that installs its warrants with the
   real agent.
@@ -90,6 +87,13 @@ these changes when they upgrade:
   the release middleware over gRPC with in-memory and Redis replay stores, and
   [Performance](docs/performance.md) with the method and results. The README
   now cites release-build numbers instead of a debug-build sample.
+- `register --only gateway` does not need `--mcp-host`, and `policy init
+  --sign-with` writes the signature before the policy.
+
+### Deprecated
+
+- `single_use_tools` and `tenuo-openshell policy add --single-use` have no
+  effect and log a warning.
 
 ## [0.1.1] - 2026-10-04
 
@@ -194,6 +198,7 @@ First release.
 - NVIDIA NeMo Agent Toolkit `nvidia-nat-core` 1.8.x.
 - Tenuo 0.3.2 or later within 0.3.
 
-[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tenuo-ai/tenuo-openshell/releases/tag/v0.1.0

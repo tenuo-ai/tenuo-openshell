@@ -169,7 +169,7 @@ for the method, the full tables, and `make bench` to rerun them.
 ## Try it
 
 The [quickstart](docs/quickstart.md) takes about 10 minutes and builds
-nothing. It downloads the released OpenShell v0.1.2 and Tenuo v0.1.1
+nothing. It downloads the released OpenShell v0.1.2 and Tenuo v0.1.2
 artifacts, starts a gateway with the middleware registered over TLS and JWT,
 and makes one allowed and two denied MCP calls from a sandbox. It needs
 Docker, `curl`, `jq`, and `python3`. `make quickstart` runs it unattended.
@@ -212,15 +212,15 @@ Deploy the middleware with the Helm chart. See the
 
 ```bash
 helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
-  --version 0.1.1 -f values.yaml
+  --version 0.1.2 -f values.yaml
 ```
 
-Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.1`.
+Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.2`.
 
 Add the agent to your sandbox image:
 
 ```dockerfile
-COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.1 \
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.2 \
   /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
 ```
 
