@@ -55,8 +55,11 @@ tenuo-openshell policy add \
   --sandbox-id 5ba15c63-8170-4e78-a4aa-df0f94f49642 \
   --trusted-root issuer.pub \
   --mcp https://mcp.internal/mcp \
-  --tools read_logs,restart_service \
-  --single-use restart_service
+  --tools read_logs,restart_service
+
+tenuo-openshell policy sign \
+  --policy /etc/tenuo/openshell-policy.json \
+  --key policy-signing.key
 ```
 
 The command creates the file if needed, merges into an existing sandbox entry,
@@ -69,11 +72,14 @@ Running middleware replicas pick up the new version on their next poll.
 tenuo-openshell register \
   --middleware-endpoint https://tenuo-middleware.example:50051 \
   --ca /etc/openshell/tenuo-middleware-ca.pem \
-  --mcp-host mcp.internal
+  --mcp-host mcp.internal \
+  --openshell-policy sandbox-policy.yaml
 ```
 
 This prints the gateway registration block and the sandbox policy
-`network_middlewares` block. In the sandbox policy's `network_policies` entry
+`network_middlewares` block. `--openshell-policy` refuses to print that block
+when a protected host allows `tls: skip`, raw TCP, or a binary WebSocket. In
+the sandbox policy's `network_policies` entry
 for the MCP server, list the agent as the binary allowed to reach it:
 
 ```yaml

@@ -145,6 +145,26 @@ enum RedisConnection {
     Cluster(ClusterConnection),
 }
 
+/// Production replay state is the single-use control. The URL must be TLS
+/// with hostname verification and a password. The error does not echo the
+/// URL, because the URL contains the password.
+pub fn require_confidential_replay_url(url: &str) -> Result<(), &'static str> {
+    use std::str::FromStr;
+    let info = redis::ConnectionInfo::from_str(url).map_err(|_| "replay Redis URL is invalid")?;
+    match info.addr() {
+        redis::ConnectionAddr::TcpTls {
+            insecure: false, ..
+        } => {}
+        _ => {
+            return Err("production replay Redis requires rediss:// with hostname verification");
+        }
+    }
+    match info.redis_settings().password() {
+        Some(password) if !password.is_empty() => Ok(()),
+        _ => Err("production replay Redis requires a password in the rediss:// URL"),
+    }
+}
+
 impl RedisReplayStore {
     pub async fn connect(url: &str, prefix: impl Into<String>) -> Result<Self, ReplayError> {
         let client = redis::Client::open(url).map_err(|_| ReplayError)?;
@@ -506,6 +526,26 @@ mod tests {
             store.reserve(&[claim]).await.unwrap(),
             ReserveResult::Reserved(_)
         ));
+    }
+
+    #[test]
+    fn production_replay_urls_require_tls_and_a_password() {
+        assert!(require_confidential_replay_url("rediss://:secret@redis.example:6380/").is_ok());
+        assert!(
+            require_confidential_replay_url("rediss://app:secret@redis.example:6380/0").is_ok()
+        );
+        for rejected in [
+            "redis://:secret@redis.example:6379/",
+            "rediss://redis.example:6380/",
+            "rediss://:secret@redis.example:6380/#insecure",
+            "unix:///tmp/redis.sock",
+            "not a url",
+        ] {
+            assert!(
+                require_confidential_replay_url(rejected).is_err(),
+                "{rejected}"
+            );
+        }
     }
 
     #[test]

@@ -230,7 +230,8 @@ impl SupervisorMiddleware for MiddlewareService {
             },
             Err(policy::InvalidMiddlewareConfig) => ValidateConfigResponse {
                 valid: false,
-                reason: "config accepts only tenuo_meta=preserve|strip".to_string(),
+                reason: "config accepts only tenuo_meta=strip; preserve is operator policy"
+                    .to_string(),
             },
         };
         Ok(Response::new(response))
@@ -261,7 +262,10 @@ impl SupervisorMiddleware for MiddlewareService {
             policy::meta_mode(&config),
             request.target.as_ref(),
         ) {
-            (false, Ok(meta_mode), Some(target)) => {
+            (false, Ok(_attachment), Some(target)) => {
+                // Attachment config cannot enable preserve. Empty or `strip`
+                // is accepted; the operator policy chooses forwarding.
+                let meta_mode = policy.forward_proof(sandbox_id);
                 let target = RequestTarget {
                     method: &target.method,
                     host: &target.host,

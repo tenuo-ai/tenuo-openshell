@@ -6,6 +6,57 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+This release tightens production defaults, and existing deployments need
+these changes when they upgrade:
+
+1. **Sign the policy.** Run `tenuo-openshell policy keygen --out
+   policy-signing.key` once, then `tenuo-openshell policy sign` for every
+   version. Pass the printed public key as `--policy-signing-key`. With Helm,
+   put `policy.json.sig` in the policy ConfigMap and the public key in the
+   Secret named by `policy.signingKeySecret`
+   (default `tenuo-openshell-policy-key`). `--allow-unsigned-policy` keeps the
+   old behavior.
+2. **Use `rediss://` with a password** for the replay store.
+   `--allow-plaintext-replay` keeps the old behavior.
+3. **Move `tenuo_meta: preserve`** from the OpenShell attachment to
+   `"forward_proof": "preserve"` on the sandbox in the Tenuo policy. An
+   attachment that still sets `preserve` fails `ValidateConfig`.
+4. **List idempotent tools.** Every tool is now single-use, so an identical
+   call inside one 30-second proof window is denied `tenuo_pop_replayed`.
+   List read-only tools an agent may repeat in `idempotent_tools`.
+5. **Approvals.** `approval_replay_protection: false` now also needs
+   `--allow-reusable-approvals` in production.
+
+### Security
+
+- Every tool accepts a signed call once, unless it is listed in
+  `idempotent_tools`. This is interim until proofs carry a per-call nonce
+  (#21).
+- Production refuses a replay Redis URL that is not `rediss://` with a
+  password and hostname verification.
+- `forward_proof` on the operator policy decides whether a destination
+  receives the proof.
+- Production requires a policy signed with `--policy-signing-key`.
+- Production refuses reusable approvals unless explicitly allowed.
+
+### Added
+
+- `tenuo-openshell policy keygen` and `tenuo-openshell policy sign`.
+- `tenuo-openshell register --openshell-policy` refuses to print a gateway
+  block when an endpoint that can match a protected host is L4 TCP (no
+  `protocol`, or `tcp`), `websocket`, `sql`, or `tls: skip`. It matches hosts
+  with OpenShell's host-pattern rules.
+- The sandbox proxy explains `tenuo_pop_replayed` as a duplicate of a call
+  that was already accepted.
+- The demo signs every policy version it writes.
+
+### Deprecated
+
+- `single_use_tools` and `tenuo-openshell policy add --single-use` have no
+  effect and log a warning.
+
 ## [0.1.1] - 2026-10-04
 
 ### Added

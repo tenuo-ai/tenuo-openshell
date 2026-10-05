@@ -14,12 +14,14 @@
     },
     "policy": {
       "type": "object",
-      "required": ["existingConfigMap", "key"],
+      "required": ["existingConfigMap", "key", "signingKeySecret", "signingKeyKey"],
       "properties": {
         "existingConfigMap": { "type": "string", "minLength": 1 },
         "key": { "type": "string", "minLength": 1 },
         "reloadSeconds": { "type": "integer", "minimum": 1 },
-        "maxStaleSeconds": { "type": "integer", "minimum": 1 }
+        "maxStaleSeconds": { "type": "integer", "minimum": 1 },
+        "signingKeySecret": { "type": "string", "minLength": 1 },
+        "signingKeyKey": { "type": "string", "minLength": 1 }
       }
     },
     "tls": {

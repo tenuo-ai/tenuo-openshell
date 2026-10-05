@@ -85,10 +85,11 @@ not what the tool does.
 | 22 | A Tenuo A2A worker receives a parent and child warrant stack over JSON-RPC HTTP, with the child's proof of possession | `read_logs` runs. A read-only child's `restart_service` is denied before the skill runs. |
 | 23 | Task B's restart, a restart with no warrant, and the narrowed restart are sent straight to the MCP server, around OpenShell | All three are denied with JSON-RPC `-32001`. A direct read with Task A's warrant runs. |
 
-The MCP server verifies the preserved warrant with Tenuo's `MCPVerifier`
-before it runs any tool. That check does not depend on OpenShell being in
-front. The A2A step is in [`examples/interoperability`](../interoperability/README.md)
-and writes `results/evidence/a2a-handoff.json`.
+The demo policy sets `forward_proof` to `preserve`. The MCP server verifies
+the warrant with Tenuo's `MCPVerifier` before it runs any tool. That check
+does not depend on OpenShell being in front. The A2A step is in
+[`examples/interoperability`](../interoperability/README.md) and writes
+`results/evidence/a2a-handoff.json`.
 
 ## Evidence
 

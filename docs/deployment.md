@@ -13,7 +13,8 @@ Production mode is the default. It requires:
 - server TLS;
 - an operator-provisioned OpenShell Ed25519 public key;
 - a versioned Tenuo trust policy;
-- Redis when approval replay protection or `single_use_tools` is enabled; and
+- Redis for single-use proofs and approvals, over `rediss://` with a password;
+- a signed policy file and the signing public key; and
 - a pre-generated receipt key and durable receipt path when receipts are
   required.
 
@@ -29,22 +30,23 @@ cargo run --release -- \
   --openshell-gateway-id production-gateway \
   --openshell-jwt-key-id production-key-1 \
   --audience urn:openshell:extension:middleware:tenuo/authorization \
-  --replay-redis-url redis://redis.security.svc:6379/ \
+  --replay-redis-url rediss://:password@redis.security.svc:6379/ \
   --receipt-key /etc/tenuo/receipts/key \
   --receipt-log /var/lib/tenuo/receipts.jsonl \
   --require-receipts \
   --admin-listen 0.0.0.0:9090
 ```
 
-Use a `rediss://` URL to connect to Redis over TLS. The server certificate
-is verified against the system trust store. Replay keys carry approval and
-proof identities, so use TLS whenever Redis is reachable from outside the
-middleware's network.
+Production requires `rediss://` with a password. The server certificate is
+verified against the system trust store, and hostname verification stays on.
+`--allow-plaintext-replay` accepts any other Redis URL and is for a network
+that already isolates the store. Replay keys are the single-use control for
+approvals and proofs.
 
 For native Redis Cluster, replace `--replay-redis-url` with:
 
 ```bash
---replay-redis-cluster-urls redis://node-a:6379/,redis://node-b:6379/
+--replay-redis-cluster-urls rediss://:password@node-a:6379/,rediss://:password@node-b:6379/
 ```
 
 The verifier pins `alg=EdDSA`, `typ=openshell-ext+jwt`, optional `kid`, exact
@@ -80,8 +82,9 @@ network_middlewares:
 ```
 
 On allow, the middleware removes `params._meta.tenuo` before OpenShell
-forwards the request. Add `config: {tenuo_meta: preserve}` only when the
-destination verifies the warrant again itself.
+forwards the request. Set `forward_proof` to `preserve` on the sandbox in
+this policy when the destination verifies the warrant again itself. The
+sandbox attachment cannot request that.
 
 The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
 `HTTP_REQUEST / PRE_CREDENTIALS`. See the
@@ -108,7 +111,6 @@ reusable display name:
           "tools": ["read_logs", "restart_service"]
         }
       ],
-      "single_use_tools": ["restart_service"],
       "mcp": {
         "passthrough_methods": [],
         "allow_client_responses": false
@@ -124,7 +126,8 @@ Each sandbox entry:
 | --- | --- | --- |
 | `trusted_roots` | Yes | Issuer public keys whose warrants this sandbox accepts. |
 | `destinations` | Yes | MCP servers the binding may reach, and the tools each serves. Host matches case-insensitively; `port` and optional `path` match exactly. `"tools": ["*"]` admits any tool and suits a sandbox that reaches one server. |
-| `single_use_tools` | No | Tools whose signed calls are accepted once. Use for non-idempotent tools; an identical call inside the same 30-second proof bucket is also denied. |
+| `idempotent_tools` | No | Tools for which a resent identical call is the same effect. Every other tool accepts a signed call once; a second identical call inside the proof window is `tenuo_pop_replayed`. |
+| `forward_proof` | No | `strip` (default) removes `params._meta.tenuo` before forwarding. `preserve` leaves it for a destination that verifies the warrant itself. |
 | `mcp.passthrough_methods` | No | Extra JSON-RPC methods forwarded without a warrant, such as `resources/read`. `tools/call` is rejected. |
 | `mcp.allow_client_responses` | No | Forward the client's responses to server-initiated sampling, elicitation, and roots requests. Default `false`. |
 | `max_result_bytes` | No | Largest tool result, in bytes, delivered to this sandbox. Requires `--evaluate-results`; see [Result evidence](#result-evidence). |
@@ -138,21 +141,49 @@ required.
 Top-level `approval_replay_protection` defaults to `true`: each approval nonce
 is accepted once across the deployment, which requires Redis in production
 (see [Replay protection](#replay-protection)). Setting it to `false` makes an
-approval reusable until it expires; do that only for single-call evaluation.
+approval reusable until it expires. Production refuses to start with that
+setting unless `--allow-reusable-approvals` is set.
 
 ### Policy integrity
 
-The policy file is not signed. Whoever can write it chooses the trusted issuers
-for every sandbox, so it is as sensitive as the issuer keys:
+Production requires a detached signature over the exact policy bytes. Create
+a signing key once, sign every policy version with it, and give the middleware
+only the public key:
 
-- Mount it read-only into the middleware, and limit who can change its source
-  (for example the ConfigMap and the RBAC that can edit it).
+```bash
+tenuo-openshell policy keygen --out policy-signing.key
+# prints the public key, for --policy-signing-key
+tenuo-openshell policy sign --policy policy.json --key policy-signing.key
+# writes policy.json.sig
+```
+
+The signature is Ed25519 over a fixed context string and the SHA-256 of the
+policy file, 57 bytes in all. A key held in a KMS or HSM with a message-size
+limit can therefore sign it.
+
+Start the middleware with `--policy-signing-key` (64 hex characters, or a
+path to that text). When you replace a policy file in place, write the new
+`.sig` before the new policy: the middleware skips the reload until the policy
+bytes change, so it never pairs the new policy with the old signature. A
+Kubernetes ConfigMap that holds both keys updates them together. It checks the signature before the first load and again
+before a reload replaces the active snapshot. `--allow-unsigned-policy` is
+the explicit exception and cannot be combined with a signing key.
+
+Whoever can sign the policy chooses the trusted issuers for every sandbox, so
+the signing key is as sensitive as the issuer keys:
+
+- Mount the policy read-only, and keep the public key in a separate secret
+  from the policy file.
 - Review policy changes like code: a new trusted root or a wider destination
   grants authority.
 - A provider that fetches snapshots must authenticate them before returning
   them; see [Provider integration](providers.md).
 - Keep `version` monotonic. The middleware refuses a lower version, so an old
-  file cannot be replayed onto a running replica.
+  file cannot be replayed onto a running replica. A restarting replica has no
+  floor: it loads any correctly signed policy, including an older one. Keep
+  only the current signed version where the middleware reads it. A signed,
+  versioned envelope with a persistent floor is tracked in
+  [tenuo-ai/tenuo#782](https://github.com/tenuo-ai/tenuo/issues/782).
 
 Policy files are versioned and polled. A valid higher version replaces the
 active snapshot atomically. Invalid or rolled-back updates preserve the last
@@ -168,9 +199,10 @@ Sandbox boundaries do not reset single-use semantics. All nonces on one
 request are reserved atomically across replicas, and Redis Cluster keys share
 a deployment-specific hash slot.
 
-Tools in `single_use_tools` reserve each proof of possession the same way, in
-the same atomic reservation as the request's approvals. See
-[Architecture](architecture.md#replay) for what this does and does not cover.
+Every tool that is not listed in `idempotent_tools` reserves its proof of
+possession the same way, in the same atomic reservation as the request's
+approvals. See [Architecture](architecture.md#replay) for what this does and
+does not cover.
 
 Production startup fails if replay protection is enabled without Redis.
 `--allow-in-memory-replay` is limited to single-instance demonstrations.

@@ -60,6 +60,11 @@ enum PolicyCommand {
     /// Add a sandbox, trust root, or MCP destination. Creates the file if needed
     /// and increments its version.
     Add(PolicyAddArgs),
+    /// Write `<policy>.sig` over the exact policy bytes.
+    Sign(PolicySignArgs),
+    /// Create a policy signing key and print its public key, the value for
+    /// the middleware's `--policy-signing-key`.
+    Keygen(PolicyKeygenArgs),
 }
 
 #[derive(Args)]
@@ -78,12 +83,35 @@ struct PolicyAddArgs {
     /// Tools the destination serves, comma-separated, or `*`.
     #[arg(long, value_delimiter = ',', requires = "mcp")]
     tools: Vec<String>,
-    /// Tools whose signed calls are accepted once.
-    #[arg(long, value_delimiter = ',')]
+    /// Deprecated and ignored: every tool is single-use unless it is listed
+    /// with --idempotent.
+    #[arg(long, value_delimiter = ',', hide = true)]
     single_use: Vec<String>,
+    /// Tools for which a resent identical call is the same effect. A captured
+    /// body for any other tool is denied `tenuo_pop_replayed`.
+    #[arg(long, value_delimiter = ',')]
+    idempotent: Vec<String>,
     /// Maximum warrant lifetime for a new policy file.
     #[arg(long, default_value_t = 3600)]
     max_warrant_lifetime_secs: u64,
+}
+
+#[derive(Args)]
+struct PolicyKeygenArgs {
+    /// File to create for the secret key, as 64 hex characters, mode 0600.
+    /// An existing file is never overwritten.
+    #[arg(long)]
+    out: PathBuf,
+}
+
+#[derive(Args)]
+struct PolicySignArgs {
+    #[arg(long)]
+    policy: PathBuf,
+    /// Ed25519 secret key file. The matching public key is what the middleware
+    /// receives as `--policy-signing-key`.
+    #[arg(long)]
+    key: PathBuf,
 }
 
 #[derive(Args)]
@@ -99,9 +127,15 @@ struct RegisterArgs {
     mcp_host: Vec<String>,
     #[arg(long, default_value = DEFAULT_AUDIENCE)]
     audience: String,
-    /// Keep `_meta.tenuo` on forwarded requests for a destination that verifies it.
+    /// Mention in the printed block that the Tenuo policy sets
+    /// `forward_proof` to `preserve`. The sandbox attachment cannot do that.
     #[arg(long)]
     preserve_meta: bool,
+    /// OpenShell sandbox policy to check before printing. Refuses when an
+    /// endpoint that can match a protected host is L4 TCP (no `protocol`, or
+    /// `tcp`), `websocket`, `sql`, or `tls: skip`.
+    #[arg(long)]
+    openshell_policy: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -231,8 +265,10 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Policy(PolicyCommand::Add(args)) => policy_add(&args),
+        Command::Policy(PolicyCommand::Sign(args)) => policy_sign(&args),
+        Command::Policy(PolicyCommand::Keygen(args)) => policy_keygen(&args),
         Command::Register(args) => {
-            print!("{}", register(&args));
+            print!("{}", register(&args)?);
             Ok(())
         }
         Command::Warrant(WarrantCommand::Issue(args)) => {
@@ -248,6 +284,11 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 fn policy_add(args: &PolicyAddArgs) -> Result<()> {
+    if !args.single_use.is_empty() {
+        eprintln!(
+            "warning: --single-use is deprecated and ignored; every tool is single-use unless listed with --idempotent"
+        );
+    }
     let mut document = match fs::read(&args.policy) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({
@@ -272,7 +313,7 @@ fn policy_add(args: &PolicyAddArgs) -> Result<()> {
         &args.sandbox_id,
         &roots,
         destination,
-        &args.single_use,
+        &args.idempotent,
     )?;
     let bytes = serde_json::to_vec_pretty(&document)?;
     PolicySet::from_json(&bytes)
@@ -293,7 +334,7 @@ fn add_to_policy(
     sandbox_id: &str,
     roots: &[String],
     destination: Option<Value>,
-    single_use: &[String],
+    idempotent: &[String],
 ) -> Result<()> {
     let version = document["version"].as_u64().unwrap_or(0) + 1;
     document["version"] = json!(version);
@@ -310,8 +351,8 @@ fn add_to_policy(
     union(entry, "trusted_roots", roots.iter().map(|root| json!(root)));
     union(
         entry,
-        "single_use_tools",
-        single_use.iter().map(|tool| json!(tool)),
+        "idempotent_tools",
+        idempotent.iter().map(|tool| json!(tool)),
     );
     if let Some(destination) = destination {
         let list = entry
@@ -386,18 +427,52 @@ fn destination(url: &str, tools: &[String]) -> Result<Value> {
     Ok(value)
 }
 
-fn register(args: &RegisterArgs) -> String {
+fn policy_sign(args: &PolicySignArgs) -> Result<()> {
+    let document = fs::read(&args.policy)?;
+    let key = read_secret(&args.key)?;
+    let signature = tenuo_openshell_middleware::policy::sign_policy_document(&document, &key);
+    let path = tenuo_openshell_middleware::policy::policy_signature_path(&args.policy);
+    fs::write(&path, format!("{signature}\n"))?;
+    println!("wrote {}", path.display());
+    println!("public {}", hex::encode(key.public_key().to_bytes()));
+    Ok(())
+}
+
+fn policy_keygen(args: &PolicyKeygenArgs) -> Result<()> {
+    use std::io::Write;
+    let key = SigningKey::generate();
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&args.out)
+        .map_err(|error| format!("{}: {error}", args.out.display()))?;
+    writeln!(file, "{}", hex::encode(key.secret_key_bytes()))?;
+    println!("{}", hex::encode(key.public_key().to_bytes()));
+    Ok(())
+}
+
+fn register(args: &RegisterArgs) -> Result<String> {
+    if let Some(path) = &args.openshell_policy {
+        let document = fs::read_to_string(path)?;
+        reject_uncovered_routes(&document, &args.mcp_host)?;
+    }
     let hosts = args
         .mcp_host
         .iter()
         .map(|host| format!("        - {host}\n"))
         .collect::<String>();
-    let config = if args.preserve_meta {
-        "    config:\n      tenuo_meta: preserve\n"
+    let preserve = if args.preserve_meta {
+        "# Set \"forward_proof\": \"preserve\" on this sandbox in the Tenuo policy.\n\
+         # The sandbox attachment cannot forward the proof.\n"
     } else {
         ""
     };
-    format!(
+    Ok(format!(
         "# OpenShell gateway configuration\n\
          [[openshell.supervisor.middleware]]\n\
          name = \"tenuo/authorization\"\n\
@@ -409,18 +484,122 @@ fn register(args: &RegisterArgs) -> String {
          \n\
          # Sandbox policy. List {AGENT} as the only binary allowed to reach\n\
          # these hosts so every tools/call is signed in the sandbox.\n\
+         {preserve}\
          network_middlewares:\n  \
            tenuo-task-authority:\n    \
              middleware: tenuo/authorization\n    \
-             on_error: fail_closed\n\
-         {config}    \
+             on_error: fail_closed\n    \
              endpoints:\n      \
                include:\n\
          {hosts}",
         endpoint = args.middleware_endpoint,
         ca = args.ca,
         audience = args.audience,
-    )
+    ))
+}
+
+/// Refuse a printed registration when a protected host is reachable on a
+/// route this middleware does not see.
+///
+/// The check reads each `network_policies.*.endpoints[]` entry whose `host`
+/// pattern can match a protected host. It uses OpenShell's host-pattern rules:
+/// case-insensitive, `*` within one DNS label, and a `**` label for one or more
+/// labels. The middleware sees HTTP requests only. An endpoint without a
+/// `protocol` is L4 TCP in OpenShell, as is `protocol: tcp`. `websocket` and
+/// `sql` traffic is not delivered to this middleware's HTTP binding, and
+/// `tls: skip` hides the request.
+fn reject_uncovered_routes(document: &str, hosts: &[String]) -> Result<()> {
+    let value: serde_yaml::Value = serde_yaml::from_str(document)
+        .map_err(|error| format!("OpenShell policy did not parse: {error}"))?;
+    let mut found = Vec::new();
+    if let Some(policies) = value
+        .get("network_policies")
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for (name, policy) in policies {
+            let name = name.as_str().unwrap_or("?");
+            let Some(endpoints) = policy
+                .get("endpoints")
+                .and_then(serde_yaml::Value::as_sequence)
+            else {
+                continue;
+            };
+            for endpoint in endpoints {
+                let Some(pattern) = endpoint.get("host").and_then(serde_yaml::Value::as_str) else {
+                    continue;
+                };
+                if !hosts.iter().any(|host| host_pattern_matches(pattern, host)) {
+                    continue;
+                }
+                let field = |key: &str| endpoint.get(key).and_then(serde_yaml::Value::as_str);
+                let reason = match (field("tls"), field("protocol")) {
+                    (Some(tls), _) if tls.eq_ignore_ascii_case("skip") => "tls: skip".to_string(),
+                    (_, None) => "no protocol, so L4 TCP".to_string(),
+                    (_, Some(protocol))
+                        if ["tcp", "websocket", "sql"]
+                            .iter()
+                            .any(|uncovered| protocol.eq_ignore_ascii_case(uncovered)) =>
+                    {
+                        format!("protocol: {protocol}")
+                    }
+                    _ => continue,
+                };
+                found.push(format!("{name}: {pattern} ({reason})"));
+            }
+        }
+    }
+    if found.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "protected hosts are reachable outside the middleware's HTTP binding: {}",
+            found.join(", ")
+        )
+        .into())
+    }
+}
+
+/// OpenShell host-pattern matching for a concrete host.
+fn host_pattern_matches(pattern: &str, host: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let host = host.to_ascii_lowercase();
+    let pattern: Vec<&str> = pattern.split('.').collect();
+    let host: Vec<&str> = host.split('.').collect();
+    fn walk(pattern: &[&str], host: &[&str]) -> bool {
+        match (pattern.first(), host.first()) {
+            (None, None) => true,
+            (Some(&"**"), Some(_)) => walk(&pattern[1..], &host[1..]) || walk(pattern, &host[1..]),
+            (Some(label), Some(part)) => {
+                label_matches(label, part) && walk(&pattern[1..], &host[1..])
+            }
+            _ => false,
+        }
+    }
+    walk(&pattern, &host)
+}
+
+/// `*` and `?` within one DNS label. A character class is treated as a match,
+/// so the check errs toward refusing.
+fn label_matches(pattern: &str, label: &str) -> bool {
+    if pattern.contains('[') {
+        return true;
+    }
+    let pattern: Vec<char> = pattern.chars().collect();
+    let label: Vec<char> = label.chars().collect();
+    fn walk(pattern: &[char], label: &[char]) -> bool {
+        match (pattern.first(), label.first()) {
+            (None, None) => true,
+            (Some('*'), _) => {
+                walk(&pattern[1..], label) || (!label.is_empty() && walk(pattern, &label[1..]))
+            }
+            (Some('?'), Some(_)) => walk(&pattern[1..], &label[1..]),
+            (Some(expected), Some(actual)) => {
+                expected == actual && walk(&pattern[1..], &label[1..])
+            }
+            _ => false,
+        }
+    }
+    walk(&pattern, &label)
 }
 
 fn issue(args: &AuthorityArgs, holder: &PublicKey) -> Result<Vec<Warrant>> {
@@ -843,7 +1022,7 @@ mod tests {
             "sbx",
             std::slice::from_ref(&root),
             Some(restart),
-            &["restart_service".into()],
+            &["read_logs".into()],
         )
         .unwrap();
         assert_eq!(document["version"], 5);
@@ -854,7 +1033,8 @@ mod tests {
             sandbox["destinations"][0]["tools"],
             json!(["read_logs", "restart_service"])
         );
-        assert_eq!(sandbox["single_use_tools"], json!(["restart_service"]));
+        assert!(sandbox.get("single_use_tools").is_none());
+        assert_eq!(sandbox["idempotent_tools"], json!(["read_logs"]));
         PolicySet::from_json(&serde_json::to_vec(&document).unwrap()).unwrap();
     }
 
@@ -1057,9 +1237,51 @@ mod tests {
             mcp_host: vec!["mcp.internal".into()],
             audience: DEFAULT_AUDIENCE.into(),
             preserve_meta: true,
-        });
+            openshell_policy: None,
+        })
+        .unwrap();
         assert!(text.contains("grpc_endpoint = \"https://tenuo:50051\""));
         assert!(text.contains("        - mcp.internal\n"));
-        assert!(text.contains("tenuo_meta: preserve"));
+        assert!(text.contains("forward_proof"));
+        assert!(!text.contains("tenuo_meta"));
+    }
+
+    #[test]
+    fn register_refuses_an_uncovered_route_to_a_protected_host() {
+        let hosts = ["mcp.internal".to_string()];
+        let policy = |endpoint: &str| {
+            format!("network_policies:\n  mcp:\n    endpoints:\n      - {endpoint}\n")
+        };
+        let covered = policy("{host: mcp.internal, port: 443, protocol: mcp}");
+        assert!(reject_uncovered_routes(&covered, &hosts).is_ok());
+        let other = policy("{host: other.internal, port: 443, tls: skip}");
+        assert!(reject_uncovered_routes(&other, &hosts).is_ok());
+        for uncovered in [
+            "{host: mcp.internal, port: 443}",
+            "{host: MCP.INTERNAL, port: 443, protocol: tcp}",
+            "{host: mcp.internal, port: 443, protocol: mcp, tls: skip}",
+            "{host: '*.internal', port: 443}",
+            "{host: '**', port: 443, protocol: websocket}",
+        ] {
+            assert!(
+                reject_uncovered_routes(&policy(uncovered), &hosts).is_err(),
+                "{uncovered}"
+            );
+        }
+        // A middleware selector naming the host is not a route.
+        let selector =
+            "network_middlewares:\n  t:\n    endpoints:\n      include: [mcp.internal]\n";
+        assert!(reject_uncovered_routes(selector, &hosts).is_ok());
+    }
+
+    #[test]
+    fn host_patterns_follow_openshell_label_rules() {
+        assert!(host_pattern_matches("mcp.internal", "MCP.internal"));
+        assert!(host_pattern_matches("*.internal", "mcp.internal"));
+        assert!(!host_pattern_matches("*.internal", "a.mcp.internal"));
+        assert!(host_pattern_matches("**.internal", "a.mcp.internal"));
+        assert!(!host_pattern_matches("**.internal", "internal"));
+        assert!(host_pattern_matches("mcp-?.internal", "mcp-1.internal"));
+        assert!(!host_pattern_matches("other.internal", "mcp.internal"));
     }
 }

@@ -720,6 +720,9 @@ mod tests {
         assert!(preserved.allow);
         assert!(preserved.replacement.is_none());
 
+        let arguments = json!({"service": "billing"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let body = tools_call("read_logs", arguments, Some(meta));
         let stripped = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None);
         assert!(stripped.allow);
         let replacement = stripped.replacement.expect("replacement");
@@ -784,7 +787,7 @@ mod tests {
         assert_eq!(missing.warrant_id, None);
 
         // Without a receipt log, an allow has no receipt to link.
-        let arguments = json!({"service": "payments"});
+        let arguments = json!({"service": "billing"});
         let meta = sign(&issued, &holder, "read_logs", &arguments);
         let body = tools_call("read_logs", arguments, Some(meta));
         let unrecorded = evaluate(&policy, "sbx", true, &body, MetaMode::Strip, None);
@@ -1243,7 +1246,17 @@ mod tests {
         assert!(payload.request_hash.is_some());
         assert!(payload.trusted_roots_hash.is_some());
 
-        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, Some(&log));
+        let arguments = json!({"service": "billing"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let chained = tools_call("read_logs", arguments, Some(meta));
+        let outcome = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &chained,
+            MetaMode::Preserve,
+            Some(&log),
+        );
         assert!(outcome.allow);
         let lines =
             std::fs::read_to_string(directory.path().join("openshell.jsonl")).expect("chained log");
@@ -1258,7 +1271,17 @@ mod tests {
         let log = ReceiptLog::open(&blocked.path().join("receipt.key"), &blocked_log)
             .expect("receipt log");
         std::fs::create_dir(&blocked_log).expect("directory blocks the log");
-        let outcome = evaluate(&policy, "sbx", true, &body, MetaMode::Preserve, Some(&log));
+        let arguments = json!({"service": "ledger"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let best_effort = tools_call("read_logs", arguments, Some(meta));
+        let outcome = evaluate(
+            &policy,
+            "sbx",
+            true,
+            &best_effort,
+            MetaMode::Preserve,
+            Some(&log),
+        );
         assert!(outcome.allow);
 
         let required_log = blocked.path().join("required.jsonl");
@@ -1266,11 +1289,14 @@ mod tests {
             .expect("required receipt log")
             .require_delivery();
         std::fs::create_dir(&required_log).expect("directory blocks required log");
+        let arguments = json!({"service": "archive"});
+        let meta = sign(&issued, &holder, "read_logs", &arguments);
+        let required_body = tools_call("read_logs", arguments, Some(meta));
         let outcome = evaluate(
             &policy,
             "sbx",
             true,
-            &body,
+            &required_body,
             MetaMode::Preserve,
             Some(&required),
         );
@@ -1412,14 +1438,14 @@ mod tests {
     }
 
     #[test]
-    fn a_single_use_tool_accepts_one_copy_of_a_signed_call() {
+    fn an_identical_proof_is_accepted_once_unless_the_tool_is_idempotent() {
         let issuer = SigningKey::generate();
         let holder = SigningKey::generate();
         let policy = policy_with(
             &issuer,
             json!({
                 "destinations": destinations(),
-                "single_use_tools": ["restart_service"]
+                "idempotent_tools": ["read_logs"]
             }),
         );
         let restart = scoped_warrant(&issuer, &holder, true);

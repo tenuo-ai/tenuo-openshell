@@ -46,6 +46,8 @@ spec:
             - {{ .Values.policy.reloadSeconds | quote }}
             - --policy-max-stale-secs
             - {{ .Values.policy.maxStaleSeconds | quote }}
+            - --policy-signing-key
+            - /etc/tenuo/policy-key/public
             - --replay-key-prefix
             - {{ .Values.replay.keyPrefix | quote }}
             - --tls-cert
@@ -119,6 +121,9 @@ spec:
             - name: policy
               mountPath: /etc/tenuo/policy
               readOnly: true
+            - name: policy-key
+              mountPath: /etc/tenuo/policy-key
+              readOnly: true
             - name: tls
               mountPath: /etc/tenuo/tls
               readOnly: true
@@ -135,6 +140,13 @@ spec:
           configMap:
             name: {{ .Values.policy.existingConfigMap }}
             defaultMode: 0440
+        - name: policy-key
+          secret:
+            secretName: {{ .Values.policy.signingKeySecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.policy.signingKeyKey }}
+                path: public
         - name: tls
           secret:
             secretName: {{ .Values.tls.existingSecret }}

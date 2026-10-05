@@ -13,7 +13,7 @@
           "tools": ["read_logs", "restart_service"]
         }
       ],
-      "single_use_tools": ["restart_service"]
+      "idempotent_tools": ["read_logs"]
     }
   }
 }

@@ -111,8 +111,6 @@ the agent or enforcement protocol:
 | Readiness state | Report cache age and required-export backlog locally |
 | Optional status loop | Register the deployment and publish bounded health metrics |
 
-Tenuo Cloud is one optional implementation of this contract.
-
 ## Adapter acceptance tests
 
 An adapter is ready to publish when its test suite proves:

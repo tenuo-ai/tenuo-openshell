@@ -105,18 +105,22 @@ Approval nonces are single-use across the deployment.
 
 A proof of possession signs a time bucket rather than a per-call nonce, and
 Ed25519 signatures are deterministic. An identical call in the same bucket
-therefore carries a byte-identical proof, and any holder of the request body
-can resend it while the proof is valid (at most `window * max_windows`, 150
-seconds by default). Tools listed in a sandbox's `single_use_tools` accept
-each proof once; a resend denies `tenuo_pop_replayed`. A legitimate identical
-call inside the same bucket is also denied, so list only non-idempotent tools.
-Per-call uniqueness for every tool requires a nonce in the proof itself, which
-is a Tenuo protocol change rather than a middleware setting.
+therefore carries a byte-identical proof. Every tool reserves that proof once
+across the deployment, for at most `window * max_windows` seconds (150 by
+default). A resend denies `tenuo_pop_replayed`, including a legitimate
+identical call inside the bucket. List a tool in `idempotent_tools` only when
+a resent identical call is the same effect. `single_use_tools` is deprecated,
+has no effect, and logs a warning at startup.
+
+This is interim. A per-call nonce in the proof
+([tenuo-ai/tenuo-openshell#21](https://github.com/tenuo-ai/tenuo-openshell/issues/21))
+lets an intentional identical call succeed while a captured body still fails.
+When Tenuo ships it, `idempotent_tools` is no longer needed.
 
 On allow, the middleware strips `params._meta.tenuo` by default so the
-destination never receives a reusable proof. Set `tenuo_meta: preserve` in
-the OpenShell middleware config only for destinations that verify the warrant
-again themselves.
+destination never receives a reusable proof. Set the sandbox's
+`forward_proof` to `preserve` only for destinations that verify the warrant
+again themselves. The OpenShell attachment cannot set that.
 
 ## Failure behavior
 
@@ -164,7 +168,7 @@ Within a configured destination:
 
 | Request | Default | Configurable |
 | --- | --- | --- |
-| `POST` `tools/call` | Warrant, proof, arguments, and approvals checked | `single_use_tools` |
+| `POST` `tools/call` | Warrant, proof, arguments, approvals, and a single-use proof | `idempotent_tools` |
 | `POST` lifecycle: `initialize`, `ping`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` | Forwarded | — |
 | `POST` other methods, such as `resources/read` or `prompts/get` | Denied | `mcp.passthrough_methods` |
 | `POST` JSON-RPC responses to server-initiated sampling, elicitation, or roots requests | Denied | `mcp.allow_client_responses` |
@@ -212,7 +216,8 @@ retry of a non-idempotent call. Failed result receipts are counted in
 The limit lives in the Tenuo policy, keyed by `sandbox_id`, rather than in
 the attachment `config`. The attachment is part of the OpenShell sandbox
 policy, which the sandbox creator writes; the Tenuo policy is the operator's.
-`ValidateConfig` therefore still accepts only `tenuo_meta`.
+`ValidateConfig` accepts an empty attachment or `tenuo_meta: strip`, and
+rejects `preserve`.
 
 When the attachment is `fail_closed`, an unreachable middleware blocks
 responses as well as requests on that attachment. See

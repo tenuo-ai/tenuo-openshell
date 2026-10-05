@@ -24,7 +24,9 @@ should share a prefix and Redis keyspace.
 
 Before installation, create:
 
-- the policy ConfigMap named by `policy.existingConfigMap`;
+- the policy ConfigMap named by `policy.existingConfigMap`, containing
+  `policy.json` and `policy.json.sig`;
+- a Secret with the policy signing public key (`policy.signingKeySecret`);
 - a TLS Secret;
 - the OpenShell extension JWT public-key Secret;
 - a pre-generated 32-byte receipt signing-key Secret; and
@@ -54,7 +56,8 @@ voluntary disruption cannot evict more than one middleware replica at a time.
 
 The policy's `revocation.rollback_floor_path` should point under
 `/var/lib/tenuo`, which is a per-replica persistent volume. Every policy change
-must increment the top-level `version`; invalid or rolled-back updates keep the
+must increment the top-level `version` and be signed again into `policy.json.sig`.
+Invalid, unsigned, or rolled-back updates keep the
 last valid policy and increment the reload-failure metric.
 
 Set `results.evaluate=true` to add the `HTTP_RESPONSE / PRE_RETURN` binding.
