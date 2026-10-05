@@ -1,0 +1,140 @@
+name: Linux install
+
+# Runs docs/quickstart.md against OpenShell installed with OpenShell's own
+# install.sh on GitHub's Ubuntu runners, as a Linux user installs it: the deb
+# package and its systemd user service on x86_64 and arm64, and the snap.
+# `make quickstart` in its default mode stands in for the installer; this
+# workflow checks the real thing. It is not a required check.
+
+on:
+  pull_request:
+    paths:
+      - docs/quickstart.md
+      - src/bin/tenuo-openshell/**
+      - agent/**
+      - deploy/demo-image/**
+      - Dockerfile
+      - scripts/quickstart-check.sh
+      - scripts/build-demo-image.sh
+      - .github/workflows/linux-install.yml
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      artifacts:
+        description: >-
+          build: the CLI and images from this checkout. published: the release
+          the guide names, for a post-release check.
+        type: choice
+        options: [build, published]
+        default: build
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quickstart:
+    name: ${{ matrix.method }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - method: deb
+            arch: x86_64
+            runner: ubuntu-24.04
+          - method: deb
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - method: snap
+            arch: x86_64
+            runner: ubuntu-24.04
+    env:
+      OPENSHELL_INSTALL_METHOD: ${{ matrix.method }}
+      BUILD: ${{ github.event_name != 'workflow_dispatch' || inputs.artifacts == 'build' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A runner job has no login session, so the user's systemd manager is
+      # not running. Lingering starts it, as a desktop login would.
+      - name: Start the user systemd manager
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            [[ -S "$runtime/bus" ]] && break
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=$runtime" >>"$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >>"$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime" systemctl --user is-system-running || true
+
+      - name: Install OpenShell with its install script
+        run: |
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+          echo /snap/bin >>"$GITHUB_PATH"
+
+      - name: A plain OpenShell sandbox runs
+        run: |
+          command -v openshell
+          openshell --version
+          openshell status
+          openshell sandbox create --name install-check --no-tty --no-keep -- true
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: env.BUILD == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: env.BUILD == 'true'
+      - name: Build the CLI, the middleware image, and the demo image
+        if: env.BUILD == 'true'
+        run: |
+          cargo build --release --locked --bin tenuo-openshell
+          docker build -q -t tenuo-openshell:candidate .
+          scripts/build-demo-image.sh tenuo-openshell-demo:candidate
+          {
+            echo "TENUO_QS_CLI=$PWD/target/release/tenuo-openshell"
+            echo "TENUO_QS_MIDDLEWARE_IMAGE=tenuo-openshell:candidate"
+            echo "TENUO_QS_DEMO_IMAGE=tenuo-openshell-demo:candidate"
+          } >>"$GITHUB_ENV"
+
+      - name: Run the quickstart against the installed gateway
+        env:
+          TENUO_QS_GATEWAY: installed
+        run: make quickstart
+
+      - name: Collect logs
+        if: failure()
+        run: |
+          mkdir -p logs
+          if [[ "$OPENSHELL_INSTALL_METHOD" == snap ]]; then
+            sudo journalctl -u snap.openshell.gateway --no-pager 2>&1 | tee logs/gateway.log >/dev/null
+            { sudo snap services openshell; sudo snap connections openshell; } 2>&1 | tee logs/snap.txt >/dev/null
+            sudo cat /var/snap/openshell/common/gateway.toml 2>&1 | tee logs/gateway.toml >/dev/null
+            sudo journalctl -k --no-pager 2>&1 | grep -i apparmor | tee logs/apparmor.log >/dev/null || true
+          else
+            systemctl --user status openshell-gateway --no-pager >logs/gateway-status.txt 2>&1 || true
+            journalctl --user -u openshell-gateway --no-pager >logs/gateway.log 2>&1 || true
+            cp ~/.config/openshell/gateway.toml logs/ 2>/dev/null || true
+          fi
+          for name in tenuo-openshell-dev tenuo-openshell-dev-mcp; do
+            docker logs "$name" >"logs/$name.log" 2>&1 || true
+          done
+          docker ps -a >logs/docker-ps.txt 2>&1 || true
+          openshell sandbox list >logs/sandboxes.txt 2>&1 || true
+          for sandbox in install-check tenuo-demo; do
+            openshell logs "$sandbox" -n 500 >"logs/openshell-$sandbox.log" 2>&1 || true
+          done
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-install-${{ matrix.method }}-${{ matrix.arch }}-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: warn
+          retention-days: 14
