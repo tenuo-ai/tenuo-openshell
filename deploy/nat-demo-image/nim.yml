@@ -1,0 +1,28 @@
+# NeMo Agent Toolkit ReAct agent on an NVIDIA-hosted model.
+#
+# The NIM client reads NVIDIA_API_KEY. In an OpenShell sandbox with an NVIDIA
+# provider attached, that variable holds a placeholder: OpenShell puts the
+# real key on the request only on its way to integrate.api.nvidia.com.
+#
+# The agent's MCP tools go through the Tenuo agent's proxy on loopback, as in
+# scripted.yml.
+
+function_groups:
+  ops:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: http://127.0.0.1:7415/mcp
+
+llms:
+  nim:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    temperature: 0.0
+
+workflow:
+  _type: react_agent
+  tool_names: [ops]
+  llm_name: nim
+  verbose: true
+  pass_tool_call_errors_to_agent: true

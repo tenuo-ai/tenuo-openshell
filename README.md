@@ -63,6 +63,7 @@ Choose the shortest path that demonstrates the capability you care about:
 | Goal | What you will see | Start |
 | --- | --- | --- |
 | Prove task-level enforcement | Your own OpenShell gateway: one allowed call, one denied outside the task, and a restart held until you approve it | [Quickstart](docs/quickstart.md) |
+| Run a NeMo Agent Toolkit agent in a sandbox | A NAT ReAct agent in OpenShell: its tool calls stay inside its task, and with NIM, the API key stays out of the sandbox | [NAT agent guide](docs/nat-agent.md) |
 | Add authorization to Agent Toolkit | Choose in-process function checks, OpenShell enforcement for MCP calls, or both | [Agent Toolkit guide](docs/agent-toolkit.md) |
 | See a human approval flow | A NeMo Agent Toolkit ReAct agent pauses a restart until an approver signs the exact call | [`examples/nemo-agent-toolkit/run.sh`](examples/nemo-agent-toolkit/README.md) |
 | Exercise the complete security model | Constraints, approval replay protection, holder binding, cross-runtime delegation, revocation, and signed receipts | [`make demo`](examples/demo/README.md) |

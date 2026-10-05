@@ -6,6 +6,43 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- [A NeMo Agent Toolkit agent in an OpenShell sandbox](docs/nat-agent.md), a
+  second guide that starts where the quickstart ends. A NAT 1.9 ReAct agent
+  runs in the sandbox with its MCP tools behind the Tenuo agent's proxy: a
+  read inside the task runs, one outside it is denied and the agent reads why,
+  and a restart is held until `approve --dev`, then runs once. It needs no
+  key; an optional section attaches an NVIDIA provider through an OpenShell
+  provider profile, so the agent uses NIM while the key stays out of the
+  sandbox. `make nat-agent` runs it, in both gateway modes, and the Linux
+  install workflow runs it on the deb (x86_64, arm64) and snap installs.
+- `ghcr.io/tenuo-ai/tenuo-openshell-nat-demo`: the guide's sandbox image. NAT
+  1.9 with the MCP client and LangChain ReAct agent (hash-pinned), the
+  `nemo-agent-toolkit-tenuo` plugin, the release's agent binary, the
+  workflows in `/etc/tenuo-nat`, and a scripted model. Released per platform
+  like the demo image; `scripts/build-nat-demo-image.sh` builds it locally.
+- `tenuo-openshell demo agent "<prompt>"`: runs the agent once in the sandbox
+  and prints each tool call with its outcome (`allowed`, `denied`, or `held`
+  with the `approve` command), then the agent's answer. `--workflow` picks
+  `scripted`, `scripted-plugin`, `nim`, or a NAT config file.
+- `dev up` also writes `nat-policy.yaml`: the demo sandbox policy with only
+  the Tenuo agent allowed to reach the MCP server.
+- `nemo-agent-toolkit-tenuo` middleware options for `nat run` and MCP tools:
+  `warrant_file` and `holder_key_file` read the warrant when no application
+  code binds one; `strip_function_group` checks `ops__read_logs` as the MCP
+  tool `read_logs`; and `approval_required: defer` hands a call that needs an
+  approval to the next stage, the Tenuo proxy, which records it for an
+  approver. Defaults are unchanged.
+
+### Changed
+
+- The NeMo Agent Toolkit example's scripted model follows the prompt (which
+  tools, which service and environment) instead of replaying one transcript,
+  and its NIM workflow uses `nvidia/nemotron-3-super-120b-a12b`:
+  `meta/llama-3.3-70b-instruct` reached end of life on NVIDIA's API on
+  2026-08-26.
+
 ## [0.1.5] - 2026-10-05
 
 ### Added

@@ -277,6 +277,7 @@ gateway, or the gateway will not start without the middleware.
 
 | Goal | Guide |
 | --- | --- |
+| Run a NeMo Agent Toolkit agent in the sandbox, with a scripted model or NIM | [A NAT agent in an OpenShell sandbox](nat-agent.md) |
 | Put your own agent under Tenuo | [Running an agent under Tenuo](sandbox-agent.md) |
 | Run the middleware with TLS, the gateway's JWT, and a signed policy | [Going to production](production-quickstart.md) |
 | Deploy it with Redis and Helm | [Deployment](deployment.md) and the [Helm chart](../deploy/helm/tenuo-openshell/README.md) |

@@ -1,0 +1,36 @@
+#!/bin/sh
+# tenuo-nat-run WORKFLOW PROMPT
+#
+# Run the NeMo Agent Toolkit workflow /etc/tenuo-nat/WORKFLOW.yml on PROMPT
+# with `nat run`. When the workflow uses the scripted model, start it on
+# 127.0.0.1:18080 first if it is not running; it keeps running for later
+# runs.
+set -eu
+if [ "$#" -ne 2 ]; then
+  echo "usage: tenuo-nat-run WORKFLOW PROMPT" >&2
+  exit 2
+fi
+case "$1" in
+  */*) config="$1" ;;
+  *) config="/etc/tenuo-nat/$1.yml" ;;
+esac
+[ -r "$config" ] || { echo "no workflow $config" >&2; exit 2; }
+
+up() {
+  python3 -c 'import socket; socket.create_connection(("127.0.0.1", 18080), 1)' 2>/dev/null
+}
+if grep -q '127.0.0.1:18080' "$config" && ! up; then
+  # Detached, and holding none of this command's output, so the exec that
+  # started it can end.
+  setsid python3 /usr/local/share/tenuo-nat/scripted_llm.py --port 18080 \
+    >/tmp/scripted-model.log 2>&1 </dev/null &
+  i=0
+  until up; do
+    i=$((i + 1))
+    [ "$i" -lt 50 ] || { echo "the scripted model did not start; see /tmp/scripted-model.log" >&2; exit 1; }
+    sleep 0.1
+  done
+fi
+# NAT writes nothing it needs to keep; run it where it may write.
+cd /tmp
+exec nat run --config_file "$config" --input "$2"

@@ -5,10 +5,13 @@ from __future__ import annotations
 import secrets
 from collections.abc import AsyncIterator
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
+from typing import Literal
 
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from nat.plugin_api import FunctionMiddleware
 from nat.plugin_api import FunctionMiddlewareBaseConfig
@@ -91,16 +94,71 @@ def argument_view(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, An
     raise AuthorizationDenied("invalid_request", _ref())
 
 
+def load_bound_warrant(warrant_file: str, holder_key_file: str) -> Any:
+    """Read a warrant or warrant stack and its holder key from files.
+
+    The warrant file holds base64 or PEM text, as ``tenuo-openshell-agent
+    install-warrant`` writes it. The key file holds the 32-byte holder key, raw
+    or as 64 hex characters, as ``tenuo-openshell-agent keygen`` writes it.
+    Returns the leaf warrant bound to the key, and the chain when it has more
+    than one warrant.
+    """
+    from tenuo import SigningKey
+    from tenuo import decode_warrant_stack_base64
+
+    chain = decode_warrant_stack_base64(Path(warrant_file).read_text().strip())
+    if not chain:
+        raise ValueError("the warrant file holds no warrant")
+    secret = Path(holder_key_file).read_bytes()
+    if len(secret) != 32:
+        secret = bytes.fromhex(secret.decode().strip())
+    bound = chain[-1].bind(SigningKey.from_bytes(secret))
+    return bound, (list(chain) if len(chain) > 1 else None)
+
+
 class TenuoMiddlewareConfig(FunctionMiddlewareBaseConfig, name="tenuo"):
     """Trusted issuer keys for the function middleware.
 
-    The task warrant is not part of this configuration. Application code binds
-    it with ``authority()`` for the current task.
+    Application code binds the task warrant with ``authority()`` for the
+    current task. Where no application code runs around the workflow, as with
+    ``nat run``, ``warrant_file`` and ``holder_key_file`` name the warrant to
+    use when none is bound.
     """
 
     trusted_roots: list[str] = Field(
         min_length=1,
         description="Hex-encoded 32-byte issuer public keys.",
+    )
+    warrant_file: str | None = Field(
+        default=None,
+        description=(
+            "Warrant or warrant stack file, read on every call when no task authority is bound, "
+            "for example the warrant tenuo-openshell-agent installs in an OpenShell sandbox. "
+            "Needs holder_key_file."
+        ),
+    )
+    holder_key_file: str | None = Field(
+        default=None,
+        description="Holder key of the warrant in warrant_file: 32 bytes, raw or hex.",
+    )
+    strip_function_group: bool = Field(
+        default=False,
+        description=(
+            "Check a function group's function by its name in the group (read_logs) instead of "
+            "its qualified name (ops__read_logs), so a warrant that names MCP tools applies to an "
+            "mcp_client function group. Use it only on MCP function groups: it drops the first "
+            "group__ prefix, so other__read_logs on another function would be checked as read_logs."
+        ),
+    )
+    approval_required: Literal["raise", "defer"] = Field(
+        default="raise",
+        description=(
+            "raise stops a call that needs an approval with ApprovalRequired. defer passes it to "
+            "the next stage, for MCP tools behind tenuo-openshell-agent proxy, which records the "
+            "request for an approver and attaches the approval; the OpenShell middleware enforces "
+            "it. Calls the warrant does not allow stop here either way. A deferred call that "
+            "reaches a server which does not check warrants runs without an approval."
+        ),
     )
 
     @field_validator("trusted_roots")
@@ -109,24 +167,60 @@ class TenuoMiddlewareConfig(FunctionMiddlewareBaseConfig, name="tenuo"):
         parse_trusted_roots(value)
         return value
 
+    @model_validator(mode="after")
+    def _files_together(self) -> "TenuoMiddlewareConfig":
+        if (self.warrant_file is None) != (self.holder_key_file is None):
+            raise ValueError("warrant_file and holder_key_file go together")
+        return self
+
 
 class TenuoFunctionMiddleware(FunctionMiddleware):
     """Check the task warrant, then call the next stage once on allow."""
 
-    def __init__(self, *, trusted_roots: Sequence[Any]) -> None:
+    def __init__(
+        self,
+        *,
+        trusted_roots: Sequence[Any],
+        warrant_file: str | None = None,
+        holder_key_file: str | None = None,
+        strip_function_group: bool = False,
+        approval_required: Literal["raise", "defer"] = "raise",
+    ) -> None:
         super().__init__()
         if not trusted_roots:
             raise ValueError("trusted_roots must not be empty")
+        if (warrant_file is None) != (holder_key_file is None):
+            raise ValueError("warrant_file and holder_key_file go together")
+        if approval_required not in ("raise", "defer"):
+            raise ValueError("approval_required is raise or defer")
         self._trusted_roots = list(trusted_roots)
+        self._files = (warrant_file, holder_key_file) if warrant_file and holder_key_file else None
+        self._strip_function_group = strip_function_group
+        self._defer_approvals = approval_required == "defer"
+
+    def _authority(self) -> tuple[Any, list[Any] | None]:
+        bound = current_bound()
+        if bound is not None:
+            return bound, None
+        if self._files is None:
+            raise AuthorizationDenied("missing_warrant", _ref())
+        try:
+            return load_bound_warrant(*self._files)
+        except Exception:
+            raise AuthorizationDenied("missing_warrant", _ref()) from None
 
     def _authorize(self, args: tuple[Any, ...], kwargs: dict[str, Any], context: FunctionMiddlewareContext) -> None:
         name = context.name
         if not isinstance(name, str) or not name:
             raise AuthorizationDenied("invalid_request", _ref())
+        if self._strip_function_group:
+            from nat.builder.function import FunctionGroup
+
+            name = name.split(FunctionGroup.SEPARATOR, 1)[-1]
+            if not name:
+                raise AuthorizationDenied("invalid_request", _ref())
         arguments = argument_view(args, kwargs)
-        bound = current_bound()
-        if bound is None:
-            raise AuthorizationDenied("missing_warrant", _ref())
+        bound, chain = self._authority()
 
         from tenuo import ApprovalRequired as TenuoApprovalRequired
         from tenuo import enforce_tool_call
@@ -137,19 +231,23 @@ class TenuoFunctionMiddleware(FunctionMiddleware):
                 arguments,
                 bound,
                 trusted_roots=self._trusted_roots,
+                warrant_chain=chain,
             )
         except TenuoApprovalRequired:
-            raise ApprovalRequired(_ref()) from None
+            category = "approval_required"
         except Exception:
             raise AuthorizationDenied("verifier_failed", _ref()) from None
+        else:
+            if result.allowed:
+                return
+            category = _CATEGORIES.get(result.error_type or "", "verifier_failed")
 
-        if result.allowed:
-            return
-        category = _CATEGORIES.get(result.error_type or "", "verifier_failed")
-        ref = _ref()
-        if category == "approval_required":
-            raise ApprovalRequired(ref)
-        raise AuthorizationDenied(category, ref)
+        if category != "approval_required":
+            raise AuthorizationDenied(category, _ref())
+        # The next stage records the request for an approver and enforces the
+        # approval; this one cannot see approvals.
+        if not self._defer_approvals:
+            raise ApprovalRequired(_ref())
 
     async def function_middleware_invoke(
         self,

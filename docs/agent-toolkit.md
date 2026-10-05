@@ -37,6 +37,13 @@ paths. A deterministic OpenAI-compatible model stub makes the outcome
 repeatable. Set `NVIDIA_API_KEY` and `TENUO_EXAMPLE_LIVE=1` to run the same
 workflow with a hosted NIM model.
 
+## Run the agent in an OpenShell sandbox
+
+[A NeMo Agent Toolkit agent in an OpenShell sandbox](nat-agent.md) runs the
+same ReAct workflow inside a sandbox on your own OpenShell gateway, with a
+scripted model or with NIM through an OpenShell provider, and with or without
+the in-process plugin.
+
 ## Add the in-process plugin
 
 For an Agent Toolkit application, PyPI is the recommended installation path:

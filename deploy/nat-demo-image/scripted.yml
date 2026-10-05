@@ -1,7 +1,9 @@
-# The same agent with a scripted model, so the example runs without an API key.
-# scripted_llm.py serves an OpenAI-compatible endpoint that follows the
-# prompt: for run.sh's "Investigate and fix it", it reads the logs, asks for a
-# restart, then answers.
+# NeMo Agent Toolkit ReAct agent on the scripted model. The model runs on
+# loopback in the sandbox (tenuo-nat-run starts it), so no key is needed.
+#
+# The agent's MCP tools go through the Tenuo agent's proxy on loopback, which
+# signs each tools/call with the sandbox's holder key. There is no Tenuo code
+# in this configuration.
 
 function_groups:
   ops:
@@ -23,4 +25,5 @@ workflow:
   tool_names: [ops]
   llm_name: scripted
   verbose: true
+  # A denial is an observation the agent can act on, not a crash.
   pass_tool_call_errors_to_agent: true

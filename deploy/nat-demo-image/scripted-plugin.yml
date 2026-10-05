@@ -1,0 +1,46 @@
+# scripted.yml with the nemo-agent-toolkit-tenuo plugin on the MCP tools. The
+# plugin checks each call against the sandbox's warrant inside the agent,
+# before the call reaches the Tenuo agent's proxy:
+#
+# - trusted_roots: the issuer whose warrants it accepts. TENUO_TRUSTED_ROOT
+#   is its public key as hex; `tenuo-openshell demo agent` passes the dev
+#   issuer's.
+# - warrant_file, holder_key_file: the warrant and holder key that
+#   `tenuo-openshell provision` installed in the sandbox, read on every call.
+#   `nat run` has no application code to bind a task's warrant.
+# - strip_function_group: check ops__read_logs as read_logs, the MCP tool
+#   name the warrant uses.
+# - approval_required: defer: hand a call that needs an approval on to the
+#   proxy, which records the request for an approver.
+
+middleware:
+  tenuo:
+    _type: tenuo
+    trusted_roots: ["${TENUO_TRUSTED_ROOT}"]
+    warrant_file: ${HOME}/.tenuo/warrant
+    holder_key_file: ${HOME}/.tenuo/holder.key
+    strip_function_group: true
+    approval_required: defer
+
+function_groups:
+  ops:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: http://127.0.0.1:7415/mcp
+    middleware: [tenuo]
+
+llms:
+  scripted:
+    _type: openai
+    base_url: http://127.0.0.1:18080/v1
+    api_key: not-used
+    model_name: scripted
+    temperature: 0.0
+
+workflow:
+  _type: react_agent
+  tool_names: [ops]
+  llm_name: scripted
+  verbose: true
+  pass_tool_call_errors_to_agent: true

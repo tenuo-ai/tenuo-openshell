@@ -1,15 +1,17 @@
 name: Linux install
 
-# Runs docs/quickstart.md against OpenShell installed with OpenShell's own
-# install.sh on GitHub's Ubuntu runners, as a Linux user installs it: the deb
-# package and its systemd user service on x86_64 and arm64, and the snap.
-# `make quickstart` in its default mode stands in for the installer; this
-# workflow checks the real thing. It is not a required check.
+# Runs docs/quickstart.md, then docs/nat-agent.md, against OpenShell
+# installed with OpenShell's own install.sh on GitHub's Ubuntu runners, as a
+# Linux user installs it: the deb package and its systemd user service on
+# x86_64 and arm64, and the snap. `make quickstart` and `make nat-agent` in
+# their default mode stand in for the installer; this workflow checks the real
+# thing. It is not a required check.
 
 on:
   pull_request:
     paths:
       - docs/quickstart.md
+      - docs/nat-agent.md
       - Cargo.lock
       - Cargo.toml
       - build.rs
@@ -17,10 +19,14 @@ on:
       - agent/**
       - proto/**
       - deploy/demo-image/**
+      - deploy/nat-demo-image/**
+      - python/nemo-agent-toolkit-tenuo/**
+      - examples/nemo-agent-toolkit/scripted_llm.py
       - .dockerignore
       - Dockerfile
       - scripts/quickstart-check.sh
       - scripts/build-demo-image.sh
+      - scripts/build-nat-demo-image.sh
       - .github/workflows/linux-install.yml
   schedule:
     - cron: "41 6 * * 1"
@@ -103,22 +109,34 @@ jobs:
         if: env.BUILD == 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: env.BUILD == 'true'
-      - name: Build the CLI, the middleware image, and the demo image
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        if: env.BUILD == 'true'
+        with:
+          python-version: "3.12"
+      - name: Build the CLI and the images
         if: env.BUILD == 'true'
         run: |
           cargo build --release --locked --bin tenuo-openshell
           docker build -q -t tenuo-openshell:candidate .
           scripts/build-demo-image.sh tenuo-openshell-demo:candidate
+          scripts/build-nat-demo-image.sh tenuo-openshell-nat-demo:candidate tenuo-openshell-demo:candidate
+          docker image ls tenuo-openshell-nat-demo:candidate
           {
             echo "TENUO_QS_CLI=$PWD/target/release/tenuo-openshell"
             echo "TENUO_QS_MIDDLEWARE_IMAGE=tenuo-openshell:candidate"
             echo "TENUO_QS_DEMO_IMAGE=tenuo-openshell-demo:candidate"
+            echo "TENUO_QS_NAT_IMAGE=tenuo-openshell-nat-demo:candidate"
           } >>"$GITHUB_ENV"
 
       - name: Run the quickstart against the installed gateway
         env:
           TENUO_QS_GATEWAY: installed
         run: make quickstart
+
+      - name: Run the NeMo Agent Toolkit guide against the installed gateway
+        env:
+          TENUO_QS_GATEWAY: installed
+        run: make nat-agent
 
       - name: Collect logs
         if: failure()
@@ -139,7 +157,7 @@ jobs:
           done
           docker ps -a >logs/docker-ps.txt 2>&1 || true
           openshell sandbox list >logs/sandboxes.txt 2>&1 || true
-          for sandbox in install-check tenuo-demo; do
+          for sandbox in install-check tenuo-demo tenuo-nat; do
             openshell logs "$sandbox" -n 500 >"logs/openshell-$sandbox.log" 2>&1 || true
           done
 

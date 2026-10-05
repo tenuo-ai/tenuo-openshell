@@ -202,8 +202,92 @@ jobs:
           path: digests/*
           if-no-files-found: error
 
+  # The NeMo Agent Toolkit sandbox image (deploy/nat-demo-image), for
+  # docs/nat-agent.md. Like the demo image, it holds the attested agent binary
+  # and builds natively per platform, pushed by digest only; verify-and-build
+  # tags it after the release environment is approved. Its Python packages
+  # are pinned with hashes in deploy/nat-demo-image/requirements.txt.
+  nat-demo-image:
+    name: NAT demo image (${{ matrix.platform }})
+    needs: binaries
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Require an exact version tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: test "$(git describe --tags --exact-match)" = "$TAG"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binaries-${{ matrix.target }}
+          path: binaries
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - name: Stage the NAT demo image
+        env:
+          TAG: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "nat-demo-image/$ARCH"
+          tar -xzf "binaries/tenuo-openshell-agent-$TAG-$TARGET.tar.gz" -C "nat-demo-image/$ARCH" tenuo-openshell-agent
+          uv build --wheel --project python/nemo-agent-toolkit-tenuo --out-dir nat-demo-image
+          cp LICENSE examples/nemo-agent-toolkit/scripted_llm.py deploy/nat-demo-image/Dockerfile \
+            deploy/nat-demo-image/requirements.txt deploy/nat-demo-image/tenuo-nat-run \
+            deploy/nat-demo-image/scripted.yml deploy/nat-demo-image/scripted-plugin.yml \
+            deploy/nat-demo-image/nim.yml nat-demo-image/
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: inputs.publish
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: nat-demo-image
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ inputs.tag }}
+            REVISION=${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          outputs: type=image,name=ghcr.io/tenuo-ai/tenuo-openshell-nat-demo,push-by-digest=true,name-canonical=true,push=${{ inputs.publish }}
+      - if: inputs.publish
+        name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - if: inputs.publish
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nat-demo-image-digest-${{ strategy.job-index }}
+          path: digests/*
+          if-no-files-found: error
+
   verify-and-build:
-    needs: [binaries, image, demo-image]
+    needs: [binaries, image, demo-image, nat-demo-image]
     runs-on: ubuntu-latest
     environment: release
     services:
@@ -348,6 +432,28 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - if: inputs.publish
         run: cosign sign --yes "ghcr.io/tenuo-ai/tenuo-openshell-demo@${{ steps.demo-image.outputs.digest }}"
+      - if: inputs.publish
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: nat-demo-image-digest-*
+          path: nat-demo-image-digests
+          merge-multiple: true
+      - if: inputs.publish
+        id: nat-demo-image
+        name: Tag the multi-platform NAT demo image
+        env:
+          IMAGE: ghcr.io/tenuo-ai/tenuo-openshell-nat-demo
+          TAG: ${{ inputs.tag }}
+        working-directory: nat-demo-image-digests
+        run: |
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          test "${#sources[@]}" -eq 2
+          docker buildx imagetools create -t "$IMAGE:$TAG" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - if: inputs.publish
+        run: cosign sign --yes "ghcr.io/tenuo-ai/tenuo-openshell-nat-demo@${{ steps.nat-demo-image.outputs.digest }}"
       - if: inputs.publish
         id: chart
         name: Push the Helm chart to GHCR

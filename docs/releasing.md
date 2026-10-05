@@ -9,14 +9,18 @@ have notes in `CHANGELOG.md`. It then runs `make check` and builds:
 - the Helm chart;
 - the operator and sandbox binaries;
 - the multi-platform middleware image;
-- the agent image, from the same sandbox binaries; and
-- the multi-platform demo image for the quickstart, also from those binaries.
+- the agent image, from the same sandbox binaries;
+- the multi-platform demo image for the quickstart, also from those binaries;
+  and
+- the multi-platform NeMo Agent Toolkit demo image for
+  [the NAT guide](nat-agent.md), from those binaries, the plugin wheel, and
+  the hash-pinned packages in `deploy/nat-demo-image/requirements.txt`.
 
 It attests the build provenance of all of them.
 
 - `publish=false` is a dry run. The artifacts stay in the workflow run.
 - `publish=true` also pushes and signs the middleware image, the agent image,
-  the demo image, and the Helm chart (as `oci://ghcr.io/tenuo-ai/charts/tenuo-openshell`) on
+  the demo image, the NAT demo image, and the Helm chart (as `oci://ghcr.io/tenuo-ai/charts/tenuo-openshell`) on
   GHCR, signs the binary archives, publishes the Python package to PyPI, and creates the GitHub
   release from the `CHANGELOG.md` section.
 
@@ -39,7 +43,7 @@ Before the first `publish=true` run:
    `git config gpg.format ssh`, `git config user.signingkey <key>`.
 4. **GHCR packages.** After the first push of each package
    (`tenuo-openshell`, `tenuo-openshell-agent`, `tenuo-openshell-demo`,
-   `charts/tenuo-openshell`),
+   `tenuo-openshell-nat-demo`, `charts/tenuo-openshell`),
    open its package settings:
    - link the package to this repository;
    - set it to public when the repository is public.
@@ -72,8 +76,8 @@ Before the first `publish=true` run:
 8. Download the dry run's `release-artifacts`, and check the wheel, chart, and
    archives. Then dispatch again with `-f publish=true` and approve the
    `release` environment.
-9. Run `make quickstart` and `make production-quickstart` using only public
-   artifacts, then verify signatures,
+9. Run `make quickstart`, `make nat-agent`, and `make production-quickstart`
+   using only public artifacts, then verify signatures,
    checksums, plugin discovery, secure startup, one allowed call, and negative
    authorization cases.
 
@@ -90,6 +94,21 @@ TENUO_QS_CLI=target/release/tenuo-openshell \
   TENUO_QS_DEMO_IMAGE=tenuo-openshell-demo:candidate \
   make quickstart
 ```
+
+The NAT guide adds its image:
+
+```bash
+scripts/build-nat-demo-image.sh tenuo-openshell-nat-demo:candidate
+TENUO_QS_CLI=target/release/tenuo-openshell \
+  TENUO_QS_MIDDLEWARE_IMAGE=tenuo-openshell:candidate \
+  TENUO_QS_DEMO_IMAGE=tenuo-openshell-demo:candidate \
+  TENUO_QS_NAT_IMAGE=tenuo-openshell-nat-demo:candidate \
+  make nat-agent
+```
+
+Its NIM section needs an NVIDIA API key and is checked by hand: follow
+[section 4](nat-agent.md#4-use-a-real-nvidia-model) of the guide with a real
+key, and confirm a completion and one held restart.
 
 ## Release binaries
 
