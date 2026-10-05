@@ -22,6 +22,8 @@ so it needs no model or API key.
 
 - OpenShell installed with its install script, and its local gateway running:
   `openshell sandbox create` works. The gateway uses the Docker driver.
+- On macOS, Docker Desktop with host networking on (Settings → Resources →
+  Network). OpenShell needs it for any sandbox, with or without Tenuo.
 - macOS on Apple silicon, or Linux on x86_64 or arm64.
 - About 300 MB of image downloads.
 
@@ -84,6 +86,11 @@ the middleware. `dev up` never edits your OpenShell installation.
 | Linux | `systemctl --user restart openshell-gateway` |
 
 <!-- check: register-gateway -->
+
+The gateway log then warns that extension authentication is disabled for this
+registration. That is development mode: the middleware accepts calls without
+OpenShell's credential. [Going to production](production-quickstart.md)
+registers it over TLS with the gateway's JWT.
 
 The gateway contacts the middleware when it starts, so start Tenuo first.
 
@@ -185,8 +192,8 @@ held     restart_service(service=payments, environment=staging, replicas=3): wai
 ```
 
 Approve it. `approve` checks the pending request against the warrant, shows
-the call, and asks before it signs. With one request pending, `--request` can
-be left out:
+the call, and asks before it signs; `--yes` skips the question in a script.
+With one request pending, `--request` can be left out:
 
 ```bash
 tenuo-openshell approve --dev --sandbox tenuo-demo
