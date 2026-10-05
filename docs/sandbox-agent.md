@@ -12,6 +12,9 @@ agent's MCP client ──► tenuo-openshell-agent proxy (127.0.0.1:7415)
                        OpenShell ──► Tenuo middleware ──► MCP server
 ```
 
+To see the whole path work first, from released artifacts and a throwaway
+gateway, run the [quickstart](quickstart.md).
+
 Two binaries are involved:
 
 | Binary | Runs | Purpose |
