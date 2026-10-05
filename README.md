@@ -214,15 +214,15 @@ Deploy the middleware with the Helm chart. See the
 
 ```bash
 helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
-  --version 0.1.3 -f values.yaml
+  --version 0.1.4 -f values.yaml
 ```
 
-Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.3`.
+Or run the image directly: `ghcr.io/tenuo-ai/tenuo-openshell:v0.1.4`.
 
 Add the agent to your sandbox image:
 
 ```dockerfile
-COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.3 \
+COPY --from=ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.4 \
   /usr/local/bin/tenuo-openshell-agent /usr/local/bin/
 ```
 
@@ -249,10 +249,10 @@ To build from source instead, run `cargo build --release --locked --bins`.
 ## Security scope
 
 Tenuo authorizes MCP Streamable HTTP traffic that crosses the configured
-middleware binding. OpenShell network policy closes the other paths. In
-v0.1.2, the middleware does not see `tls: skip` endpoints, raw TCP, binary
-WebSocket frames, or server-to-client WebSocket messages, so deny those routes
-to protected servers.
+middleware binding. OpenShell network policy closes the other paths. With
+the pinned OpenShell v0.1.2, the middleware does not see `tls: skip` endpoints,
+raw TCP, binary WebSocket frames, or server-to-client WebSocket messages, so
+deny those routes to protected servers.
 
 The warrant bounds what a compromised agent can do; it does not judge intent.
 Narrow warrants, approvals, and short lifetimes are the controls for that. The

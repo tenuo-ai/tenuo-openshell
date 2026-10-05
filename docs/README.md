@@ -43,7 +43,6 @@ task authority work.
 | Attackers, controls, and residual risk | [Threat model](threat-model.md) |
 | Supported OpenShell extension contract | [Upstream verification](upstream-verification.md) |
 | Protocol coverage and known gaps | [OpenShell gap analysis](openshell-gap-analysis.md) |
-| Wire behavior and reason codes | [Integration specification](spec.md) |
 
 For repository setup, testing, and pull-request expectations, see
 [Contributing](../CONTRIBUTING.md).

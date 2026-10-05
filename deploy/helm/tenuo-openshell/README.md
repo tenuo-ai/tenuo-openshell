@@ -9,7 +9,7 @@ Install from GHCR:
 
 ```bash
 helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
-  --version 0.1.3 -f values.yaml
+  --version 0.1.4 -f values.yaml
 ```
 
 The chart and its default image, `ghcr.io/tenuo-ai/tenuo-openshell`, are signed
