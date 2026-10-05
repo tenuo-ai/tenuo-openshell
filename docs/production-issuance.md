@@ -144,27 +144,17 @@ Tenuo verifies standard RFC 8032 Ed25519 (PureEdDSA) signatures over a byte
 string Tenuo builds itself. A signer that holds the key elsewhere has to sign
 those exact bytes, unhashed. Ed25519ph (prehash) signatures do not verify.
 
-Tenuo core 0.3.2 supports this for only some operations:
+Tenuo core documents its signing APIs and its key-management levels, from an
+embedded key to an isolated signing service to a hardware root of trust. See
+[Control plane deployment models](https://github.com/tenuo-ai/tenuo/blob/main/docs/security.md#control-plane-deployment-models)
+and the [API reference](https://github.com/tenuo-ai/tenuo/blob/main/docs/api-reference.md).
+For this integration:
 
-| Operation | API in `tenuo` 0.3.2 | Key held elsewhere? |
-| --- | --- | --- |
-| Mint a root warrant | `WarrantBuilder::build(self, &SigningKey)`. `IssuanceBuilder::build` and `OwnedIssuanceBuilder::build` also take `&SigningKey`. The payload's `issuer` comes from `signing_key.public_key()`. | No |
-| Attenuate (Rust) | `AttenuationBuilder::prepare() -> PreparedDelegation`, then `final_signing_bytes()` and `finalize(Signature)`. `finalize` verifies the signature against the parent holder. `build(&SigningKey)` is sugar over these. | **Yes** |
-| Attenuate (SDK) | `HolderSigner::sign_delegation(&DelegationSigningRequest)`, used by `PresentedAuthority::delegate_to` | **Yes**, synchronously |
-| Attenuate (Python, TypeScript) | `Warrant.attenuate(signing_key=...)` and `OwnedAttenuationBuilder::build(&SigningKey)` | No |
-| Proof of possession | `HolderSigner::sign_pop`, `AsyncHolderSigner::sign_pop` | Yes. Not needed here: the holder key belongs in the sandbox. |
-| Approve | `SignedApproval::create(ApprovalPayload, &SigningKey)`, `sdk::approve_request(.., &SigningKey, ..)`, `LocalApprovalSigner::new(SigningKey, ..)`. The approval preimage builder is private. | No |
-| Signed revocation list | `SrlBuilder::build(self, &SigningKey)`, `SignedRevocationList::empty(&SigningKey)`. The fields are private. | No |
-| Receipt | The `ReceiptSigner` trait in the SDK runtime. `Receipt::signing_preimage` and the `Receipt` fields are public. This repository's `ReceiptLog` still calls `Receipt::create(&ReceiptPayload, &SigningKey)`. | Yes |
-| Python `SigningKey` | Built from bytes or a file, in process | n/a |
-
-So with core 0.3.2:
-
-- An orchestrator written in Rust can keep its parent-holder key in a KMS
-  today, using `prepare` and `finalize`.
-- Root issuance, approvals, and SRLs need a core change before a KMS or HSM
-  can sign them. [docs/upstream/core-external-signer.md](upstream/core-external-signer.md)
-  is the proposal.
+- Tenuo Cloud holds issuer keys in a KMS for you.
+- An orchestrator that attenuates in Rust can keep its parent-holder key in a
+  KMS, through core's prepare and finalize delegation API.
+- The `tenuo-openshell` CLI reads issuer, parent, and approver keys from
+  files. Run it on the isolated issuance host described above.
 
 Ed25519 support across key services, checked against vendor documentation on
 2026-10-04:
