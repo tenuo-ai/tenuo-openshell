@@ -5,17 +5,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import io
 import json
-import time
-import uuid
 
-import httpx
 import uvicorn
 
-from tenuo import SigningKey, Warrant, encode_warrant_stack
-from tenuo.a2a import A2AServer
+from tenuo import SigningKey, Warrant
+from tenuo.a2a import A2AClient, A2AServer
+from tenuo.a2a.errors import A2AError
 
 
 async def run(port: int) -> dict:
@@ -79,39 +76,19 @@ async def run(port: int) -> dict:
         else:
             raise RuntimeError("A2A server did not start")
 
-        # tenuo.a2a.A2AClient.send_task sends the same stack, but in 0.3.2 its
-        # proof-of-possession path imports tenuo_core.ConstraintValue, which
-        # does not exist. See README.md.
-        async def send(warrant: Warrant, skill: str, arguments: dict, message: str) -> dict:
-            stack = encode_warrant_stack([parent_warrant, warrant])
-            signature = warrant.sign(worker, skill, arguments, int(time.time()))
-            task_id = str(uuid.uuid4())
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"http://127.0.0.1:{port}/a2a",
-                    headers={
-                        "X-Tenuo-Warrant": stack,
-                        "X-Tenuo-PoP": base64.urlsafe_b64encode(bytes(signature)).decode("ascii"),
-                    },
-                    json={
-                        "jsonrpc": "2.0",
-                        "method": "task/send",
-                        "params": {
-                            "task": {
-                                "id": task_id,
-                                "message": {
-                                    "role": "user",
-                                    "parts": [{"type": "text", "text": message}],
-                                },
-                                "skill": skill,
-                                "arguments": arguments,
-                            }
-                        },
-                        "id": 1,
-                    },
-                )
-            response.raise_for_status()
-            return response.json()
+        # The client sends the parent and child as one warrant stack and signs
+        # the proof of possession with the worker's key.
+        client = A2AClient(f"http://127.0.0.1:{port}")
+
+        async def send(warrant: Warrant, skill: str, arguments: dict, message: str):
+            return await client.send_task(
+                message=message,
+                warrant=warrant,
+                skill=skill,
+                arguments=arguments,
+                warrant_chain=[parent_warrant],
+                signing_key=worker,
+            )
 
         read = await send(
             child_warrant,
@@ -119,14 +96,18 @@ async def run(port: int) -> dict:
             {"service": "payments", "environment": "staging"},
             "Read the staging payments log",
         )
-        restart = await send(
-            denied_warrant,
-            "restart_service",
-            {"service": "payments", "environment": "staging", "replicas": 3},
-            "Restart the staging payments service",
-        )
-        error_text = json.dumps(restart.get("error", {})).lower()
-        if "skill_not_granted" not in error_text and "not granted" not in error_text:
+        try:
+            await send(
+                denied_warrant,
+                "restart_service",
+                {"service": "payments", "environment": "staging", "replicas": 3},
+                "Restart the staging payments service",
+            )
+        except A2AError as error:
+            denial = f"{error} {getattr(error, 'data', '')}".lower()
+            if "skill_not_granted" not in denial and "not granted" not in denial:
+                raise RuntimeError(f"restart_service was denied for another reason: {error}") from error
+        else:
             raise RuntimeError("attenuated A2A warrant did not deny restart_service")
         if effects != ["read:payments:staging"]:
             raise RuntimeError(f"unexpected A2A effects: {effects}")
@@ -134,11 +115,12 @@ async def run(port: int) -> dict:
             "transport": "a2a-jsonrpc-http",
             "proof_of_possession": True,
             "chain_depth": child_warrant.depth,
-            "read_output": read["result"]["output"],
+            "read_output": read.output,
             "restart_outcome": "denied-before-skill",
             "effects": effects,
         }
     finally:
+        await client.close()
         uvicorn_server.should_exit = True
         await task
 

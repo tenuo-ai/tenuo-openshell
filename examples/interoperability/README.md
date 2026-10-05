@@ -8,13 +8,8 @@ distributed products or stable public APIs.
 stack and child-holder proof over JSON-RPC HTTP, allows `read_logs`, and denies
 `restart_service` before the skill runs.
 
-The proof builds the request from Tenuo's public pieces:
-
-- `tenuo.encode_warrant_stack` produces the `X-Tenuo-Warrant` header;
-- `Warrant.sign` produces the `X-Tenuo-PoP` header; and
-- the server performs all of the authorization.
-
-It does not use `tenuo.a2a.A2AClient`, because the client's proof-of-possession
-signing fails in Tenuo 0.3.2
-([tenuo-ai/tenuo#779](https://github.com/tenuo-ai/tenuo/issues/779)). Once
-that fix ships, the client sends the same request.
+The proof uses Tenuo's public A2A client and server. `A2AClient.send_task`
+sends the parent and child warrants as one `X-Tenuo-Warrant` stack and signs
+the `X-Tenuo-PoP` proof with the worker's key. The server does all of the
+authorization. It needs Tenuo 0.3.3 or later; earlier clients failed to sign
+the proof ([tenuo-ai/tenuo#779](https://github.com/tenuo-ai/tenuo/issues/779)).
