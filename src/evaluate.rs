@@ -819,6 +819,31 @@ mod tests {
         assert_eq!(outcome.reason_code, reason::VERIFIER_FAILED);
     }
 
+    #[test]
+    fn an_empty_policy_denies_every_request() {
+        let policy = PolicySet::from_json(
+            br#"{"version": 1, "max_warrant_lifetime_secs": 300, "sandboxes": {}}"#,
+        )
+        .unwrap();
+        let issuer = SigningKey::generate();
+        let holder = SigningKey::generate();
+        let issued = warrant(&issuer, &holder, "read_logs");
+        let arguments = json!({"service": "payments"});
+        let signed = tools_call(
+            "read_logs",
+            arguments.clone(),
+            Some(sign(&issued, &holder, "read_logs", &arguments)),
+        );
+        let init: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        for body in [signed.as_slice(), init, b""] {
+            for sandbox in ["sbx", ""] {
+                let outcome = evaluate(&policy, sandbox, true, body, MetaMode::Strip, None);
+                assert!(!outcome.allow);
+                assert_eq!(outcome.reason_code, reason::VERIFIER_FAILED);
+            }
+        }
+    }
+
     fn scoped_warrant(issuer: &SigningKey, holder: &SigningKey, restart: bool) -> Warrant {
         let mut read = ConstraintSet::new();
         read.insert("service", Exact::new("payments"));

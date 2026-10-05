@@ -189,6 +189,25 @@ pub fn error_response(
     needs_approval: bool,
     source: &str,
 ) -> Vec<u8> {
+    error_response_with(id, code, message, needs_approval, source, None)
+}
+
+/// `error_response` with `extra` fields merged into `data.tenuo`.
+pub fn error_response_with(
+    id: &Value,
+    code: &str,
+    message: &str,
+    needs_approval: bool,
+    source: &str,
+    extra: Option<serde_json::Map<String, Value>>,
+) -> Vec<u8> {
+    let mut tenuo = serde_json::Map::new();
+    tenuo.insert("code".into(), json!(code));
+    tenuo.insert("message".into(), json!(message));
+    tenuo.insert("source".into(), json!(source));
+    for (key, value) in extra.into_iter().flatten() {
+        tenuo.entry(key).or_insert(value);
+    }
     let (number, title) = if needs_approval {
         (APPROVAL_REQUIRED, "Approval required")
     } else {
@@ -201,7 +220,7 @@ pub fn error_response(
             "code": number,
             // Many MCP clients surface only `message`, so it names the reason.
             "message": format!("{title}: {message}"),
-            "data": {"tenuo": {"code": code, "message": message, "source": source}}
+            "data": {"tenuo": tenuo}
         }
     }))
     .unwrap_or_default()

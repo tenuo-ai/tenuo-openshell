@@ -81,7 +81,12 @@ impl Telemetry {
             .fetch_add(count, Ordering::Relaxed);
     }
 
-    pub fn prometheus(&self, policy_version: u64, reload_failures: u64) -> String {
+    pub fn prometheus(
+        &self,
+        policy_version: u64,
+        policy_sandboxes: usize,
+        reload_failures: u64,
+    ) -> String {
         format!(
             concat!(
                 "# TYPE tenuo_openshell_decisions_total counter\n",
@@ -93,6 +98,8 @@ impl Telemetry {
                 "tenuo_openshell_decision_microseconds_total {}\n",
                 "# TYPE tenuo_openshell_policy_version gauge\n",
                 "tenuo_openshell_policy_version {}\n",
+                "# TYPE tenuo_openshell_policy_sandboxes gauge\n",
+                "tenuo_openshell_policy_sandboxes {}\n",
                 "# TYPE tenuo_openshell_policy_reload_failures_total counter\n",
                 "tenuo_openshell_policy_reload_failures_total {}\n",
                 "# TYPE tenuo_openshell_results_total counter\n",
@@ -110,6 +117,7 @@ impl Telemetry {
             self.verifier_failures.load(Ordering::Relaxed),
             self.decision_us.load(Ordering::Relaxed),
             policy_version,
+            policy_sandboxes,
             reload_failures,
             self.results_delivered.load(Ordering::Relaxed),
             self.results_blocked.load(Ordering::Relaxed),

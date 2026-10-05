@@ -1,6 +1,8 @@
 //! Operator commands for Tenuo on NVIDIA OpenShell.
 //!
 //! ```text
+//! tenuo-openshell keygen --out issuer.key --public-out issuer.pub
+//! tenuo-openshell policy init --policy policy.json
 //! tenuo-openshell policy add --policy policy.json --sandbox-id <id> \
 //!     --trusted-root <hex> --mcp https://mcp.internal/mcp --tools read_logs
 //! tenuo-openshell register --middleware-endpoint https://tenuo:50051 \
@@ -9,7 +11,7 @@
 //!     --capabilities caps.json --ttl 3600
 //! ```
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +40,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create an Ed25519 key: an issuer, approver, or policy signing key.
+    /// Prints the public key in the form `--trusted-root` and
+    /// `--policy-signing-key` accept.
+    Keygen(KeygenArgs),
     /// Edit the middleware trust policy.
     #[command(subcommand)]
     Policy(PolicyCommand),
@@ -57,14 +63,31 @@ enum Command {
 
 #[derive(Subcommand)]
 enum PolicyCommand {
+    /// Create a policy that trusts no sandboxes. The middleware starts on it
+    /// and denies every request until `policy add` adds a sandbox.
+    Init(PolicyInitArgs),
     /// Add a sandbox, trust root, or MCP destination. Creates the file if needed
     /// and increments its version.
     Add(PolicyAddArgs),
     /// Write `<policy>.sig` over the exact policy bytes.
     Sign(PolicySignArgs),
-    /// Create a policy signing key and print its public key, the value for
-    /// the middleware's `--policy-signing-key`.
-    Keygen(PolicyKeygenArgs),
+    /// Same as `tenuo-openshell keygen`.
+    #[command(hide = true)]
+    Keygen(KeygenArgs),
+}
+
+#[derive(Args)]
+struct PolicyInitArgs {
+    /// Policy file to create. An existing file is never overwritten.
+    #[arg(long)]
+    policy: PathBuf,
+    /// Longest warrant lifetime the middleware accepts, in seconds.
+    #[arg(long, default_value_t = 3600)]
+    max_warrant_lifetime_secs: u64,
+    /// Also sign the written policy with this key, writing `<policy>.sig`.
+    /// The key is a secret from `tenuo-openshell keygen`.
+    #[arg(long, value_name = "KEY")]
+    sign_with: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -94,14 +117,22 @@ struct PolicyAddArgs {
     /// Maximum warrant lifetime for a new policy file.
     #[arg(long, default_value_t = 3600)]
     max_warrant_lifetime_secs: u64,
+    /// Also sign the written policy with this key, writing `<policy>.sig`.
+    /// The key is a secret from `tenuo-openshell keygen`.
+    #[arg(long, value_name = "KEY")]
+    sign_with: Option<PathBuf>,
 }
 
 #[derive(Args)]
-struct PolicyKeygenArgs {
+struct KeygenArgs {
     /// File to create for the secret key, as 64 hex characters, mode 0600.
     /// An existing file is never overwritten.
     #[arg(long)]
     out: PathBuf,
+    /// Also write the public key, as 64 hex characters, to this new file.
+    /// The public key is always printed on stdout.
+    #[arg(long)]
+    public_out: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -117,11 +148,22 @@ struct PolicySignArgs {
 #[derive(Args)]
 struct RegisterArgs {
     /// HTTPS endpoint the OpenShell gateway uses to reach the middleware.
+    /// Required unless `--only sandbox`.
     #[arg(long)]
-    middleware_endpoint: String,
-    /// CA certificate path, as seen by the gateway.
+    middleware_endpoint: Option<String>,
+    /// CA certificate path, as seen by the gateway. Required for the gateway
+    /// block unless `--insecure-dev`.
+    #[arg(long, conflicts_with = "insecure_dev")]
+    ca: Option<String>,
+    /// Register an `http://` endpoint with `allow_insecure_transport`, for a
+    /// middleware started with `--insecure-dev`. OpenShell then sends no
+    /// credential and anything on the network can call the middleware.
+    /// Local development only.
     #[arg(long)]
-    ca: String,
+    insecure_dev: bool,
+    /// Print only one block: the gateway TOML or the sandbox policy YAML.
+    #[arg(long, value_enum)]
+    only: Option<RegisterPart>,
     /// MCP host the sandbox policy attaches the middleware to. Repeatable.
     #[arg(long, required = true)]
     mcp_host: Vec<String>,
@@ -136,6 +178,14 @@ struct RegisterArgs {
     /// `tcp`), `websocket`, `sql`, or `tls: skip`.
     #[arg(long)]
     openshell_policy: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum RegisterPart {
+    /// The `[[openshell.supervisor.middleware]]` block for `gateway.toml`.
+    Gateway,
+    /// The `network_middlewares` block for the sandbox policy.
+    Sandbox,
 }
 
 #[derive(Subcommand)]
@@ -264,9 +314,10 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Keygen(args) | Command::Policy(PolicyCommand::Keygen(args)) => keygen(&args),
+        Command::Policy(PolicyCommand::Init(args)) => policy_init(&args),
         Command::Policy(PolicyCommand::Add(args)) => policy_add(&args),
         Command::Policy(PolicyCommand::Sign(args)) => policy_sign(&args),
-        Command::Policy(PolicyCommand::Keygen(args)) => policy_keygen(&args),
         Command::Register(args) => {
             print!("{}", register(&args)?);
             Ok(())
@@ -281,6 +332,46 @@ fn run(cli: Cli) -> Result<()> {
         Command::Approve(args) => approve(&args),
         Command::Delegate(args) => delegate(&args),
     }
+}
+
+fn empty_policy(max_warrant_lifetime_secs: u64) -> Value {
+    json!({
+        "version": 1,
+        "max_warrant_lifetime_secs": max_warrant_lifetime_secs,
+        "approval_replay_protection": true,
+        "sandboxes": {}
+    })
+}
+
+fn policy_init(args: &PolicyInitArgs) -> Result<()> {
+    use std::io::Write;
+    let document = empty_policy(args.max_warrant_lifetime_secs);
+    let bytes = [serde_json::to_vec_pretty(&document)?.as_slice(), b"\n"].concat();
+    PolicySet::from_json(&bytes).map_err(|error| format!("policy is invalid: {error}"))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&args.policy)
+        .map_err(|error| format!("{}: {error}", args.policy.display()))?;
+    file.write_all(&bytes)?;
+    println!("wrote {} version 1", args.policy.display());
+    if let Some(key) = &args.sign_with {
+        write_policy_signature(&args.policy, &bytes, key)?;
+    }
+    Ok(())
+}
+
+/// Sign `bytes`, the exact contents of `policy`, into `<policy>.sig`, through
+/// a staging file so a reader never sees a partial signature.
+fn write_policy_signature(policy: &Path, bytes: &[u8], key: &Path) -> Result<()> {
+    let key = read_secret(key)?;
+    let signature = tenuo_openshell_middleware::policy::sign_policy_document(bytes, &key);
+    let path = tenuo_openshell_middleware::policy::policy_signature_path(policy);
+    let staging = path.with_extension("sig.tmp");
+    fs::write(&staging, format!("{signature}\n"))?;
+    fs::rename(&staging, &path)?;
+    println!("wrote {}", path.display());
+    Ok(())
 }
 
 fn policy_add(args: &PolicyAddArgs) -> Result<()> {
@@ -318,8 +409,14 @@ fn policy_add(args: &PolicyAddArgs) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(&document)?;
     PolicySet::from_json(&bytes)
         .map_err(|error| format!("resulting policy is invalid: {error}"))?;
+    let bytes = [bytes.as_slice(), b"\n"].concat();
+    // Signature first: a running middleware skips the reload until the policy
+    // bytes change, so it never pairs the new policy with the old signature.
+    if let Some(key) = &args.sign_with {
+        write_policy_signature(&args.policy, &bytes, key)?;
+    }
     let staging = args.policy.with_extension("tmp");
-    fs::write(&staging, [bytes.as_slice(), b"\n"].concat())?;
+    fs::write(&staging, &bytes)?;
     fs::rename(&staging, &args.policy)?;
     println!(
         "wrote {} version {}",
@@ -438,9 +535,12 @@ fn policy_sign(args: &PolicySignArgs) -> Result<()> {
     Ok(())
 }
 
-fn policy_keygen(args: &PolicyKeygenArgs) -> Result<()> {
+/// Write a new key pair. Neither file is ever overwritten, and nothing is
+/// written unless both files can be created.
+fn keygen(args: &KeygenArgs) -> Result<()> {
     use std::io::Write;
     let key = SigningKey::generate();
+    let public = hex::encode(key.public_key().to_bytes());
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -448,11 +548,29 @@ fn policy_keygen(args: &PolicyKeygenArgs) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options
+    let mut secret = options
         .open(&args.out)
         .map_err(|error| format!("{}: {error}", args.out.display()))?;
-    writeln!(file, "{}", hex::encode(key.secret_key_bytes()))?;
-    println!("{}", hex::encode(key.public_key().to_bytes()));
+    let public_file = match &args.public_out {
+        Some(path) => match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(file) => Some(file),
+            Err(error) => {
+                drop(secret);
+                let _ = fs::remove_file(&args.out);
+                return Err(format!("{}: {error}", path.display()).into());
+            }
+        },
+        None => None,
+    };
+    writeln!(secret, "{}", hex::encode(key.secret_key_bytes()))?;
+    if let Some(mut file) = public_file {
+        writeln!(file, "{public}")?;
+    }
+    println!("{public}");
     Ok(())
 }
 
@@ -461,6 +579,63 @@ fn register(args: &RegisterArgs) -> Result<String> {
         let document = fs::read_to_string(path)?;
         reject_uncovered_routes(&document, &args.mcp_host)?;
     }
+    match args.only {
+        Some(RegisterPart::Gateway) => register_gateway(args),
+        Some(RegisterPart::Sandbox) => Ok(register_sandbox(args)),
+        None => Ok(format!(
+            "{}\n{}",
+            register_gateway(args)?,
+            register_sandbox(args)
+        )),
+    }
+}
+
+/// The gateway's `[[openshell.supervisor.middleware]]` registration.
+///
+/// Production registers an `https://` endpoint with a CA. `--insecure-dev`
+/// registers an `http://` endpoint with `allow_insecure_transport`, which
+/// OpenShell requires for plaintext and which turns off its caller credential.
+fn register_gateway(args: &RegisterArgs) -> Result<String> {
+    let endpoint = args
+        .middleware_endpoint
+        .as_deref()
+        .ok_or("the gateway block needs --middleware-endpoint")?;
+    let transport = if args.insecure_dev {
+        if !endpoint.starts_with("http://") {
+            return Err("--insecure-dev registers an http:// endpoint".into());
+        }
+        "# Development only: no TLS and no caller credential. Start the\n\
+         # middleware with --insecure-dev.\n\
+         allow_insecure_transport = true\n"
+            .to_string()
+    } else {
+        if !endpoint.starts_with("https://") {
+            return Err(
+                "--middleware-endpoint must be https://; pass --insecure-dev for a local http:// middleware"
+                    .into(),
+            );
+        }
+        let ca = args
+            .ca
+            .as_deref()
+            .ok_or("an https:// endpoint needs --ca")?;
+        format!("tls_ca_cert_path = \"{ca}\"\n")
+    };
+    Ok(format!(
+        "# OpenShell gateway configuration\n\
+         [[openshell.supervisor.middleware]]\n\
+         name = \"tenuo/authorization\"\n\
+         grpc_endpoint = \"{endpoint}\"\n\
+         {transport}\
+         audience = \"{audience}\"\n\
+         max_payload_bytes = 262144\n\
+         timeout = \"2s\"\n",
+        audience = args.audience,
+    ))
+}
+
+/// The sandbox policy's `network_middlewares` attachment.
+fn register_sandbox(args: &RegisterArgs) -> String {
     let hosts = args
         .mcp_host
         .iter()
@@ -472,17 +647,8 @@ fn register(args: &RegisterArgs) -> Result<String> {
     } else {
         ""
     };
-    Ok(format!(
-        "# OpenShell gateway configuration\n\
-         [[openshell.supervisor.middleware]]\n\
-         name = \"tenuo/authorization\"\n\
-         grpc_endpoint = \"{endpoint}\"\n\
-         tls_ca_cert_path = \"{ca}\"\n\
-         audience = \"{audience}\"\n\
-         max_payload_bytes = 262144\n\
-         timeout = \"2s\"\n\
-         \n\
-         # Sandbox policy. List {AGENT} as the only binary allowed to reach\n\
+    format!(
+        "# Sandbox policy. List {AGENT} as the only binary allowed to reach\n\
          # these hosts so every tools/call is signed in the sandbox.\n\
          {preserve}\
          network_middlewares:\n  \
@@ -491,11 +657,8 @@ fn register(args: &RegisterArgs) -> Result<String> {
              on_error: fail_closed\n    \
              endpoints:\n      \
                include:\n\
-         {hosts}",
-        endpoint = args.middleware_endpoint,
-        ca = args.ca,
-        audience = args.audience,
-    ))
+         {hosts}"
+    )
 }
 
 /// Refuse a printed registration when a protected host is reachable on a
@@ -1229,21 +1392,186 @@ mod tests {
         assert!(find_request(&listing, "0000000000").is_err());
     }
 
-    #[test]
-    fn register_output_names_the_hosts_and_meta_mode() {
-        let text = register(&RegisterArgs {
-            middleware_endpoint: "https://tenuo:50051".into(),
-            ca: "/etc/ca.pem".into(),
+    fn register_args() -> RegisterArgs {
+        RegisterArgs {
+            middleware_endpoint: Some("https://tenuo:50051".into()),
+            ca: Some("/etc/ca.pem".into()),
+            insecure_dev: false,
+            only: None,
             mcp_host: vec!["mcp.internal".into()],
             audience: DEFAULT_AUDIENCE.into(),
             preserve_meta: true,
             openshell_policy: None,
-        })
-        .unwrap();
+        }
+    }
+
+    #[test]
+    fn register_output_names_the_hosts_and_meta_mode() {
+        let text = register(&register_args()).unwrap();
         assert!(text.contains("grpc_endpoint = \"https://tenuo:50051\""));
+        assert!(text.contains("tls_ca_cert_path = \"/etc/ca.pem\"\n"));
         assert!(text.contains("        - mcp.internal\n"));
         assert!(text.contains("forward_proof"));
         assert!(!text.contains("tenuo_meta"));
+        assert!(!text.contains("allow_insecure_transport"));
+        assert!(text.contains("timeout = \"2s\"\n\n# Sandbox policy."));
+    }
+
+    #[test]
+    fn register_prints_one_block_on_request() {
+        let both = register(&register_args()).unwrap();
+        let gateway = register(&RegisterArgs {
+            only: Some(RegisterPart::Gateway),
+            ..register_args()
+        })
+        .unwrap();
+        let sandbox = register(&RegisterArgs {
+            only: Some(RegisterPart::Sandbox),
+            middleware_endpoint: None,
+            ca: None,
+            ..register_args()
+        })
+        .unwrap();
+        assert_eq!(both, format!("{gateway}\n{sandbox}"));
+        assert!(gateway.contains("[[openshell.supervisor.middleware]]"));
+        assert!(!gateway.contains("network_middlewares"));
+        assert!(sandbox.contains("network_middlewares:"));
+        assert!(!sandbox.contains("grpc_endpoint"));
+        assert!(gateway.ends_with("timeout = \"2s\"\n"));
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&sandbox).unwrap();
+        assert!(yaml["network_middlewares"]["tenuo-task-authority"].is_mapping());
+    }
+
+    #[test]
+    fn register_keeps_plaintext_behind_insecure_dev() {
+        let plaintext = RegisterArgs {
+            middleware_endpoint: Some("http://127.0.0.1:50051".into()),
+            ..register_args()
+        };
+        assert!(register(&plaintext).is_err());
+        let no_ca = RegisterArgs {
+            ca: None,
+            ..register_args()
+        };
+        assert!(register(&no_ca).is_err());
+        assert!(register(&RegisterArgs {
+            middleware_endpoint: None,
+            ..register_args()
+        })
+        .is_err());
+
+        let dev = RegisterArgs {
+            ca: None,
+            insecure_dev: true,
+            ..plaintext
+        };
+        let text = register(&dev).unwrap();
+        assert!(text.contains("grpc_endpoint = \"http://127.0.0.1:50051\""));
+        assert!(text.contains("allow_insecure_transport = true\n"));
+        assert!(!text.contains("tls_ca_cert_path"));
+        assert!(register(&RegisterArgs {
+            middleware_endpoint: Some("https://tenuo:50051".into()),
+            ..dev
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn keygen_writes_a_key_pair_the_other_commands_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let secret = directory.path().join("issuer.key");
+        let public = directory.path().join("issuer.pub");
+        keygen(&KeygenArgs {
+            out: secret.clone(),
+            public_out: Some(public.clone()),
+        })
+        .unwrap();
+        let key = read_secret(&secret).unwrap();
+        let listed = read_public(public.to_str().unwrap()).unwrap();
+        assert_eq!(key.public_key(), listed);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&secret).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        // Neither file is overwritten, and a refused public file leaves no
+        // orphaned secret behind.
+        let again = KeygenArgs {
+            out: secret.clone(),
+            public_out: None,
+        };
+        assert!(keygen(&again).is_err());
+        assert_eq!(read_secret(&secret).unwrap().public_key(), listed);
+        let fresh = directory.path().join("other.key");
+        assert!(keygen(&KeygenArgs {
+            out: fresh.clone(),
+            public_out: Some(public.clone()),
+        })
+        .is_err());
+        assert!(!fresh.exists());
+    }
+
+    #[test]
+    fn sign_with_signs_every_policy_version_written() {
+        use tenuo_openshell_middleware::policy::{policy_signature_path, verify_policy_document};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("policy.json");
+        let key_path = directory.path().join("policy-signing.key");
+        let key = SigningKey::generate();
+        fs::write(&key_path, hex::encode(key.secret_key_bytes())).unwrap();
+        let verify = || {
+            let document = fs::read(&path).unwrap();
+            let signature = fs::read(policy_signature_path(&path)).unwrap();
+            verify_policy_document(&document, &signature, &key.public_key())
+        };
+
+        policy_init(&PolicyInitArgs {
+            policy: path.clone(),
+            max_warrant_lifetime_secs: 600,
+            sign_with: Some(key_path.clone()),
+        })
+        .unwrap();
+        assert!(verify().is_ok());
+
+        let root = hex::encode(SigningKey::generate().public_key().to_bytes());
+        policy_add(&PolicyAddArgs {
+            policy: path.clone(),
+            sandbox_id: "sbx".into(),
+            trusted_root: vec![root],
+            mcp: Some("https://mcp.internal/mcp".into()),
+            tools: vec!["read_logs".into()],
+            single_use: vec![],
+            idempotent: vec![],
+            max_warrant_lifetime_secs: 600,
+            sign_with: Some(key_path),
+        })
+        .unwrap();
+        assert!(verify().is_ok());
+        assert_eq!(PolicySet::load(&path).unwrap().version(), 2);
+    }
+
+    #[test]
+    fn policy_init_creates_an_empty_policy_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("policy.json");
+        let args = PolicyInitArgs {
+            policy: path.clone(),
+            max_warrant_lifetime_secs: 600,
+            sign_with: None,
+        };
+        policy_init(&args).unwrap();
+        let policy = PolicySet::load(&path).unwrap();
+        assert_eq!(policy.sandbox_count(), 0);
+        assert_eq!(policy.version(), 1);
+        assert!(policy_init(&args).is_err());
+
+        let root = hex::encode(SigningKey::generate().public_key().to_bytes());
+        let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        add_to_policy(&mut document, "sbx", &[root], None, &[]).unwrap();
+        assert_eq!(document["version"], 2);
+        assert_eq!(document["max_warrant_lifetime_secs"], 600);
     }
 
     #[test]

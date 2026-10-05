@@ -137,6 +137,7 @@ LOG_DIR="$RUN_DIR/logs"
 JWT_DIR="$RUN_DIR/jwt"
 TLS_DIR="$RUN_DIR/tls"
 FIXTURE_DIR="$RUN_DIR/fixtures"
+POLICY_TEMPLATE="$RUN_DIR/policy.template.json"
 GATEWAY_CONFIG="$RUN_DIR/gateway.toml"
 SANDBOX_POLICY="$RUN_DIR/openshell-policy.yaml"
 EFFECT_LOG="$RUN_DIR/effects.jsonl"
@@ -565,7 +566,7 @@ start_upstream() {
     TENUO_DEMO_RECEIPT_DIR="$RECEIPT_DIR" \
     "$DEMO_PYTHON" "$EXAMPLE_DIR/mcp_server.py" \
     --port "$UPSTREAM_PORT" \
-    --policy "$FIXTURE_DIR/policy.json" >"$UPSTREAM_LOG" 2>&1 &
+    --policy "$POLICY_TEMPLATE" >"$UPSTREAM_LOG" 2>&1 &
   UPSTREAM_PID=$!
 }
 
@@ -1301,18 +1302,24 @@ if [[ -z "${TENUO_DEMO_WORKLOAD_IMAGE:-}" ]]; then
 fi
 generate_security_material
 prepare_destination_python
+# The fixture's sandbox entries, keyed `bootstrap` and `bootstrap-delegate`,
+# are templates until the sandboxes exist and have IDs.
 "$TENUO_TARGET/debug/tenuo-demo-fixture" \
   --output "$FIXTURE_DIR" \
   --sandbox-id bootstrap \
   --mcp-port "$UPSTREAM_PORT" \
   --openshell-jwt-dir "$JWT_DIR" \
   --openshell-jwt-key-id "$RUN_ID" >"$FIXTURE_LOG" 2>&1
+mv "$FIXTURE_DIR/policy.json" "$POLICY_TEMPLATE"
 POLICY_KEY="$RUN_DIR/secrets/policy-signing.key"
-POLICY_PUBLIC_KEY="$("$TENUO_TARGET/debug/tenuo-openshell" policy keygen --out "$POLICY_KEY")" \
+POLICY_PUBLIC_KEY="$("$TENUO_TARGET/debug/tenuo-openshell" keygen --out "$POLICY_KEY")" \
   || fail "policy signing key"
 write_gateway_config
 start_upstream
 wait_for_port "$UPSTREAM_PID" "$SERVICE_HOST" "$UPSTREAM_PORT" "MCP effect server"
+# The middleware starts before any sandbox exists, on a policy that trusts
+# none, as an operator's first deployment does.
+jq '.version = 1 | .sandboxes = {}' "$POLICY_TEMPLATE" >"$FIXTURE_DIR/policy.json"
 start_middleware
 wait_for_port "$MIDDLEWARE_PID" "$SERVICE_HOST" "$MIDDLEWARE_PORT" "Tenuo middleware"
 start_gateway
@@ -1327,14 +1334,10 @@ CHILD_SANDBOX_NAME="c-$$-$RANDOM"
 CHILD_SANDBOX_JSON="$("${CLI[@]}" sandbox create --name "$CHILD_SANDBOX_NAME" --policy "$SANDBOX_POLICY" --output json --no-tty --detach -- sleep infinity 2>>"$SETUP_LOG")" || fail "second sandbox creation"
 CHILD_SANDBOX_ID="$(jq -er '.id' <<<"$CHILD_SANDBOX_JSON")" || fail "second sandbox id extraction"
 
-jq --arg parent "$SANDBOX_ID" --arg child "$CHILD_SANDBOX_ID" \
-  '.sandboxes = {($parent): .sandboxes.bootstrap, ($child): .sandboxes["bootstrap-delegate"]}' \
-  "$FIXTURE_DIR/policy.json" >"$FIXTURE_DIR/policy.next.json"
-mv "$FIXTURE_DIR/policy.next.json" "$FIXTURE_DIR/policy.json"
-kill "$MIDDLEWARE_PID"
-wait "$MIDDLEWARE_PID" 2>/dev/null || true
-unset MIDDLEWARE_PID
-start_middleware
-wait_for_port "$MIDDLEWARE_PID" "$SERVICE_HOST" "$MIDDLEWARE_PORT" "sandbox-bound Tenuo middleware"
+# The running middleware picks up the sandboxes on its next policy reload.
+update_policy '.sandboxes = {($sandbox): $template[0].sandboxes.bootstrap, ($child): $template[0].sandboxes["bootstrap-delegate"]}' \
+  "the sandbox-bound" \
+  --arg child "$CHILD_SANDBOX_ID" \
+  --slurpfile template "$POLICY_TEMPLATE"
 
 run_suite

@@ -11,7 +11,7 @@ All notable changes will be documented here. The format follows
 This release tightens production defaults, and existing deployments need
 these changes when they upgrade:
 
-1. **Sign the policy.** Run `tenuo-openshell policy keygen --out
+1. **Sign the policy.** Run `tenuo-openshell keygen --out
    policy-signing.key` once, then `tenuo-openshell policy sign` for every
    version. Pass the printed public key as `--policy-signing-key`. With Helm,
    put `policy.json.sig` in the policy ConfigMap and the public key in the
@@ -43,7 +43,28 @@ these changes when they upgrade:
 
 ### Added
 
-- `tenuo-openshell policy keygen` and `tenuo-openshell policy sign`.
+- `tenuo-openshell keygen --out FILE [--public-out FILE]` creates issuer,
+  approver, and policy signing keys. It never overwrites a file and prints the
+  public key in the form `--trusted-root` and `--policy-signing-key` accept.
+  `policy keygen` is an alias.
+- `tenuo-openshell policy sign`, and `--sign-with KEY` on `policy init` and
+  `policy add`, which sign each version as it is written.
+- `tenuo-openshell policy init` creates a policy that trusts no sandboxes.
+- The middleware starts on a policy with `"sandboxes": {}`, denies every
+  request, and reports ready. It no longer needs a placeholder sandbox before
+  the first one exists. A missing policy file is still an error, and now
+  suggests `policy init`.
+- The `tenuo_openshell_policy_sandboxes` metric counts trusted sandboxes.
+- `tenuo-openshell register --only gateway|sandbox` prints one block.
+  The default output is unchanged.
+- `tenuo-openshell register --insecure-dev` registers an `http://` endpoint
+  with `allow_insecure_transport` for a local `--insecure-dev` middleware.
+  Without it, `register` now requires an `https://` endpoint and `--ca`.
+- When OpenShell itself denies a call (`policy_denied`, an MCP protocol check,
+  `middleware_failed`, or another middleware's reason code), the sandbox proxy
+  reports OpenShell's code and detail instead of `forbidden`, and adds
+  OpenShell's bounded denial fields under `data.tenuo.openshell`. Tenuo
+  middleware codes still start with `tenuo_` and keep their messages.
 - `tenuo-openshell register --openshell-policy` refuses to print a gateway
   block when an endpoint that can match a protected host is L4 TCP (no
   `protocol`, or `tcp`), `websocket`, `sql`, or `tls: skip`. It matches hosts
