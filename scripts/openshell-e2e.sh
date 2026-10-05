@@ -556,7 +556,7 @@ prepare_destination_python() {
     return
   fi
   python3 -m venv "$RUN_DIR/py"
-  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo[a2a]==0.3.2' 'uvicorn>=0.30,<1' 'nvidia-nat-core>=1.8,<1.9'
+  "$RUN_DIR/py/bin/python" -m pip install -q 'tenuo[a2a]==0.3.3' 'uvicorn>=0.30,<1' 'nvidia-nat-core>=1.8,<1.9'
   "$RUN_DIR/py/bin/python" -m pip install -q --no-deps "$ROOT/python/nemo-agent-toolkit-tenuo"
   DEMO_PYTHON="$RUN_DIR/py/bin/python"
 }
