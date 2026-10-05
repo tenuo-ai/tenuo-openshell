@@ -1,11 +1,54 @@
 # Issuing warrants in production
 
-This guide covers the keys that sign Tenuo material, where each should live,
-how issuer keys can be held today and with a KMS or HSM, and how a platform
-that runs agents for many users can issue one warrant per request
+This guide covers the keys that sign Tenuo material and where each should
+live, and how a platform that runs agents for many users can issue one
+warrant per request
 ([#17](https://github.com/tenuo-ai/tenuo-openshell/issues/17)). Read it with
 [Architecture](architecture.md#holder-key-custody), the
 [threat model](threat-model.md), and the [operations runbook](operations.md).
+
+## Recommended: Tenuo Cloud
+
+For a managed setup, use [Tenuo Cloud](https://tenuo.ai) as the issuer. It
+runs the parts of this guide that are hardest to operate yourself:
+
+- **Issuer keys in a KMS.** Each tenant's root signing key is created and
+  held in Google Cloud KMS (`EC_SIGN_ED25519`), and never leaves it. Cloud
+  handles root key rotation.
+- **Per-request issuance.** Triggers mint a short-lived warrant to a
+  registered agent's public key, with the capabilities that trigger
+  allows. Every issuance is recorded with its resolved constraints and the
+  event that caused it.
+- **Approvals with bound identities.** Approvers approve in the dashboard,
+  Slack, Telegram, email, or a webhook. Each decision is signed and bound to
+  the approver's identity.
+- **Revocation.** Cloud publishes each tenant's signed revocation list in
+  the Tenuo core format the middleware verifies.
+
+The middleware does not call Tenuo Cloud to authorize a request: it verifies
+warrants offline against the roots in its policy. To use Cloud as the issuer:
+
+1. Put the tenant's root public key (`GET /v1/keys`) in each sandbox's
+   `trusted_roots`.
+2. Register the sandbox's holder public key, from
+   `tenuo-openshell-agent keygen`, as an agent.
+3. Install each warrant Cloud issues in the sandbox with
+   `tenuo-openshell-agent install-warrant`.
+
+Three integrations are still in progress:
+
+- the middleware picking up Cloud's revocation list and policy snapshots
+  without a manual copy, and exporting receipts to Cloud
+  ([#20](https://github.com/tenuo-ai/tenuo-openshell/issues/20));
+- sandbox approvals through Cloud and Slack
+  ([#19](https://github.com/tenuo-ai/tenuo-openshell/issues/19)); and
+- `provision` fetching the warrant from Cloud directly.
+
+Until those land, copy the revocation list into the policy's `revocation`
+block, and use `tenuo-openshell approve` for in-sandbox approvals.
+
+The rest of this guide is for running issuance yourself: air-gapped
+deployments, or teams that must hold every key in their own infrastructure.
 
 ## Roles and keys
 
