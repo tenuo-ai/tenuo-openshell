@@ -21,6 +21,7 @@ on:
     paths:
       - .github/workflows/nim-e2e.yml
       - deploy/nat-demo-image/nim.yml
+      - deploy/demo-image/tenuo-demo-mcp
   schedule:
     - cron: "17 7 * * 1"
   workflow_dispatch:
