@@ -444,10 +444,23 @@ if [[ -n "${TENUO_QS_DEMO_IMAGE:-}" ]]; then
 fi
 if [[ "$GUIDE_NAME" == nat-agent ]]; then
   NAT_IMAGE="$(grep -oE 'ghcr\.io/tenuo-ai/tenuo-openshell-nat-demo:v[0-9][^ ]*' "$GUIDE" | head -1)"
-  [[ "${NAT_IMAGE##*:}" == "${DEMO_IMAGE##*:}" || -n "${TENUO_QS_DEMO_IMAGE:-}" ]] || {
-    echo "the guides name different releases: $NAT_IMAGE and $DEMO_IMAGE" >&2
+  [[ -n "$NAT_IMAGE" ]] || {
+    echo "the NAT guide does not name a tenuo-openshell-nat-demo image" >&2
     exit 1
   }
+  # The guides name one release, except while the NAT image is new: it first
+  # ships as v0.1.6, and the quickstart still names its demo image at v0.1.5.
+  # A local demo image is not a release tag, so it skips this comparison.
+  nat_tag="${NAT_IMAGE##*:}"
+  demo_tag="${DEMO_IMAGE##*:}"
+  nat_image_is_new=0
+  if [[ "$nat_tag" == v0.1.6 && "$demo_tag" == v0.1.5 ]]; then
+    nat_image_is_new=1
+  fi
+  if [[ -z "${TENUO_QS_DEMO_IMAGE:-}" && "$nat_tag" != "$demo_tag" && "$nat_image_is_new" -ne 1 ]]; then
+    echo "the guides name different releases: $NAT_IMAGE and $DEMO_IMAGE" >&2
+    exit 1
+  fi
   if [[ -n "${TENUO_QS_NAT_IMAGE:-}" ]]; then
     substitute "TENUO_QS_NAT_IMAGE=$TENUO_QS_NAT_IMAGE" \
       sed -E "s#ghcr\.io/tenuo-ai/tenuo-openshell-nat-demo:v[0-9][^ ]*#$TENUO_QS_NAT_IMAGE#g"
