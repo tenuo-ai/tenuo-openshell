@@ -157,6 +157,10 @@ tenuo-openshell policy sign --policy policy.json --key policy-signing.key
 # writes policy.json.sig
 ```
 
+The signature is Ed25519 over a fixed context string and the SHA-256 of the
+policy file, 57 bytes in all. A key held in a KMS or HSM with a message-size
+limit can therefore sign it.
+
 Start the middleware with `--policy-signing-key` (64 hex characters, or a
 path to that text). When you replace a policy file in place, write the new
 `.sig` before the new policy: the middleware skips the reload until the policy

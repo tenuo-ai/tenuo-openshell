@@ -816,7 +816,7 @@ fn parse_forward_proof(entry: &Value) -> Result<MetaMode, PolicyError> {
     }
 }
 
-/// Domain separation for a detached signature over the exact policy bytes.
+/// Domain separation for a detached signature over the policy's SHA-256.
 pub const POLICY_SIGNATURE_CONTEXT: &[u8] = b"tenuo-openshell-policy-v1";
 
 /// `<policy path>.sig`, so `policy.json` is signed as `policy.json.sig`.
@@ -841,10 +841,14 @@ pub fn verify_policy_document(
         .map_err(|_| PolicyError::Invalid)
 }
 
+/// The signed message is the context followed by the SHA-256 of the policy
+/// bytes, a fixed 57 bytes. KMS and HSM signers cap message size (AWS KMS at
+/// 4096 bytes), and a policy file can be larger.
 fn policy_message(document: &[u8]) -> Vec<u8> {
-    let mut message = Vec::with_capacity(POLICY_SIGNATURE_CONTEXT.len() + document.len());
+    use sha2::Digest;
+    let mut message = Vec::with_capacity(POLICY_SIGNATURE_CONTEXT.len() + 32);
     message.extend_from_slice(POLICY_SIGNATURE_CONTEXT);
-    message.extend_from_slice(document);
+    message.extend_from_slice(&sha2::Sha256::digest(document));
     message
 }
 
