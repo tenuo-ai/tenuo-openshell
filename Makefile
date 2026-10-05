@@ -1,4 +1,7 @@
-.PHONY: check demo e2e quickstart smoke test test-rust test-python
+.PHONY: bench check demo e2e quickstart smoke test test-rust test-python
+
+bench:
+	scripts/bench.sh
 
 check:
 	ci/check.sh
