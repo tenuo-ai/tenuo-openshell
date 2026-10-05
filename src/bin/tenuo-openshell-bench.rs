@@ -196,8 +196,9 @@ impl Material {
                 "tools": [TOOL]
             }]
         });
-        if single_use {
-            sandbox["single_use_tools"] = json!([TOOL]);
+        // Every tool is single-use unless listed in `idempotent_tools`.
+        if !single_use {
+            sandbox["idempotent_tools"] = json!([TOOL]);
         }
         serde_json::to_vec_pretty(&json!({
             "max_warrant_lifetime_secs": 3600,
@@ -371,7 +372,16 @@ impl Run<'_> {
             .stderr(fs::File::create(dir.join("server.log"))?);
         match production {
             Some(material) => {
+                // Production requires a signed policy.
+                let signer = SigningKey::generate();
+                let document = fs::read(&policy)?;
+                fs::write(
+                    tenuo_openshell_middleware::policy::policy_signature_path(&policy),
+                    tenuo_openshell_middleware::policy::sign_policy_document(&document, &signer),
+                )?;
                 command
+                    .arg("--policy-signing-key")
+                    .arg(hex::encode(signer.public_key().to_bytes()))
                     .arg("--tls-cert")
                     .arg(&material.cert_path)
                     .arg("--tls-key")
@@ -387,6 +397,11 @@ impl Run<'_> {
         }
         if let Some(url) = self.redis_url(scenario.store) {
             command.arg("--replay-redis-url").arg(url);
+            // Production requires rediss:// with a password. The bench Redis
+            // has no password, so production runs say so explicitly.
+            if production.is_some() {
+                command.arg("--allow-plaintext-replay");
+            }
         } else if scenario.store != Store::None && scenario.store != Store::Memory {
             return Err(format!("{} needs a Redis URL", scenario.name).into());
         }

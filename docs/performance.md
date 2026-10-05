@@ -38,7 +38,8 @@ add about 0.06 ms to a call at low load and cap one replica at roughly
 each configuration:
 
 1. Write a policy with one sandbox, one MCP destination, and one tool,
-   `read_logs`. Single-use scenarios list the tool in `single_use_tools`.
+   `read_logs`. The idempotent scenario lists it in `idempotent_tools`;
+   the single-use scenarios leave it out, so its proof is reserved.
 2. Start the release `tenuo-openshell-middleware` binary as a child process,
    with the flags for the scenario. Each run gets a fresh process, store key
    prefix, and receipt log.
@@ -74,7 +75,7 @@ caller is the cost of the gRPC hop and the server's request handling.
 | `single-use-memory` | proof reserved and committed | in-process map | plaintext, no caller auth |
 | `single-use-redis` | proof reserved and committed | Redis 7.4, `redis://` | plaintext, no caller auth |
 | `single-use-rediss` | proof reserved and committed | Redis 7.4, `rediss://`, certificate verified | plaintext, no caller auth |
-| `production` | proof reserved and committed | Redis 7.4, `redis://` | TLS and an OpenShell extension JWT checked on every call |
+| `production` | proof reserved and committed | Redis 7.4, `redis://` | TLS, an OpenShell extension JWT checked on every call, and a signed policy. The bench Redis has no password, so this run passes `--allow-plaintext-replay`. |
 
 Each scenario runs with receipts off and with receipts on. Receipts on means
 `--receipt-key`, `--receipt-log`, and `--require-receipts`: the call is
@@ -182,14 +183,9 @@ the 64-caller rows for the ceiling.
 
 ## Effect of reserving every proof
 
-Pending PR #42 reserves the proof of every tool unless it is listed in
-`idempotent_tools`. That code is not on main, so these runs model it on main:
-the single-use scenarios list the only tool in `single_use_tools`, which
-reserves exactly what #42 would reserve for a tool not marked idempotent. The
-`idempotent` scenario is what #42 does for a tool listed in
-`idempotent_tools`.
-
-With #42 a production deployment needs Redis, so the relevant comparison is
+The middleware reserves the proof of every tool unless it is listed in
+`idempotent_tools`. A production deployment uses Redis for that, so the
+relevant comparison is
 `idempotent` against `single-use-redis` (receipts off, gRPC):
 
 | | idempotent | single-use, in-memory | single-use, Redis | change, idempotent to Redis |
@@ -252,8 +248,8 @@ concurrency is calls in flight divided by that.
 - Each replica uses one multiplexed connection to Redis. Throughput keeps
   rising with concurrency because calls share that connection, but a slow
   Redis call delays the calls queued behind it.
-- Mark tools that are safe to repeat as idempotent (`idempotent_tools` after
-  PR #42) so they skip Redis.
+- List tools that are safe to repeat in `idempotent_tools` so they skip
+  Redis.
 
 ## Known limits
 
