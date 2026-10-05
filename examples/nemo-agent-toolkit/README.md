@@ -1,9 +1,14 @@
-# NeMo Agent Toolkit agent under Tenuo
+# NeMo Agent Toolkit agent through the Tenuo signing proxy
 
 A NeMo Agent Toolkit 1.9 ReAct agent whose MCP tools go through
 `tenuo-openshell-agent proxy`. The agent's configuration has no Tenuo code:
 its `mcp_client` function group points at the loopback proxy, which signs each
 `tools/call` with the holder key. The warrant decides which calls leave.
+
+This example demonstrates Agent Toolkit using portable Tenuo authority across
+an MCP boundary. It does not use the in-process `nemo-agent-toolkit-tenuo`
+plugin. Use the [Agent Toolkit guide](../../docs/agent-toolkit.md) to choose
+between the proxy, the plugin, or both.
 
 The example also shows a human approval step:
 
@@ -31,6 +36,15 @@ Requirements: Rust, `uv`, `jq`, and `nc`. No model or API key is needed.
 
 ```bash
 examples/nemo-agent-toolkit/run.sh
+```
+
+Expected result:
+
+```text
+PASS read allowed; restart held for approval
+PASS approved restart ran
+PASS a used approval does not authorize another restart
+ALL PASS
 ```
 
 The script builds the binaries, installs NeMo Agent Toolkit 1.9 into a
@@ -62,7 +76,7 @@ runs the same proxy and approval flow inside an OpenShell sandbox.
 | [`scripted_llm.py`](scripted_llm.py) | OpenAI-compatible endpoint that replays the ReAct transcript. |
 | [`run.sh`](run.sh) | Sets up keys, warrant, servers, and proxy; runs and checks each step. |
 
-For in-process early denial inside NAT itself, see the
+For in-process early denial inside Agent Toolkit itself, see the
 [Agent Toolkit plugin](../../python/nemo-agent-toolkit-tenuo/README.md). The
 two compose: the plugin checks a function before it runs, and the proxy signs
 and the middleware enforces what reaches MCP.

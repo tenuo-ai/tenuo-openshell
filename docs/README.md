@@ -10,7 +10,8 @@ task authority work.
 | --- | --- | --- |
 | Make an allowed and denied call in a real sandbox | [10-minute quickstart](quickstart.md) | Released artifacts, TLS and JWT middleware authentication, argument constraints |
 | See the complete security model | [Authenticated demo](../examples/demo/README.md) | Approvals, replay protection, holder binding, delegation, revocation, A2A, receipts |
-| Run an Agent Toolkit approval flow | [NeMo Agent Toolkit example](../examples/nemo-agent-toolkit/README.md) | ReAct tool use, an exact-call human approval, no model key required |
+| Run an Agent Toolkit approval flow | [NeMo Agent Toolkit example](../examples/nemo-agent-toolkit/README.md) | ReAct tool use through the signing proxy, an exact-call human approval, no model key required |
+| Trace authority across runtime boundaries | [A2A interoperability proof](../examples/interoperability/README.md) | A narrowed warrant and holder proof crossing a JSON-RPC handoff |
 | Inspect performance | [Performance](performance.md) | Reproducible latency and throughput with Redis, TLS, and receipts |
 
 ## Integrate
@@ -18,6 +19,7 @@ task authority work.
 | Goal | Guide |
 | --- | --- |
 | Put an existing OpenShell agent under task authority | [Running an agent under Tenuo](sandbox-agent.md) |
+| Choose an Agent Toolkit integration path | [Agent Toolkit integration](agent-toolkit.md) |
 | Add early, in-process checks to Agent Toolkit functions | [Agent Toolkit plugin](../python/nemo-agent-toolkit-tenuo/README.md) |
 | Issue warrants per request or user | [Production issuance](production-issuance.md) |
 | Connect a control plane without putting it on the decision path | [Provider contract](providers.md) |
