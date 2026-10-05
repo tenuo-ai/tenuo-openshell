@@ -6,9 +6,10 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
-### Breaking changes
+### Changed
 
-This release tightens production defaults. To upgrade from 0.1:
+This release tightens production defaults, and existing deployments need
+these changes when they upgrade:
 
 1. **Sign the policy.** Run `tenuo-openshell policy keygen --out
    policy-signing.key` once, then `tenuo-openshell policy sign` for every
