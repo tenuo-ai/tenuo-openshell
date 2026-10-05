@@ -25,27 +25,34 @@ runs the parts of this guide that are hardest to operate yourself:
 - **Revocation.** Cloud publishes each tenant's signed revocation list in
   the Tenuo core format the middleware verifies.
 
-The middleware does not call Tenuo Cloud to authorize a request: it verifies
-warrants offline against the roots in its policy. To use Cloud as the issuer:
+Cloud's clients are part of Tenuo itself:
+
+- **Revocation sync and receipts:** core's control-plane client, configured
+  by `TENUO_CONTROL_PLANE_URL` and `TENUO_API_KEY`, or a connect token.
+- **Warrant fetch:** the `tenuo-cloud` SDK fires a trigger and binds the
+  warrant to the local holder key.
+- **Approvals:** the SDKs submit an approval request and wait for the signed
+  decision.
+
+Authorization never waits on Cloud. The middleware verifies warrants offline
+against the roots in its policy. To use Cloud as the issuer:
 
 1. Put the tenant's root public key (`GET /v1/keys`) in each sandbox's
    `trusted_roots`.
 2. Register the sandbox's holder public key, from
    `tenuo-openshell-agent keygen`, as an agent.
-3. Install each warrant Cloud issues in the sandbox with
+3. Fire the trigger, and install the warrant in the sandbox with
    `tenuo-openshell-agent install-warrant`.
 
-Three integrations are still in progress:
+The middleware and the sandbox agent do not run these clients yet:
 
-- the middleware picking up Cloud's revocation list and policy snapshots
-  without a manual copy, and exporting receipts to Cloud
-  ([#20](https://github.com/tenuo-ai/tenuo-openshell/issues/20));
-- sandbox approvals through Cloud and Slack
-  ([#19](https://github.com/tenuo-ai/tenuo-openshell/issues/19)); and
-- `provision` fetching the warrant from Cloud directly.
+- [#20](https://github.com/tenuo-ai/tenuo-openshell/issues/20) tracks
+  revocation sync and receipt export in the middleware.
+- [#19](https://github.com/tenuo-ai/tenuo-openshell/issues/19) tracks
+  approval requests from the sandbox agent.
 
-Until those land, copy the revocation list into the policy's `revocation`
-block, and use `tenuo-openshell approve` for in-sandbox approvals.
+Until those land, copy Cloud's signed revocation list into the policy's
+`revocation` block, and approve held calls with `tenuo-openshell approve`.
 
 The rest of this guide is for running issuance yourself: air-gapped
 deployments, or teams that must hold every key in their own infrastructure.
