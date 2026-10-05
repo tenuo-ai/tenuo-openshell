@@ -165,7 +165,8 @@ struct RegisterArgs {
     #[arg(long, value_enum)]
     only: Option<RegisterPart>,
     /// MCP host the sandbox policy attaches the middleware to. Repeatable.
-    #[arg(long, required = true)]
+    /// Required unless only the gateway block is printed.
+    #[arg(long)]
     mcp_host: Vec<String>,
     #[arg(long, default_value = DEFAULT_AUDIENCE)]
     audience: String,
@@ -348,6 +349,13 @@ fn policy_init(args: &PolicyInitArgs) -> Result<()> {
     let document = empty_policy(args.max_warrant_lifetime_secs);
     let bytes = [serde_json::to_vec_pretty(&document)?.as_slice(), b"\n"].concat();
     PolicySet::from_json(&bytes).map_err(|error| format!("policy is invalid: {error}"))?;
+    if args.policy.exists() {
+        return Err(format!("{}: already exists", args.policy.display()).into());
+    }
+    // Signature first, the same order as `policy add`.
+    if let Some(key) = &args.sign_with {
+        write_policy_signature(&args.policy, &bytes, key)?;
+    }
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -355,9 +363,6 @@ fn policy_init(args: &PolicyInitArgs) -> Result<()> {
         .map_err(|error| format!("{}: {error}", args.policy.display()))?;
     file.write_all(&bytes)?;
     println!("wrote {} version 1", args.policy.display());
-    if let Some(key) = &args.sign_with {
-        write_policy_signature(&args.policy, &bytes, key)?;
-    }
     Ok(())
 }
 
@@ -575,6 +580,10 @@ fn keygen(args: &KeygenArgs) -> Result<()> {
 }
 
 fn register(args: &RegisterArgs) -> Result<String> {
+    let gateway_only = matches!(args.only, Some(RegisterPart::Gateway));
+    if args.mcp_host.is_empty() && (!gateway_only || args.openshell_policy.is_some()) {
+        return Err("--mcp-host is required for the sandbox block and --openshell-policy".into());
+    }
     if let Some(path) = &args.openshell_policy {
         let document = fs::read_to_string(path)?;
         reject_uncovered_routes(&document, &args.mcp_host)?;
@@ -1415,6 +1424,18 @@ mod tests {
         assert!(!text.contains("tenuo_meta"));
         assert!(!text.contains("allow_insecure_transport"));
         assert!(text.contains("timeout = \"2s\"\n\n# Sandbox policy."));
+    }
+
+    #[test]
+    fn mcp_host_is_needed_only_for_the_sandbox_block() {
+        let mut args = register_args();
+        args.mcp_host.clear();
+        args.only = Some(RegisterPart::Gateway);
+        assert!(register(&args).is_ok());
+        args.only = Some(RegisterPart::Sandbox);
+        assert!(register(&args).is_err());
+        args.only = None;
+        assert!(register(&args).is_err());
     }
 
     #[test]
