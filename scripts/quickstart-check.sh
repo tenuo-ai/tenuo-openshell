@@ -342,6 +342,7 @@ substitute() {
   fi
 }
 substitute "CLI install directory" sed "s#~/.local/bin#\"\$BIN\"#g"
+substitute "dev state directory" sed "s#~/.local/state/tenuo-openshell/dev#\"\$DEV_DIR\"#g"
 if [[ "$INSTALL" == snap ]]; then
   # The guide's instruction for the snap, whose CLI cannot read ~/.local.
   # shellcheck disable=SC2088 # expanded in the script run from the guide
@@ -351,9 +352,8 @@ if [[ "$INSTALL" == snap ]]; then
     exit 1
   }
   substitute "snap demo policy" \
-    sed "s#--policy ~/.local/state/tenuo-openshell/dev/demo-policy.yaml#--policy $snap_policy#"
+    sed "s#--policy \"\$DEV_DIR\"/demo-policy.yaml#--policy $snap_policy#"
 fi
-substitute "dev state directory" sed "s#~/.local/state/tenuo-openshell/dev#\"\$DEV_DIR\"#g"
 # Nothing answers the approval prompt.
 substitute "unattended approval" sed "s#^tenuo-openshell approve --dev #tenuo-openshell approve --yes --dev #"
 if [[ -n "${TENUO_QS_CLI:-}" ]]; then
