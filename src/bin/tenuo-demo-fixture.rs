@@ -691,7 +691,7 @@ fn issue(
             "path": "/mcp",
             "tools": ["read_logs", "restart_service"]
         }],
-        "single_use_tools": ["restart_service"],
+        "idempotent_tools": ["read_logs"],
         "forward_proof": "preserve"
     });
     sandboxes.insert(sandbox_id.to_string(), roots.clone());

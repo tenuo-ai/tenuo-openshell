@@ -109,10 +109,13 @@ therefore carries a byte-identical proof. Every tool reserves that proof once
 across the deployment, for at most `window * max_windows` seconds (150 by
 default). A resend denies `tenuo_pop_replayed`, including a legitimate
 identical call inside the bucket. List a tool in `idempotent_tools` only when
-a resent identical call is the same effect. `single_use_tools` is accepted and
-does not opt any other tool out. A nonce in the proof is what would let an
-intentional identical call succeed while a captured body still fails. That is
-a Tenuo protocol change, not a middleware setting.
+a resent identical call is the same effect. `single_use_tools` is deprecated,
+has no effect, and logs a warning at startup.
+
+This is interim. A per-call nonce in the proof
+([tenuo-ai/tenuo-openshell#21](https://github.com/tenuo-ai/tenuo-openshell/issues/21))
+lets an intentional identical call succeed while a captured body still fails.
+When Tenuo ships it, `idempotent_tools` is no longer needed.
 
 On allow, the middleware strips `params._meta.tenuo` by default so the
 destination never receives a reusable proof. Set the sandbox's

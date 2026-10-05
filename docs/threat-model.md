@@ -110,6 +110,8 @@ control. Residual risk is what remains when the control works as written.
 - The trust policy is signed in production. `--allow-unsigned-policy` leaves
   integrity to whoever can write the file. See
   [Policy integrity](deployment.md#policy-integrity).
+  A restarting replica loads any correctly signed policy, including an older
+  version; running replicas refuse a lower version.
 - The result size limit applies only to responses matched to an allowed call
   on the same replica within 10 minutes; others are delivered unchecked. A
   limit added by a policy reload is not enforced unless the middleware runs

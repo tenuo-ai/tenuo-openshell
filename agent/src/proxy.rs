@@ -126,6 +126,10 @@ async fn openshell_denial(upstream: reqwest::Response, id: &Value) -> Response<B
     // withheld. Say so, so the agent does not retry a non-idempotent call.
     let message = if reason.starts_with("tenuo_result_") {
         "OpenShell withheld the result; the call already ran on the MCP server"
+    } else if reason == "tenuo_pop_replayed" {
+        // Proofs sign a 30-second window, so an identical call inside it
+        // carries the same proof. The first one was accepted.
+        "OpenShell denied a duplicate: an identical call was already accepted in this 30-second window; wait and retry, or ask the operator to list the tool in idempotent_tools"
     } else {
         "OpenShell denied this call before it reached the MCP server"
     };

@@ -13,7 +13,8 @@ Production mode is the default. It requires:
 - server TLS;
 - an operator-provisioned OpenShell Ed25519 public key;
 - a versioned Tenuo trust policy;
-- Redis when approval replay protection or `single_use_tools` is enabled; and
+- Redis for single-use proofs and approvals, over `rediss://` with a password;
+- a signed policy file and the signing public key; and
 - a pre-generated receipt key and durable receipt path when receipts are
   required.
 
@@ -145,16 +146,22 @@ setting unless `--allow-reusable-approvals` is set.
 
 ### Policy integrity
 
-Production requires a detached signature over the exact policy bytes. Sign
-with the operator CLI and give the middleware only the public key:
+Production requires a detached signature over the exact policy bytes. Create
+a signing key once, sign every policy version with it, and give the middleware
+only the public key:
 
 ```bash
+tenuo-openshell policy keygen --out policy-signing.key
+# prints the public key, for --policy-signing-key
 tenuo-openshell policy sign --policy policy.json --key policy-signing.key
 # writes policy.json.sig
 ```
 
 Start the middleware with `--policy-signing-key` (64 hex characters, or a
-path to that text). It checks the signature before the first load and again
+path to that text). When you replace a policy file in place, write the new
+`.sig` before the new policy: the middleware skips the reload until the policy
+bytes change, so it never pairs the new policy with the old signature. A
+Kubernetes ConfigMap that holds both keys updates them together. It checks the signature before the first load and again
 before a reload replaces the active snapshot. `--allow-unsigned-policy` is
 the explicit exception and cannot be combined with a signing key.
 
@@ -168,7 +175,11 @@ the signing key is as sensitive as the issuer keys:
 - A provider that fetches snapshots must authenticate them before returning
   them; see [Provider integration](providers.md).
 - Keep `version` monotonic. The middleware refuses a lower version, so an old
-  file cannot be replayed onto a running replica.
+  file cannot be replayed onto a running replica. A restarting replica has no
+  floor: it loads any correctly signed policy, including an older one. Keep
+  only the current signed version where the middleware reads it. A signed,
+  versioned envelope with a persistent floor is tracked in
+  [tenuo-ai/tenuo#782](https://github.com/tenuo-ai/tenuo/issues/782).
 
 Policy files are versioned and polled. A valid higher version replaces the
 active snapshot atomically. Invalid or rolled-back updates preserve the last

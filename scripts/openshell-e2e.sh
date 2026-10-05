@@ -321,8 +321,15 @@ configure_supervisor_reachability() {
   SUPERVISOR_GRPC_ENDPOINT="http://$SERVICE_HOST:$GATEWAY_PORT"
 }
 
+# Production requires a signed policy, and so does the demo. The operator key
+# signs every version the harness writes.
+sign_policy() {
+  "$TENUO_TARGET/debug/tenuo-openshell" policy sign --policy "$1" --key "$POLICY_KEY" >/dev/null \
+    || fail "sign $1"
+}
+
 start_middleware() {
-  # The harness rewrites policy.json after startup, so the file is unsigned.
+  sign_policy "$FIXTURE_DIR/policy.json"
   TENUO_DECISION_LOG=1 "$MIDDLEWARE_BIN" \
     --policy "$FIXTURE_DIR/policy.json" \
     --listen "0.0.0.0:$MIDDLEWARE_PORT" \
@@ -332,7 +339,7 @@ start_middleware() {
     --openshell-gateway-id "$RUN_ID" \
     --openshell-jwt-key-id "$RUN_ID" \
     --allow-in-memory-replay \
-    --allow-unsigned-policy \
+    --policy-signing-key "$POLICY_PUBLIC_KEY" \
     --audience "$AUDIENCE" \
     --admin-listen "127.0.0.1:$ADMIN_PORT" \
     --evaluate-results \
@@ -752,6 +759,10 @@ update_policy() {
   shift 2
   jq --arg sandbox "$SANDBOX_ID" "$@" "(.version = ((.version // 1) + 1)) | $edit" \
     "$FIXTURE_DIR/policy.json" >"$FIXTURE_DIR/policy.next.json"
+  # Signature first: until the policy bytes change, the middleware skips the
+  # reload, so it never pairs the new policy with the old signature.
+  sign_policy "$FIXTURE_DIR/policy.next.json"
+  mv "$FIXTURE_DIR/policy.next.json.sig" "$FIXTURE_DIR/policy.json.sig"
   mv "$FIXTURE_DIR/policy.next.json" "$FIXTURE_DIR/policy.json"
   version="$(jq -r .version "$FIXTURE_DIR/policy.json")"
   for _ in {1..30}; do
@@ -1105,6 +1116,9 @@ prepare_destination_python
   --mcp-port "$UPSTREAM_PORT" \
   --openshell-jwt-dir "$JWT_DIR" \
   --openshell-jwt-key-id "$RUN_ID" >"$FIXTURE_LOG" 2>&1
+POLICY_KEY="$RUN_DIR/secrets/policy-signing.key"
+POLICY_PUBLIC_KEY="$("$TENUO_TARGET/debug/tenuo-openshell" policy keygen --out "$POLICY_KEY")" \
+  || fail "policy signing key"
 write_gateway_config
 start_upstream
 wait_for_port "$UPSTREAM_PID" "$SERVICE_HOST" "$UPSTREAM_PORT" "MCP effect server"

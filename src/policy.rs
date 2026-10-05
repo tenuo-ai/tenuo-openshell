@@ -41,6 +41,9 @@ struct Sandbox {
     /// Tools for which a resent identical proof is the same effect. Every
     /// other tool reserves its proof once.
     idempotent_tools: HashSet<String>,
+    /// The policy still lists `single_use_tools`, which no longer changes
+    /// anything: every tool outside `idempotent_tools` is single-use.
+    lists_single_use_tools: bool,
     /// Whether an allowed call keeps `params._meta.tenuo` on the forwarded
     /// body. The sandbox attachment cannot turn strip into preserve.
     forward_proof: MetaMode,
@@ -379,6 +382,7 @@ impl PolicySet {
                     destinations,
                     mcp,
                     idempotent_tools,
+                    lists_single_use_tools: entry.get("single_use_tools").is_some(),
                     forward_proof,
                     pop_replay_ttl_secs,
                     max_result_bytes,
@@ -409,6 +413,18 @@ impl PolicySet {
             .get(sandbox_id)
             .map(|sandbox| sandbox.forward_proof)
             .unwrap_or(MetaMode::Strip)
+    }
+
+    /// Sandboxes whose entry still lists the deprecated `single_use_tools`.
+    pub fn deprecated_single_use_tools(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self
+            .sandboxes
+            .iter()
+            .filter(|(_, sandbox)| sandbox.lists_single_use_tools)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// `approval_replay_protection: false` leaves approval nonces reusable

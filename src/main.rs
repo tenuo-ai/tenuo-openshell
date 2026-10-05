@@ -303,6 +303,13 @@ async fn serve(args: Args) -> ExitCode {
         }
         (Some(_), _) => unreachable!("conflicting replay options were rejected"),
     }
+    let deprecated = policy.deprecated_single_use_tools();
+    if !deprecated.is_empty() {
+        eprintln!(
+            "warning: single_use_tools is deprecated and has no effect; every tool outside idempotent_tools is single-use (sandboxes: {})",
+            deprecated.join(", ")
+        );
+    }
     if security.is_some() && policy.reusable_approvals() && !args.allow_reusable_approvals {
         return usage_error(
             "production refuses approval_replay_protection set to false; pass --allow-reusable-approvals to keep approvals reusable until they expire"
