@@ -86,6 +86,10 @@ these changes when they upgrade:
 - `examples/issuance/`, a minimal per-request issuance service on the public
   `tenuo` Python package, with a test that installs its warrants with the
   real agent.
+- `make bench` (`scripts/bench.sh`) and `tenuo-openshell-bench`, which drive
+  the release middleware over gRPC with in-memory and Redis replay stores, and
+  [Performance](docs/performance.md) with the method and results. The README
+  now cites release-build numbers instead of a debug-build sample.
 
 ## [0.1.1] - 2026-10-04
 

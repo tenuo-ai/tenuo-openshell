@@ -157,10 +157,14 @@ walks through it end to end.
 - **NeMo Agent Toolkit:** a middleware plugin that denies unauthorized function
   calls in process, before `call_next`.
 
-The decision is fast enough to run inline on every call. Over 1,000
-iterations of the demo's requests, in a debug build, it took 0.45 ms at p50 and
-1.5 ms at p99. The middleware timeout is 2 s. Each demo run records these
-numbers in its outcome matrix.
+The decision is fast enough to run inline on every call. In a release build
+on one Apple M3 Max laptop, over gRPC, a call to a tool that is not single-use
+took 0.18 ms at p50 and 0.28 ms at p99. A single-use call, whose proof is
+reserved in Redis, took 0.76 ms at p50 and 1.6 ms at p99, most of it two
+round trips to a local Redis. One replica decided about 27,000 single-use
+calls per second with 64 concurrent callers, or about 12,000 with required
+receipts. The middleware timeout is 2 s. See [Performance](docs/performance.md)
+for the method, the full tables, and `make bench` to rerun them.
 
 ## Try it
 
@@ -241,6 +245,7 @@ To build from source instead, run `cargo build --release --locked --bins`.
 | Deploy the middleware | [Deployment](docs/deployment.md) and the [Helm chart](deploy/helm/tenuo-openshell/README.md) |
 | Operate and recover it | [Operations runbook](docs/operations.md) |
 | Issue warrants in production (Tenuo Cloud, or your own keys) | [Production issuance](docs/production-issuance.md) |
+| Size replicas and place Redis | [Performance](docs/performance.md) |
 | Understand the components and trust boundaries | [Architecture](docs/architecture.md) |
 | Review attackers, controls, and residual risk | [Threat model](docs/threat-model.md) |
 | Verify and export receipts | [Receipts](docs/receipts.md) |
