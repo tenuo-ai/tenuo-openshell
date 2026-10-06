@@ -5,7 +5,7 @@
 #   scripts/build-nat-demo-image.sh <tag> [<agent-image>]
 #
 # The agent binary comes from <agent-image> when given, for example
-# ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.5. Otherwise it is built from
+# ghcr.io/tenuo-ai/tenuo-openshell-agent:v0.1.6. Otherwise it is built from
 # this checkout as a static musl binary, as the release builds it. The
 # nemo-agent-toolkit-tenuo plugin is built from this checkout with uv.
 #

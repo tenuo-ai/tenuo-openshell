@@ -6,6 +6,8 @@ All notable changes will be documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-05
+
 ### Added
 
 - [A NeMo Agent Toolkit agent in an OpenShell sandbox](docs/nat-agent.md), a
@@ -34,6 +36,11 @@ All notable changes will be documented here. The format follows
   tool `read_logs`; and `approval_required: defer` hands a call that needs an
   approval to the next stage, the Tenuo proxy, which records it for an
   approver. Defaults are unchanged.
+- A weekly and on-demand job that runs the NAT guide's real-model section
+  against NVIDIA's API with a repository secret, injected through OpenShell's
+  provider profile, and checks outcomes: the key stays a placeholder in the
+  sandbox, the in-task read runs, the out-of-task read never reaches the MCP
+  server, and the restart is held and runs once after approval.
 
 ### Changed
 
@@ -42,6 +49,15 @@ All notable changes will be documented here. The format follows
   and its NIM workflow uses `nvidia/nemotron-3-super-120b-a12b`:
   `meta/llama-3.3-70b-instruct` reached end of life on NVIDIA's API on
   2026-08-26.
+- The NIM workflow sets `max_tokens: 1024` (the client's default, 300, cut a
+  reasoning model off mid-step), allows two parse retries, and tells the agent
+  that an authorization denial or a pending approval is final. Without that,
+  a real model retries a denied call with other arguments; the warrant denies
+  each attempt.
+- The demo MCP server's `restart_service` schema requires `replicas`, as the
+  demo warrant's constraint does. A model leaves out an optional argument,
+  and the call is then denied instead of held for approval.
+- `tenuo-openshell` runs every `openshell` command with a null stdin.
 
 ## [0.1.5] - 2026-10-05
 
@@ -317,7 +333,8 @@ First release.
 - NVIDIA NeMo Agent Toolkit `nvidia-nat-core` 1.8.x.
 - Tenuo 0.3.2 or later within 0.3.
 
-[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tenuo-ai/tenuo-openshell/compare/v0.1.2...v0.1.3
