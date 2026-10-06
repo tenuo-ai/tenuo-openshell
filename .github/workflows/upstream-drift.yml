@@ -116,8 +116,9 @@ jobs:
           python-version: "3.13"
       - name: Plugin tests and discovery on the newest Agent Toolkit and Tenuo
         env:
-          NAT_VERSION: ${{ needs.versions.outputs.nat_newest }}
-        run: ci/nat-compat.sh "$NAT_VERSION" 3.13
+          # Not NAT_VERSION: the nat CLI reads NAT_<OPTION> variables as its options.
+          NAT_NEWEST: ${{ needs.versions.outputs.nat_newest }}
+        run: ci/nat-compat.sh "$NAT_NEWEST" 3.13
 
   tenuo-latest:
     runs-on: ubuntu-latest
