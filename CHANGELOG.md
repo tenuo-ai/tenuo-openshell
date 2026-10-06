@@ -8,14 +8,25 @@ All notable changes will be documented here. The format follows
 
 ### Added
 
-- A nightly upstream drift workflow, `openshell-upstream.yml`, that compares
-  the vendored protocol files with OpenShell `main` and runs the full demo
-  against it. Failures open or update one issue labeled `upstream-drift`. It
-  does not gate pull requests; the pinned E2E stays the release gate.
+- A [compatibility matrix](docs/compatibility-matrix.md): the supported
+  OpenShell, NeMo Agent Toolkit, Tenuo, and Python versions and OpenShell
+  installs, the CI job that covers each, and how a range moves.
+- A nightly `Upstream drift` workflow that fails loudly when an upstream moves.
+  It checks the newest OpenShell, NeMo Agent Toolkit, and Tenuo releases
+  against the supported ranges; compares the vendored protocol files with
+  OpenShell `main`; runs the full demo against OpenShell `main` and against a
+  release newer than the pin; runs the plugin tests on the newest
+  `nvidia-nat-core`, pre-releases included; and runs the Rust tests on the
+  newest `tenuo` crate. A failure turns the run red and opens or comments on
+  one issue labeled `upstream-drift`; a passing run closes it. It does not
+  gate pull requests; the pinned E2E stays the release gate.
 - `OPENSHELL_REF` for `make e2e` and `scripts/bootstrap-openshell.sh`: build an
   OpenShell branch, tag, or commit, with the supervisor and sandbox images
   OpenShell published for that commit. The default is still the verified pin.
-- `scripts/openshell-upstream.sh` with `resolve`, `images`, and `proto-drift`.
+- `scripts/openshell-upstream.sh` with `resolve`, `images`, and `proto-drift`,
+  and `scripts/upstream-versions.py`.
+- `ci/nat-compat.sh` takes an exact Agent Toolkit version, pre-releases
+  included, and installs it past the plugin's declared range.
 
 ## [0.1.6] - 2026-10-05
 

@@ -170,17 +170,20 @@ and is therefore a separate manual/weekly CI job.
 
 ## Upstream tracking
 
-The pin is the release gate. `.github/workflows/openshell-upstream.yml` watches
+The pin is the release gate. `.github/workflows/upstream-drift.yml` watches
 OpenShell `main` nightly (04:41 UTC, or on dispatch with another ref) so a
 breaking change, such as the streaming request hook proposed in
 NVIDIA/OpenShell#3307, shows up before a re-pin. It is not a required check:
-branch protection requires jobs from `ci.yml` only.
+branch protection requires jobs from `ci.yml` only. The same workflow checks
+the NeMo Agent Toolkit and Tenuo releases; the
+[compatibility matrix](compatibility-matrix.md) lists every job. The
+OpenShell jobs:
 
 | Job | What it does |
 |---|---|
 | `proto-drift` | `scripts/openshell-upstream.sh proto-drift main` downloads the upstream copy of each file the vendored `NOTICE` lists and fails with a Markdown table and unified diff when any differs or is gone. It also notes, without failing, when `proto/sandbox.proto`, which holds the middleware registration fields, changed since the pin. It needs no build and finishes in seconds. |
-| `e2e` | `OPENSHELL_REF=main make e2e`: the full authenticated demo against upstream source. |
-| `report` | Runs after both with `issues: write`, the only job with that permission. A failure opens an issue labeled `upstream-drift`, or comments on the open one; a later passing run comments and closes it. |
+| `e2e` | `OPENSHELL_REF=main make e2e`: the full authenticated demo against upstream source. While OpenShell's newest release is newer than the pin, it also runs against that release tag. |
+| `report` | Runs after every job with `issues: write`, the only job with that permission. A failure opens an issue labeled `upstream-drift`, or comments on the open one; a later passing run comments and closes it. |
 
 **Ref selection.** With `OPENSHELL_REF` set, `scripts/bootstrap-openshell.sh`
 fetches that branch, tag, or commit into `.cache/openshell/upstream`, separate

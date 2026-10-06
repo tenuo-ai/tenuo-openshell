@@ -34,10 +34,11 @@ runners are Ubuntu only.
 
 `make e2e` always runs against the pinned OpenShell, and the weekly
 `openshell-e2e.yml` workflow is the release gate. The nightly
-`openshell-upstream.yml` workflow runs `scripts/openshell-upstream.sh
-proto-drift` and `OPENSHELL_REF=main make e2e` against OpenShell `main`; it is
-not a required check, and a failure updates the open `upstream-drift` issue
-rather than blocking pull requests. See `docs/upstream-verification.md`.
+`upstream-drift.yml` workflow checks the newest OpenShell, NeMo Agent Toolkit,
+and Tenuo releases, including `OPENSHELL_REF=main make e2e`; it is not a
+required check, and a failure updates the open `upstream-drift` issue rather
+than blocking pull requests. See
+[the compatibility matrix](docs/compatibility-matrix.md).
 
 `make check` also formats and lints the fuzz targets, and runs
 `cargo deny check` when `cargo-deny` is installed. `deny.toml` holds the
