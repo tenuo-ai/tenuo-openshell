@@ -186,6 +186,7 @@ identity=(--certificate-identity "https://github.com/tenuo-ai/tenuo-openshell/.g
 cosign verify "ghcr.io/tenuo-ai/tenuo-openshell:$tag" "${identity[@]}"
 cosign verify "ghcr.io/tenuo-ai/tenuo-openshell-agent:$tag" "${identity[@]}"
 cosign verify "ghcr.io/tenuo-ai/tenuo-openshell-demo:$tag" "${identity[@]}"
+cosign verify "ghcr.io/tenuo-ai/tenuo-openshell-nat-demo:$tag" "${identity[@]}"
 cosign verify "ghcr.io/tenuo-ai/charts/tenuo-openshell:${tag#v}" "${identity[@]}"
 
 helm install tenuo-openshell oci://ghcr.io/tenuo-ai/charts/tenuo-openshell \
