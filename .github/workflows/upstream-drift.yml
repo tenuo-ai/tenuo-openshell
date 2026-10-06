@@ -91,7 +91,11 @@ jobs:
         run: |
           mkdir -p drift
           status=0
-          scripts/openshell-upstream.sh proto-drift "$OPENSHELL_REF" >drift/proto-drift.md || status=$?
+          scripts/openshell-upstream.sh proto-drift "$OPENSHELL_REF" >drift/proto-drift.md 2>drift/stderr.txt || status=$?
+          cat drift/stderr.txt >&2
+          if [[ "$status" != 0 && -s drift/stderr.txt ]]; then
+            printf '\n```text\n%s\n```\n' "$(tail -20 drift/stderr.txt)" >>drift/proto-drift.md
+          fi
           cat drift/proto-drift.md >>"$GITHUB_STEP_SUMMARY"
           exit "$status"
       - name: Upload drift report
@@ -235,7 +239,9 @@ jobs:
               for log in reports/openshell-upstream-e2e-*/upstream-e2e.log; do
                 [[ -f "$log" ]] || continue
                 printf '\n### E2E: %s\n\n```text\n' "$(basename "$(dirname "$log")")"
-                grep -E '^(INFO upstream|INFO supervisor image|INFO sandbox runtime image|FAIL|STALL)' "$log" | head -40 || true
+                lines="$(grep -E '^(INFO upstream|INFO supervisor image|INFO sandbox runtime image|FAIL|STALL)' "$log" | head -40 || true)"
+                # Failures before the demo starts, such as an unresolvable ref, match nothing above.
+                printf '%s\n' "${lines:-$(tail -20 "$log")}"
                 printf '```\n'
               done
             fi
