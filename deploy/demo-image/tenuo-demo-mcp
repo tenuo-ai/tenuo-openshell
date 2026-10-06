@@ -37,6 +37,9 @@ TOOLS = [
                 **ARGUMENTS["properties"],
                 "replicas": {"type": "integer", "minimum": 1},
             },
+            # Required, as the warrant's constraint on it makes it: a model
+            # leaves out an optional argument, and the call is then denied.
+            "required": ["service", "environment", "replicas"],
         },
     },
 ]
@@ -48,7 +51,7 @@ def run(name, arguments):
     if name == "read_logs":
         return f"{service}/{environment}: 3 lines, last: GET /health 200"
     if name == "restart_service":
-        replicas = arguments.get("replicas", 1)
+        replicas = arguments["replicas"]
         return f"restarted {service} in {environment} with {replicas} replicas"
     return None
 

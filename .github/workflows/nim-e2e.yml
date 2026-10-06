@@ -1,0 +1,193 @@
+name: NAT agent on a real NVIDIA model
+
+# Runs docs/nat-agent.md through its section 4, "Use a real NVIDIA model",
+# against OpenShell installed with its install.sh (the deb package and its
+# systemd user service), with a real model on NVIDIA's hosted endpoint. It
+# checks outcomes, not the model's wording: the sandbox sees OpenShell's
+# placeholder, not the key; the model calls succeed; an in-task read reaches
+# the MCP server, an out-of-task read does not, and a restart is held until it
+# is approved, then runs once. scripts/quickstart-check.sh (TENUO_QS_NIM=1)
+# runs it; .github/workflows/linux-install.yml runs the rest of the guide on
+# every install method, without a model.
+#
+# The NVIDIA_API_KEY repository secret is in the environment of one step,
+# the one that runs the guide, which hands it to `openshell provider create
+# --credential NVIDIA_API_KEY` and to nothing else. GitHub does not give
+# repository secrets to pull requests from forks; on those, the job is
+# skipped. On pull requests it runs only when this file changes.
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/nim-e2e.yml
+      - deploy/nat-demo-image/nim.yml
+      - deploy/demo-image/tenuo-demo-mcp
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      artifacts:
+        description: >-
+          build: the CLI and images from this checkout. published: the release
+          the guide names, for a post-release check.
+        type: choice
+        options: [build, published]
+        default: build
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nim-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nim:
+    name: deb (x86_64), real model
+    # Forks get no secrets; skip rather than fail.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      OPENSHELL_INSTALL_METHOD: deb
+      OPENSHELL_VERSION: v0.1.2
+      BUILD: ${{ github.event_name != 'workflow_dispatch' || inputs.artifacts == 'build' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The model is in NVIDIA's catalog
+        run: |
+          {
+            echo "TENUO_QS_NIM_DIR=$RUNNER_TEMP/nim"
+            echo "TENUO_QS_LOG_DIR=$RUNNER_TEMP/logs"
+          } >>"$GITHUB_ENV"
+          # The public model list needs no key.
+          model="$(sed -n 's/^ *model_name: *//p' deploy/nat-demo-image/nim.yml)"
+          echo "model: $model"
+          curl -fsS --retry 3 https://integrate.api.nvidia.com/v1/models |
+            jq -e --arg model "$model" 'any(.data[]; .id == $model)' >/dev/null || {
+              echo "::error::$model is not in https://integrate.api.nvidia.com/v1/models"
+              exit 1
+            }
+
+      # A runner job has no login session, so the user's systemd manager is
+      # not running. Lingering starts it, as a desktop login would.
+      - name: Start the user systemd manager
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            [[ -S "$runtime/bus" ]] && break
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=$runtime" >>"$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >>"$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime" systemctl --user is-system-running || true
+
+      - name: Install OpenShell with its install script
+        run: |
+          # The audited OpenShell v0.1.2 commit, as in linux-install.yml.
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/6648bd0c290efbc41ba131ee9831ee45cd431f94/install.sh | sh
+
+      - name: A plain OpenShell sandbox runs
+        run: |
+          openshell --version
+          openshell status
+          openshell sandbox create --name install-check --no-tty --no-keep -- true
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: env.BUILD == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: env.BUILD == 'true'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        if: env.BUILD == 'true'
+        with:
+          python-version: "3.12"
+      - name: Build the CLI and the images
+        if: env.BUILD == 'true'
+        run: |
+          cargo build --release --locked --bin tenuo-openshell
+          docker build -q -t tenuo-openshell:candidate .
+          scripts/build-demo-image.sh tenuo-openshell-demo:candidate
+          scripts/build-nat-demo-image.sh tenuo-openshell-nat-demo:candidate tenuo-openshell-demo:candidate
+          {
+            echo "TENUO_QS_CLI=$PWD/target/release/tenuo-openshell"
+            echo "TENUO_QS_MIDDLEWARE_IMAGE=tenuo-openshell:candidate"
+            echo "TENUO_QS_DEMO_IMAGE=tenuo-openshell-demo:candidate"
+            echo "TENUO_QS_NAT_IMAGE=tenuo-openshell-nat-demo:candidate"
+          } >>"$GITHUB_ENV"
+
+      # The only step with the key. No `set -x`: the script never prints it.
+      - name: Run the NeMo Agent Toolkit guide with a real model
+        env:
+          TENUO_QS_GATEWAY: installed
+          TENUO_QS_GUIDE: nat-agent
+          TENUO_QS_NIM: "1"
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          if [[ -z "${NVIDIA_API_KEY:-}" ]]; then
+            echo "::error::the NVIDIA_API_KEY secret is not available to this run"
+            exit 1
+          fi
+          scripts/quickstart-check.sh
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## NAT agent on a real NVIDIA model"
+            echo
+            if [[ -s "$TENUO_QS_NIM_DIR/summary.md" ]]; then
+              cat "$TENUO_QS_NIM_DIR/summary.md"
+            else
+              echo "The real-model section did not start."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs
+        if: failure()
+        run: |
+          mkdir -p "$TENUO_QS_LOG_DIR"
+          systemctl --user status openshell-gateway --no-pager >"$TENUO_QS_LOG_DIR/gateway-status.txt" 2>&1 || true
+          journalctl --user -u openshell-gateway --no-pager >"$TENUO_QS_LOG_DIR/gateway.log" 2>&1 || true
+          docker ps -a >"$TENUO_QS_LOG_DIR/docker-ps.txt" 2>&1 || true
+          if [[ -d "$TENUO_QS_NIM_DIR" ]]; then
+            cp -R "$TENUO_QS_NIM_DIR" "$TENUO_QS_LOG_DIR/agent"
+          fi
+
+      # The key never reaches these logs: the sandbox holds a placeholder,
+      # and the gateway is not asked to log it. Check anyway, and redact it
+      # if it is there, before anything is uploaded. The key is read from the
+      # environment, not passed as an argument.
+      - name: Check the logs for the key
+        if: failure()
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          python3 - "$TENUO_QS_LOG_DIR" <<'EOF'
+          import os, pathlib, sys
+          key = os.environ.get("NVIDIA_API_KEY", "").encode()
+          if not key:
+              sys.exit(0)
+          found = []
+          for path in pathlib.Path(sys.argv[1]).rglob("*"):
+              if path.is_file():
+                  data = path.read_bytes()
+                  if key in data:
+                      path.write_bytes(data.replace(key, b"[redacted]"))
+                      found.append(str(path))
+          for path in found:
+              print(f"::warning::redacted the key in {path}")
+          print(f"key found in {len(found)} file(s)")
+          EOF
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nim-e2e-${{ github.run_id }}
+          path: ${{ runner.temp }}/logs/
+          if-no-files-found: warn
+          retention-days: 14

@@ -373,6 +373,8 @@ ones: `openshell policy get tenuo-nat --full` shows `_provider_nvidia`, which
 lets only `/usr/local/bin/python3.12` reach `integrate.api.nvidia.com:443`.
 The MCP server is still reachable only through the Tenuo agent.
 
+<!-- check: nim-outcomes -->
+
 Run the agent on `/etc/tenuo-nat/nim.yml`. It is `scripted.yml` with NAT's
 `nim` model, `nvidia/nemotron-3-super-120b-a12b`, which reads
 `NVIDIA_API_KEY`:
@@ -385,6 +387,13 @@ The model chooses its own calls, so the run differs from the scripted one,
 but each call it makes gets the same treatment: a staging read runs,
 anything outside the task is denied, and a restart is held for
 `tenuo-openshell approve --dev --sandbox tenuo-nat`.
+
+A real model may also try to get around a denial. In testing, Nemotron
+answered a denied production read by retrying with other service names
+(`identity-service`, `auth`, `auth-service`) and with `prod` for
+`production`. The warrant denied every attempt, and none reached the MCP
+server. `nim.yml` tells the agent that a denial is final so the run ends
+cleanly; remove that instruction to watch the attempts.
 
 To use another model, copy the workflow, change `model_name`, upload the copy
 with `openshell sandbox upload`, and pass its path in the sandbox to
