@@ -167,3 +167,44 @@ covers Rust formatting, linting, tests and release builds, JWT negative cases, s
 fixture generation, Agent Toolkit 1.9 plugin tests, entry-point discovery, and
 package builds. The full gateway suite requires a supported container runtime
 and is therefore a separate manual/weekly CI job.
+
+## Upstream tracking
+
+The pin is the release gate. `.github/workflows/upstream-drift.yml` watches
+OpenShell `main` nightly (04:41 UTC, or on dispatch with another ref) so a
+breaking change, such as the streaming request hook proposed in
+NVIDIA/OpenShell#3307, shows up before a re-pin. It is not a required check:
+branch protection requires jobs from `ci.yml` only. The same workflow checks
+the NeMo Agent Toolkit and Tenuo releases; the
+[compatibility matrix](compatibility-matrix.md) lists every job. The
+OpenShell jobs:
+
+| Job | What it does |
+|---|---|
+| `proto-drift` | `scripts/openshell-upstream.sh proto-drift main` downloads the upstream copy of each file the vendored `NOTICE` lists and fails with a Markdown table and unified diff when any differs or is gone. It also notes, without failing, when `proto/sandbox.proto`, which holds the middleware registration fields, changed since the pin. It needs no build and finishes in seconds. |
+| `e2e` | `OPENSHELL_REF=main make e2e`: the full authenticated demo against upstream source. While OpenShell's newest release is newer than the pin, it also runs against that release tag. |
+| `report` | Runs after every job with `issues: write`, the only job with that permission. A failure opens an issue labeled `upstream-drift`, or comments on the open one; a later passing run comments and closes it. |
+
+**Ref selection.** With `OPENSHELL_REF` set, `scripts/bootstrap-openshell.sh`
+fetches that branch, tag, or commit into `.cache/openshell/upstream`, separate
+from the pinned checkout, and records the ref and resolved commit in
+`.cache/openshell/upstream.commit`. Without it, the bootstrap is unchanged: the
+pinned tag, verified against the pinned commit.
+
+**Images.** OpenShell's `Release Dev` workflow pushes
+`ghcr.io/nvidia/openshell/supervisor` and `ghcr.io/nvidia/openshell/sandbox`
+tagged with the full commit SHA for every `main` commit, and moves the `dev`
+tag only after its own integration suite passes. There is no `main` tag. The
+release tags follow the same scheme: the `6648bd0…` tags carry the same
+digests as `0.1.2`. `scripts/openshell-upstream.sh resolve main` therefore
+walks back from the tip, up to 30 commits, to the newest commit with both
+images, and the e2e builds that commit and runs those images pinned by digest,
+so the gateway, supervisor, and sandbox runtime always come from one commit.
+A tip pushed minutes earlier simply resolves to its parent. Setting both
+`TENUO_DEMO_SUPERVISOR_IMAGE` and `TENUO_DEMO_SANDBOX_RUNTIME_IMAGE` skips
+resolution and builds the ref itself, for example with images built locally
+from that checkout. `dev` is not used: it lags `main` by however long upstream
+integration takes and would pair new source with older images.
+
+The run's `results/evidence/manifest.json` records the resolved commit, the
+requested ref, and both image references.

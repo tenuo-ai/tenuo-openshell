@@ -42,6 +42,7 @@ task authority work.
 | --- | --- |
 | Components, data flow, and trust boundaries | [Architecture](architecture.md) |
 | Attackers, controls, and residual risk | [Threat model](threat-model.md) |
+| Supported versions and the CI job behind each | [Compatibility matrix](compatibility-matrix.md) |
 | Supported OpenShell extension contract | [Upstream verification](upstream-verification.md) |
 | Protocol coverage and known gaps | [OpenShell gap analysis](openshell-gap-analysis.md) |
 

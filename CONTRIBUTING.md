@@ -32,6 +32,14 @@ what it runs, weekly, and on demand, where `artifacts: published` checks a
 release. It is not a required check. The rpm packages are not covered: hosted
 runners are Ubuntu only.
 
+`make e2e` always runs against the pinned OpenShell, and the weekly
+`openshell-e2e.yml` workflow is the release gate. The nightly
+`upstream-drift.yml` workflow checks the newest OpenShell, NeMo Agent Toolkit,
+and Tenuo releases, including `OPENSHELL_REF=main make e2e`; it is not a
+required check, and a failure updates the open `upstream-drift` issue rather
+than blocking pull requests. See
+[the compatibility matrix](docs/compatibility-matrix.md).
+
 `make check` also formats and lints the fuzz targets, and runs
 `cargo deny check` when `cargo-deny` is installed. `deny.toml` holds the
 advisory, license, and source policy. Add an advisory ignore only with the

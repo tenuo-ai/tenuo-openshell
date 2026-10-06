@@ -1,0 +1,255 @@
+name: Upstream drift
+
+# Checks this repository against what its upstreams ship now, every night:
+# NVIDIA OpenShell main and its newest release, the newest NeMo Agent Toolkit
+# (pre-releases included), and the newest Tenuo. Any failure turns the run
+# red and opens, or comments on, one issue labeled upstream-drift; a passing
+# run closes it. It gates nothing: the pinned OpenShell E2E stays the release
+# gate, and branch protection requires jobs from ci.yml only.
+# docs/compatibility-matrix.md says what each job covers.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: OpenShell branch, tag, or commit to track
+        default: main
+        required: true
+  schedule:
+    - cron: "41 4 * * *"
+  pull_request:
+    paths:
+      - .github/workflows/upstream-drift.yml
+      - scripts/openshell-upstream.sh
+      - scripts/upstream-versions.py
+      - ci/nat-compat.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-drift-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  OPENSHELL_REF: ${{ inputs.ref || 'main' }}
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      openshell_refs: ${{ steps.refs.outputs.refs }}
+      nat_newest: ${{ steps.check.outputs.nat_newest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - name: Compare supported versions with the newest upstream releases
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p drift
+          status=0
+          uv run --no-project --with packaging scripts/upstream-versions.py >drift/versions.md || status=$?
+          cat drift/versions.md >>"$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Choose the OpenShell refs to test
+        id: refs
+        if: always() && steps.check.outputs.openshell_release
+        env:
+          RELEASE: ${{ steps.check.outputs.openshell_release }}
+          PIN: ${{ steps.check.outputs.openshell_pin }}
+        run: |
+          # The weekly OpenShell E2E already covers the pin. A newer release
+          # is tested here until the pin moves to it.
+          if [[ "$RELEASE" == "$PIN" || "$RELEASE" == "$OPENSHELL_REF" ]]; then
+            refs="$(jq -cn --arg ref "$OPENSHELL_REF" '[$ref]')"
+          else
+            refs="$(jq -cn --arg ref "$OPENSHELL_REF" --arg release "$RELEASE" '[$ref, $release]')"
+          fi
+          echo "refs=$refs" >>"$GITHUB_OUTPUT"
+      - name: Upload versions report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-versions
+          path: drift/
+          if-no-files-found: warn
+          retention-days: 30
+
+  proto-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compare vendored protocol files with OpenShell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p drift
+          status=0
+          scripts/openshell-upstream.sh proto-drift "$OPENSHELL_REF" >drift/proto-drift.md 2>drift/stderr.txt || status=$?
+          cat drift/stderr.txt >&2
+          if [[ "$status" != 0 && -s drift/stderr.txt ]]; then
+            printf '\n```text\n%s\n```\n' "$(tail -20 drift/stderr.txt)" >>drift/proto-drift.md
+          fi
+          cat drift/proto-drift.md >>"$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openshell-upstream-proto-drift
+          path: drift/
+          if-no-files-found: warn
+          retention-days: 30
+
+  nat-next:
+    name: nat-next (${{ needs.versions.outputs.nat_newest }})
+    needs: versions
+    if: always() && needs.versions.outputs.nat_newest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.13"
+      - name: Plugin tests and discovery on the newest Agent Toolkit and Tenuo
+        env:
+          # Not NAT_VERSION: the nat CLI reads NAT_<OPTION> variables as its options.
+          NAT_NEWEST: ${{ needs.versions.outputs.nat_newest }}
+        run: ci/nat-compat.sh "$NAT_NEWEST" 3.13
+
+  tenuo-latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Move the lock to the newest tenuo crate in range
+        run: |
+          cargo update --package tenuo
+          cargo tree --package tenuo --depth 0
+      - name: Rust tests on the newest tenuo crate
+        run: cargo test --all-targets
+
+  e2e:
+    name: e2e (${{ matrix.ref }})
+    needs: versions
+    if: always() && needs.versions.outputs.openshell_refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.versions.outputs.openshell_refs) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install demo system dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq netcat-openbsd openssl
+      - name: Run real OpenShell gateway and sandbox test against upstream
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENSHELL_REF: ${{ matrix.ref }}
+        run: |
+          set -o pipefail
+          mkdir -p results
+          status=0
+          make e2e 2>&1 | tee results/upstream-e2e.log || status=$?
+          if [[ -f .cache/openshell/upstream.commit ]]; then
+            cp .cache/openshell/upstream.commit results/
+          fi
+          exit "$status"
+      - name: Name the evidence artifact
+        id: artifact
+        if: always()
+        env:
+          REF: ${{ matrix.ref }}
+        run: echo "name=openshell-upstream-e2e-${REF//[^A-Za-z0-9._-]/-}" >>"$GITHUB_OUTPUT"
+      - name: Upload reproducible demo evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  report:
+    # Pull requests only exercise the checks; the tracking issue follows the
+    # nightly and dispatched runs.
+    needs: [versions, proto-drift, nat-next, tenuo-latest, e2e]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          path: reports
+      - name: Open, update, or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          label=upstream-drift
+          title="Upstream drift"
+          gh label create "$label" --color D93F0B \
+            --description "The nightly upstream drift check failed" --force
+          issue="$(gh issue list --label "$label" --state open --limit 1 --json number --jq '.[0].number // empty')"
+          failed="$(jq -r 'to_entries[] | select(.value.result != "success") | .key' <<<"$RESULTS")"
+
+          if [[ -z "$failed" ]]; then
+            if [[ -n "$issue" ]]; then
+              gh issue comment "$issue" --body "Recovered: every upstream drift check passes. $RUN_URL"
+              gh issue close "$issue"
+            fi
+            exit 0
+          fi
+
+          body="$RUNNER_TEMP/body.md"
+          # Backticks in the printf formats are Markdown code spans.
+          # shellcheck disable=SC2016
+          {
+            printf 'The nightly upstream drift check failed: %s\n\n' "$RUN_URL"
+            printf '| Check | Result |\n|---|---|\n'
+            jq -r 'to_entries[] | "| `\(.key)` | \(.value.result) |"' <<<"$RESULTS"
+            printf '\n'
+            if grep -qx versions <<<"$failed" && [[ -f reports/upstream-versions/versions.md ]]; then
+              cat reports/upstream-versions/versions.md
+              printf '\n'
+            fi
+            if grep -qx proto-drift <<<"$failed" && [[ -f reports/openshell-upstream-proto-drift/proto-drift.md ]]; then
+              head -c 40000 reports/openshell-upstream-proto-drift/proto-drift.md
+              printf '\n'
+            fi
+            if grep -qx e2e <<<"$failed"; then
+              for log in reports/openshell-upstream-e2e-*/upstream-e2e.log; do
+                [[ -f "$log" ]] || continue
+                printf '\n### E2E: %s\n\n```text\n' "$(basename "$(dirname "$log")")"
+                lines="$(grep -E '^(INFO upstream|INFO supervisor image|INFO sandbox runtime image|FAIL|STALL)' "$log" | head -40 || true)"
+                # Failures before the demo starts, such as an unresolvable ref, match nothing above.
+                printf '%s\n' "${lines:-$(tail -20 "$log")}"
+                printf '```\n'
+              done
+            fi
+            printf '\nLogs are in the run. See `docs/compatibility-matrix.md` for what each check covers and how a range moves.\n'
+          } >"$body"
+
+          if [[ -n "$issue" ]]; then
+            gh issue comment "$issue" --body-file "$body"
+          else
+            gh issue create --title "$title" --label "$label" --body-file "$body"
+          fi

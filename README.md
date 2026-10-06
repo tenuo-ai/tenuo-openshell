@@ -270,7 +270,10 @@ is enforced, and what remains.
 | Tenuo | 0.3.x, tested with 0.3.2 |
 
 A range moves only after the unit, plugin, container, and real-gateway suites
-pass against the new version.
+pass against the new version. The [compatibility matrix](docs/compatibility-matrix.md)
+lists the OpenShell installs covered and the CI job behind each row. A nightly
+job tests OpenShell `main` and the newest NeMo Agent Toolkit and Tenuo
+releases, and fails loudly when one breaks.
 
 ## Portable across agent runtimes
 

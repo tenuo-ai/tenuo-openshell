@@ -161,6 +161,7 @@ driver's `grpc_endpoint` to it.
 | Variable | Effect |
 | --- | --- |
 | `OPENSHELL_SOURCE` | Use an existing pinned OpenShell checkout instead of downloading one. |
+| `OPENSHELL_REF` | Build an OpenShell branch, tag, or commit instead of the pin, with the supervisor and sandbox images OpenShell published for it. For upstream drift tracking only; see `docs/upstream-verification.md`. |
 | `TENUO_DEMO_DRIVER=podman` | Use Podman instead of Docker. |
 | `TENUO_DEMO_PYTHON` | Use an interpreter that already has `tenuo` installed. |
 | `TENUO_DEMO_SUPERVISOR_IMAGE`, `TENUO_DEMO_SANDBOX_RUNTIME_IMAGE`, `TENUO_DEMO_WORKLOAD_IMAGE` | Use private mirrors; keep them pinned by digest. A workload override must already contain curl and a `sandbox` account with UID and GID 1000. |
