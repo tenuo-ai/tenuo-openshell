@@ -640,16 +640,11 @@ if [[ "$GUIDE_NAME" == nat-agent ]]; then
     echo "the NAT guide does not name a tenuo-openshell-nat-demo image" >&2
     exit 1
   }
-  # The guides name one release, except while the NAT image is new: it first
-  # ships as v0.1.6, and the quickstart still names its demo image at v0.1.5.
-  # A local demo image is not a release tag, so it skips this comparison.
+  # The guides name one release. A local demo image is not a release tag, so
+  # it skips this comparison.
   nat_tag="${NAT_IMAGE##*:}"
   demo_tag="${DEMO_IMAGE##*:}"
-  nat_image_is_new=0
-  if [[ "$nat_tag" == v0.1.6 && "$demo_tag" == v0.1.5 ]]; then
-    nat_image_is_new=1
-  fi
-  if [[ -z "${TENUO_QS_DEMO_IMAGE:-}" && "$nat_tag" != "$demo_tag" && "$nat_image_is_new" -ne 1 ]]; then
+  if [[ -z "${TENUO_QS_DEMO_IMAGE:-}" && "$nat_tag" != "$demo_tag" ]]; then
     echo "the guides name different releases: $NAT_IMAGE and $DEMO_IMAGE" >&2
     exit 1
   fi
