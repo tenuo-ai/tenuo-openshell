@@ -15,7 +15,7 @@ version is supported when a job runs against it. A row without a job says so.
 | Tenuo, Python (`tenuo`) | `>=0.3.2,<0.4` | 0.3.2 | The newest release in range |
 | Tenuo, Rust (`tenuo` crate) | `^0.3.2` | 0.3.3 (locked) | The newest release in range |
 | Python | 3.11, 3.12, 3.13 | All three | |
-| Model (NAT agent guide) | `nvidia/nemotron-3.5-lightning-30b-a3b` on NVIDIA's API | Weekly | |
+| Model (NAT agent guide) | `nvidia/llama-3.1-nemotron-70b-instruct` on NVIDIA's API | Weekly | |
 
 ## OpenShell installs
 

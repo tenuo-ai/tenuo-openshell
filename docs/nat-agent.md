@@ -376,7 +376,7 @@ The MCP server is still reachable only through the Tenuo agent.
 <!-- check: nim-outcomes -->
 
 Run the agent on `/etc/tenuo-nat/nim.yml`. It is `scripted.yml` with NAT's
-`nim` model, `nvidia/nemotron-3.5-lightning-30b-a3b`, which reads
+`nim` model, `nvidia/llama-3.1-nemotron-70b-instruct`, which reads
 `NVIDIA_API_KEY`:
 
 ```bash

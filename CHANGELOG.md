@@ -35,9 +35,9 @@ All notable changes will be documented here. The format follows
 - Rust and Python locks now use Tenuo 0.3.3. JWT verification uses
   `jsonwebtoken`'s AWS-LC backend, removing unused RSA and elliptic-curve
   dependency paths while retaining the EdDSA-only contract.
-- The real-model NAT example now uses
-  `nvidia/nemotron-3.5-lightning-30b-a3b` and gives the reasoning model enough
-  output tokens to emit its ReAct tool action.
+- The real-model NAT example now uses the currently available
+  `nvidia/llama-3.1-nemotron-70b-instruct`, whose normal response content is
+  compatible with Agent Toolkit's textual ReAct parser.
 
 ### Fixed
 
