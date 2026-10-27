@@ -59,11 +59,11 @@ jobs:
           - method: deb
             arch: x86_64
             runner: ubuntu-24.04
-            version: v0.1.2
+            version: v0.1.5
           - method: deb
             arch: arm64
             runner: ubuntu-24.04-arm
-            version: v0.1.2
+            version: v0.1.5
           - method: snap
             arch: x86_64
             runner: ubuntu-24.04
@@ -93,9 +93,9 @@ jobs:
 
       - name: Install OpenShell with its install script
         run: |
-          # Pin the installer source to the audited OpenShell v0.1.2 commit.
+          # Pin the installer source to the audited OpenShell v0.1.5 commit.
           # It still exercises NVIDIA's real package installation path.
-          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/6648bd0c290efbc41ba131ee9831ee45cd431f94/install.sh | sh
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/bdb956f2cd65a635f1294fccf1d138d263bf650f/install.sh | sh
           echo /snap/bin >>"$GITHUB_PATH"
 
       - name: A plain OpenShell sandbox runs
@@ -143,7 +143,12 @@ jobs:
         run: |
           mkdir -p logs
           if [[ "$OPENSHELL_INSTALL_METHOD" == snap ]]; then
-            sudo journalctl -u snap.openshell.gateway --no-pager 2>&1 | tee logs/gateway.log >/dev/null
+            mode="$(sudo snap get openshell gateway-mode 2>/dev/null || true)"
+            if [[ "$mode" == system ]]; then
+              sudo journalctl -u snap.openshell.system-gateway.service --no-pager 2>&1 | tee logs/gateway.log >/dev/null
+            else
+              journalctl --user -u snap.openshell.user-gateway.service --no-pager 2>&1 | tee logs/gateway.log >/dev/null
+            fi
             { sudo snap services openshell; sudo snap connections openshell; } 2>&1 | tee logs/snap.txt >/dev/null
             sudo cat /var/snap/openshell/common/gateway.toml 2>&1 | tee logs/gateway.toml >/dev/null
             sudo journalctl -k --no-pager 2>&1 | grep -i apparmor | tee logs/apparmor.log >/dev/null || true

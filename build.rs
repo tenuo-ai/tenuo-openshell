@@ -8,8 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // without changing the generated API shape.
         .type_attribute(".", "#[allow(clippy::large_enum_variant)]")
         .compile_protos(
-            &["proto/openshell/v0.1.2/supervisor_middleware.proto"],
-            &["proto/openshell/v0.1.2"],
+            &["proto/openshell/v0.1.5/supervisor_middleware.proto"],
+            &["proto/openshell/v0.1.5"],
         )?;
     Ok(())
 }

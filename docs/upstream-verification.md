@@ -1,16 +1,18 @@
 # Upstream verification
 
-Date: 2026-09-28  
-Status: contract record for the vendored proto  
-Pin: NVIDIA OpenShell **v0.1.2**, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` (2026-09-28)
+Date: 2026-10-26
+Status: contract record for the vendored proto
+Pin: NVIDIA OpenShell **v0.1.5**, commit `bdb956f2cd65a635f1294fccf1d138d263bf650f` (2026-10-20)
 
-`proto/supervisor_middleware.proto` at that commit is byte-identical to `main` at `9cb72baa2e61a1b5f12407e6e82da7fdba0aa722` (2026-09-29). The vendored copies in `proto/openshell/v0.1.2/` are the v0.1.2 files. A newer OpenShell release requires a new pin before the compatibility range moves.
+The vendored copies in `proto/openshell/v0.1.5/` are byte-identical to the
+v0.1.5 files. The nightly drift workflow compares them with `main`. A newer
+OpenShell release requires a new pin before the compatibility range moves.
 
 This file records what the pinned source and the public docs actually say. Where they differ, the pinned proto wins for implementation.
 
 ## OpenShell supervisor middleware
 
-Confirmed in `proto/supervisor_middleware.proto` at v0.1.2.
+Confirmed in `proto/supervisor_middleware.proto` at v0.1.5.
 
 | Contract | Pinned source |
 |---|---|
@@ -32,7 +34,7 @@ Confirmed in `proto/supervisor_middleware.proto` at v0.1.2.
 
 `Describe` does not take `google.protobuf.Empty`. The request is `MiddlewareDescribeRequest`, which carries `openshell.extension.v1.PeerMetadata`. That message lives in `proto/extension.proto`, which is vendored beside the middleware proto. `MiddlewareManifest.expected_audience` is the exact JWT audience the service verifies. An empty value skips OpenShell's post-authentication consistency check.
 
-`ValidateConfigRequest.middleware_name` is documented as the built-in middleware name or the operator-owned registration name. An attachment such as `middleware: tenuo/authorization` matches this proto. RFC 0009 text that says policy selects a binding ID returned by `Describe`, independent of the registration name, is stale relative to v0.1.2.
+`ValidateConfigRequest.middleware_name` is documented as the built-in middleware name or the operator-owned registration name. An attachment such as `middleware: tenuo/authorization` matches this proto. RFC 0009 text that says policy selects a binding ID returned by `Describe`, independent of the registration name, is stale relative to v0.1.5.
 
 Gateway registration fields in `proto/sandbox.proto` `SupervisorMiddlewareService` match the spec's TOML shape: `name`, `grpc_endpoint`, `max_payload_bytes`, `timeout` (`10ms` through `30s`, default `500ms`), `tls_ca_cert_pem`, `audience`, and `allow_insecure_transport`. The `openshell/` registration prefix remains reserved. `tenuo/authorization` does not use it.
 
@@ -70,7 +72,7 @@ The proto states that a response block does not roll back the upstream request. 
 
 - `EvaluateWebSocketSession`. The proto includes a `binary` payload variant. The supervisor middleware docs say binary frames are not delivered to middleware and pass through.
 - Response header and body transforms. The response binding only passes through, skips, or blocks.
-- Extension client-certificate authentication. OpenShell v0.1.2 supports
+- Extension client-certificate authentication. OpenShell v0.1.5 supports
   server-authenticated TLS plus an extension bearer JWT, but does not provision
   client certificates. The production listener implements that exact contract;
   plaintext and unauthenticated operation require the explicit
@@ -82,7 +84,7 @@ Fail-closed middleware does not inspect `tls: skip` endpoints, non-HTTP TCP, or 
 
 ## MCP policy surface
 
-Confirmed in v0.1.2:
+Confirmed in v0.1.5:
 
 - `proto/sandbox.proto`, `L7Allow.params` and `L7DenyRule.params`: "Currently only params.name is supported for tools/call filtering."
 - `crates/openshell-supervisor-network/src/l7/jsonrpc.rs`: policy-visible MCP params expose only `params.name`. The test `mcp_mode_ignores_tool_arguments_when_extracting_policy_params` asserts that a `tools/call` with nested `arguments` yields a one-entry params map whose only key is `name`.
@@ -151,7 +153,7 @@ CI runs the plugin tests and `nat info components` discovery in the locked envir
 | OpenShell supervisor middleware docs | Resolves |
 | OpenShell supervisor middleware RFC | Resolves |
 | `github.com/NVIDIA/OpenShell` `docs/extensibility/supervisor-middleware.mdx` | 404. The spec now cites the docs site and the RFC. |
-| OpenShell `architecture/security-policy.md` | Present at the v0.1.2 tree. Not re-read for this pin. |
+| OpenShell `architecture/security-policy.md` | Present at the v0.1.5 tree. Reviewed for this pin. |
 
 ## Executable verification
 

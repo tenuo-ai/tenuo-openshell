@@ -251,7 +251,7 @@ To build from source instead, run `cargo build --release --locked --bins`.
 
 Tenuo authorizes MCP Streamable HTTP traffic that crosses the configured
 middleware binding. OpenShell network policy closes the other paths. With
-the pinned OpenShell v0.1.2, the middleware does not see `tls: skip` endpoints,
+the pinned OpenShell v0.1.5, the middleware does not see `tls: skip` endpoints,
 raw TCP, binary WebSocket frames, or server-to-client WebSocket messages, so
 deny those routes to protected servers.
 
@@ -264,7 +264,7 @@ is enforced, and what remains.
 
 | Component | Version |
 | --- | --- |
-| NVIDIA OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` |
+| NVIDIA OpenShell | v0.1.5, commit `bdb956f2cd65a635f1294fccf1d138d263bf650f` |
 | Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` |
 | NVIDIA NeMo Agent Toolkit | Current source: 1.8.x and 1.9.x; released range is declared on PyPI |
 | Tenuo | 0.3.x, tested with 0.3.2 |

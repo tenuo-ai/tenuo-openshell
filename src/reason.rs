@@ -1,6 +1,6 @@
 //! Stable OpenShell `reason_code` values.
 //!
-//! Codes match the v0.1.2 grammar: a lowercase ASCII letter, then lowercase
+//! Codes match the v0.1.5 grammar: a lowercase ASCII letter, then lowercase
 //! ASCII letters, digits, or underscores, at most 64 bytes.
 
 pub const MISSING_WARRANT: &str = "tenuo_missing_warrant";

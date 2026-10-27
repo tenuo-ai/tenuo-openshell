@@ -1,7 +1,7 @@
 # What OpenShell's MCP policy can match
 
-Date: 2026-09-28  
-Pin: OpenShell v0.1.2 (`6648bd0c290efbc41ba131ee9831ee45cd431f94`)
+Date: 2026-10-26
+Pin: OpenShell v0.1.5 (`bdb956f2cd65a635f1294fccf1d138d263bf650f`)
 
 OpenShell layer-7 MCP matchers accept `params.name` only. Tool arguments are not a policy input. The policy is selected per sandbox.
 

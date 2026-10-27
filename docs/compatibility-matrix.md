@@ -9,13 +9,13 @@ version is supported when a job runs against it. A row without a job says so.
 
 | Component | Supported | Tested in CI | Newest upstream, checked nightly |
 | --- | --- | --- | --- |
-| NVIDIA OpenShell | v0.1.2, commit `6648bd0c290efbc41ba131ee9831ee45cd431f94` | v0.1.2 (release gate) | `main` and the newest release |
-| Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` | Vendored files from v0.1.2 | Byte comparison with `main` |
+| NVIDIA OpenShell | v0.1.5, commit `bdb956f2cd65a635f1294fccf1d138d263bf650f` | v0.1.5 (release gate) | `main` and the newest release |
+| Supervisor middleware protocol | `openshell.middleware.v1`, protocol `1.0` | Vendored files from v0.1.5 | Byte comparison with `main` |
 | NVIDIA NeMo Agent Toolkit (`nvidia-nat-core`) | `>=1.8,<1.10` | 1.8.x, 1.9.x | The newest release, pre-releases included |
 | Tenuo, Python (`tenuo`) | `>=0.3.2,<0.4` | 0.3.2 | The newest release in range |
-| Tenuo, Rust (`tenuo` crate) | `^0.3.2` | 0.3.2 (locked) | The newest release in range |
+| Tenuo, Rust (`tenuo` crate) | `^0.3.2` | 0.3.3 (locked) | The newest release in range |
 | Python | 3.11, 3.12, 3.13 | All three | |
-| Model (NAT agent guide) | `nvidia/nemotron-3-super-120b-a12b` on NVIDIA's API | Weekly | |
+| Model (NAT agent guide) | `nvidia/nemotron-3.5-lightning-30b-a3b` on NVIDIA's API | Weekly | |
 
 ## OpenShell installs
 

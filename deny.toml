@@ -24,14 +24,11 @@ no-default-features = false
 # the condition for removing the ignore.
 yanked = "deny"
 ignore = [
-    # rsa (Marvin attack) has no fixed release. It arrives only through
-    # jsonwebtoken's rust_crypto backend. The middleware verifies OpenShell
-    # extension JWTs with EdDSA only: keys are loaded with from_ed_pem, any
-    # header that is not EdDSA is rejected, and Validation is EdDSA-only, so
-    # no RSA code runs and the middleware holds no RSA private key, which is
-    # what the attack targets. Remove this entry when rsa ships a fix or
-    # jsonwebtoken can be built without RSA.
-    { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken rust_crypto; JWT verification is EdDSA-only, no RSA keys" },
+    # serde_yaml is deprecated and carries unmaintained unsafe-libyaml. It is
+    # still part of Tenuo's public policy format and this CLI's OpenShell YAML
+    # handling, so removing it requires a coordinated parser migration. Keep
+    # this narrowly pinned to the advisory; actual vulnerabilities still fail.
+    { id = "RUSTSEC-2024-0449", reason = "serde_yaml backend is unmaintained; remove after the CLI and tenuo migrate parsers" },
 ]
 
 [licenses]

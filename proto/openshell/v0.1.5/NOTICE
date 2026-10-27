@@ -1,5 +1,5 @@
-The files in this directory are vendored from NVIDIA OpenShell v0.1.2
-(commit 6648bd0c290efbc41ba131ee9831ee45cd431f94) and remain under the
+The files in this directory are vendored from NVIDIA OpenShell v0.1.5
+(commit bdb956f2cd65a635f1294fccf1d138d263bf650f) and remain under the
 Apache License 2.0. Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES.
 
 Source paths:

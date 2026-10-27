@@ -27,7 +27,7 @@
 # This script stands in for the installer without installing anything
 # system-wide. In a temporary XDG_CONFIG_HOME and XDG_STATE_HOME it:
 #
-# - downloads the OpenShell v0.1.2 `openshell` and `openshell-gateway`
+# - downloads the OpenShell v0.1.5 `openshell` and `openshell-gateway`
 #   binaries;
 # - writes the default gateway.toml the Homebrew formula writes, and creates
 #   the TLS and JWT material with `openshell-gateway generate-certs`, as the
@@ -58,7 +58,7 @@
 #   TENUO_QS_NAT_IMAGE         local image for ghcr.io/tenuo-ai/tenuo-openshell-nat-demo,
 #                              for the nat-agent guide
 #                              (scripts/build-nat-demo-image.sh builds one)
-#   TENUO_QS_OPENSHELL_BIN     directory that already holds the OpenShell v0.1.2
+#   TENUO_QS_OPENSHELL_BIN     directory that already holds the OpenShell v0.1.5
 #                              openshell and openshell-gateway for this host
 #
 # TENUO_QS_GATEWAY=installed runs the guide against the OpenShell this host
@@ -87,7 +87,7 @@ case "$GUIDE_NAME" in
     ;;
 esac
 GUIDE="$ROOT/docs/$GUIDE_NAME.md"
-OPENSHELL_VERSION=v0.1.2
+OPENSHELL_VERSION=v0.1.5
 GATEWAY_PORT=17670
 FORWARDER=tenuo-quickstart-loopback
 export MODE="${TENUO_QS_GATEWAY:-standin}"
@@ -237,6 +237,10 @@ wait_for_installed_gateway() {
   return 1
 }
 
+snap_gateway_mode() {
+  sudo snap get openshell gateway-mode 2>/dev/null || printf 'user\n'
+}
+
 # The guide's restart command for this install.
 restart_gateway() {
   case "$INSTALL" in
@@ -253,7 +257,11 @@ restart_gateway() {
       wait_for_installed_gateway
       ;;
     snap)
-      sudo snap restart openshell.gateway
+      if [[ "$(snap_gateway_mode)" == system ]]; then
+        sudo snap restart openshell.system-gateway
+      else
+        systemctl --user restart snap.openshell.user-gateway.service
+      fi
       wait_for_installed_gateway
       ;;
   esac
@@ -477,7 +485,13 @@ gateway_log() {
   case "$INSTALL" in
     standin) tail -30 "$GATEWAY_LOG" 2>/dev/null ;;
     systemd) journalctl --user -u openshell-gateway --no-pager -n 30 2>/dev/null ;;
-    snap) sudo journalctl -u snap.openshell.gateway --no-pager -n 30 2>/dev/null ;;
+    snap)
+      if [[ "$(snap_gateway_mode)" == system ]]; then
+        sudo journalctl -u snap.openshell.system-gateway.service --no-pager -n 30 2>/dev/null
+      else
+        journalctl --user -u snap.openshell.user-gateway.service --no-pager -n 30 2>/dev/null
+      fi
+      ;;
   esac
 }
 

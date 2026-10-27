@@ -567,7 +567,7 @@ pub struct GatewayConfig {
 }
 
 const SNAP_CONFIG: &str = "/var/snap/openshell/common/gateway.toml";
-const SNAP_RESTART: &str = "sudo snap restart openshell.gateway";
+const SNAP_RESTART: &str = "systemctl --user restart snap.openshell.user-gateway.service";
 const BREW_RESTART: &str = "brew services restart openshell";
 const USER_SERVICE_RESTART: &str = "systemctl --user restart openshell-gateway";
 
@@ -1003,7 +1003,7 @@ mod tests {
         assert!(root_only.contains("/var/snap/openshell/common/gateway.toml, with sudo"));
         assert!(root_only.contains("cannot read that file"));
         assert!(root_only.contains("grpc_endpoint = \"http://127.0.0.1:18651\""));
-        assert!(root_only.contains("sudo snap restart openshell.gateway"));
+        assert!(root_only.contains("systemctl --user restart snap.openshell.user-gateway.service"));
         assert!(!root_only.contains("version = 2"));
         // Its CLI cannot read ~/.local; the policy copy is in its own directory.
         assert!(root_only.contains("snap/openshell/common/tenuo-openshell/demo-policy.yaml \\"));

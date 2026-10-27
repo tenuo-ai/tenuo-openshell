@@ -318,7 +318,7 @@ You need an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com),
 in `NVIDIA_API_KEY` in your shell.
 
 Write the profile. It is NVIDIA's
-[example profile](https://github.com/NVIDIA/OpenShell/blob/v0.1.2/providers/nvidia.yaml)
+[example profile](https://github.com/NVIDIA/OpenShell/blob/v0.1.5/providers/nvidia.yaml)
 with its own ID, and with `binaries` naming the image's Python by its real
 path, which is how OpenShell identifies the process:
 
@@ -376,7 +376,7 @@ The MCP server is still reachable only through the Tenuo agent.
 <!-- check: nim-outcomes -->
 
 Run the agent on `/etc/tenuo-nat/nim.yml`. It is `scripted.yml` with NAT's
-`nim` model, `nvidia/nemotron-3-super-120b-a12b`, which reads
+`nim` model, `nvidia/nemotron-3.5-lightning-30b-a3b`, which reads
 `NVIDIA_API_KEY`:
 
 ```bash
