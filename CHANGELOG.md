@@ -45,9 +45,9 @@ All notable changes will be documented here. The format follows
   supply-chain advisory check passes. The unmaintained `unsafe-libyaml`
   advisory has a narrow documented exception until both the CLI and Tenuo can
   migrate from `serde_yaml`; vulnerability advisories remain fatal.
-- Snap install checks and operator instructions now restart and collect logs
-  from OpenShell's `user-gateway` or `system-gateway` service instead of the
-  removed `openshell.gateway` service.
+- Snap install checks and operator instructions now select the matching config,
+  ownership, restart, and logs for OpenShell's `user-gateway` or
+  `system-gateway` service instead of the removed `openshell.gateway` service.
 
 ## [0.1.6] - 2026-10-05
 

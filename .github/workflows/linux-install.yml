@@ -146,11 +146,12 @@ jobs:
             mode="$(sudo snap get openshell gateway-mode 2>/dev/null || true)"
             if [[ "$mode" == system ]]; then
               sudo journalctl -u snap.openshell.system-gateway.service --no-pager 2>&1 | tee logs/gateway.log >/dev/null
+              sudo cat /var/snap/openshell/common/gateway.toml 2>&1 | tee logs/gateway.toml >/dev/null
             else
               journalctl --user -u snap.openshell.user-gateway.service --no-pager 2>&1 | tee logs/gateway.log >/dev/null
+              cat ~/snap/openshell/common/.config/openshell/gateway.toml 2>&1 | tee logs/gateway.toml >/dev/null
             fi
             { sudo snap services openshell; sudo snap connections openshell; } 2>&1 | tee logs/snap.txt >/dev/null
-            sudo cat /var/snap/openshell/common/gateway.toml 2>&1 | tee logs/gateway.toml >/dev/null
             sudo journalctl -k --no-pager 2>&1 | grep -i apparmor | tee logs/apparmor.log >/dev/null || true
           else
             systemctl --user status openshell-gateway --no-pager >logs/gateway-status.txt 2>&1 || true

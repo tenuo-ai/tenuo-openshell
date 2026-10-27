@@ -65,9 +65,10 @@
 # already has, installed with install.sh and with its local gateway running,
 # instead of the stand-in: the `openshell` on PATH, and the gateway's own
 # gateway.toml and restart command. It knows the deb and rpm packages' systemd
-# user service (~/.config/openshell/gateway.toml) and the snap
-# (/var/snap/openshell/common/gateway.toml, edited with sudo; its sandbox
-# policy path is the one the guide gives for the snap). gateway.toml is
+# user service (~/.config/openshell/gateway.toml) and both snap gateway modes
+# (the user config under ~/snap/openshell/common or the root-owned system
+# config under /var/snap/openshell/common; its sandbox policy path is the one
+# the guide gives for the snap). gateway.toml is
 # restored, and the gateway restarted, when the check ends. The guide's dev
 # state directory is used as written; one already there is moved aside and
 # put back. .github/workflows/linux-install.yml runs this mode.
@@ -142,10 +143,23 @@ fi
 
 # The installed gateway: where its gateway.toml is and how it restarts.
 export INSTALL=standin
+SNAP_GATEWAY_MODE=
+snap_gateway_mode() {
+  if [[ -n "$SNAP_GATEWAY_MODE" ]]; then
+    printf '%s\n' "$SNAP_GATEWAY_MODE"
+  else
+    sudo snap get openshell gateway-mode 2>/dev/null || printf 'user\n'
+  fi
+}
 if [[ "$MODE" == installed ]]; then
   if command -v snap >/dev/null 2>&1 && snap list openshell >/dev/null 2>&1; then
     INSTALL=snap
-    GATEWAY_CONFIG=/var/snap/openshell/common/gateway.toml
+    SNAP_GATEWAY_MODE="$(snap_gateway_mode)"
+    case "$SNAP_GATEWAY_MODE" in
+      system) GATEWAY_CONFIG=/var/snap/openshell/common/gateway.toml ;;
+      user) GATEWAY_CONFIG="$HOME/snap/openshell/common/.config/openshell/gateway.toml" ;;
+      *) echo "unsupported OpenShell snap gateway mode: $SNAP_GATEWAY_MODE" >&2; exit 1 ;;
+    esac
   elif command -v systemctl >/dev/null 2>&1 && systemctl --user cat openshell-gateway >/dev/null 2>&1; then
     INSTALL=systemd
     GATEWAY_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/openshell/gateway.toml"
@@ -193,9 +207,9 @@ unset TENUO_OPENSHELL_IMAGE TENUO_OPENSHELL_DEMO_IMAGE
 # --- check functions ---------------------------------------------------------
 # Also defined in the script run from the guide.
 
-# A snap's gateway.toml is root's.
+# A system-mode snap's gateway.toml is root-owned; user mode is not.
 as_config_owner() {
-  if [[ "$INSTALL" == snap ]]; then sudo "$@"; else "$@"; fi
+  if [[ "$INSTALL" == snap && "$(snap_gateway_mode)" == system ]]; then sudo "$@"; else "$@"; fi
 }
 
 start_gateway() {
@@ -235,10 +249,6 @@ wait_for_installed_gateway() {
   done
   echo "the gateway did not come back" >&2
   return 1
-}
-
-snap_gateway_mode() {
-  sudo snap get openshell gateway-mode 2>/dev/null || printf 'user\n'
 }
 
 # The guide's restart command for this install.
@@ -768,8 +778,8 @@ expect() {
 expect "middleware  started  http://127.0.0.1:18651  ($MIDDLEWARE_IMAGE)" "dev up started the middleware image"
 expect "($DEMO_IMAGE)" "dev up started the demo image"
 expect "again: middleware  running" "a second dev up left the middleware running"
-if [[ "$INSTALL" == snap ]]; then
-  # Only root reads the snap's gateway.toml; `dev up` says it cannot check it.
+if [[ "$INSTALL" == snap && "$(snap_gateway_mode)" == system ]]; then
+  # Only root reads the system snap's gateway.toml; `dev up` cannot check it.
   expect "again:    to the end of $GATEWAY_CONFIG, with sudo. \`dev up\` cannot read that file," \
     "a second dev up said it cannot read the snap's gateway.toml"
   expect "gateway     cannot read $GATEWAY_CONFIG" "dev status said it cannot read the snap's gateway.toml"

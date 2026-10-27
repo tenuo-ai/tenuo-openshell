@@ -566,16 +566,68 @@ pub struct GatewayConfig {
     pub restart: &'static str,
 }
 
-const SNAP_CONFIG: &str = "/var/snap/openshell/common/gateway.toml";
-const SNAP_RESTART: &str = "systemctl --user restart snap.openshell.user-gateway.service";
+const SNAP_SYSTEM_CONFIG: &str = "/var/snap/openshell/common/gateway.toml";
+const SNAP_USER_CONFIG: &str = "snap/openshell/common/.config/openshell/gateway.toml";
+const SNAP_SYSTEM_RESTART: &str = "sudo snap restart openshell.system-gateway";
+const SNAP_USER_RESTART: &str = "systemctl --user restart snap.openshell.user-gateway.service";
 const BREW_RESTART: &str = "brew services restart openshell";
 const USER_SERVICE_RESTART: &str = "systemctl --user restart openshell-gateway";
 
+#[derive(Clone, Copy)]
+enum SnapGatewayMode {
+    User,
+    System,
+}
+
+fn snap_user_config(home: &Path) -> PathBuf {
+    home.join(SNAP_USER_CONFIG)
+}
+
+fn snap_gateway_mode(home: &Path) -> Option<SnapGatewayMode> {
+    if let Ok(output) = Process::new("snap")
+        .args(["get", "openshell", "gateway-mode"])
+        .output()
+    {
+        if output.status.success() {
+            match String::from_utf8_lossy(&output.stdout).trim() {
+                "user" => return Some(SnapGatewayMode::User),
+                "system" => return Some(SnapGatewayMode::System),
+                _ => {}
+            }
+        }
+    }
+
+    // `snap get` can require elevated privileges. Existing configuration is a
+    // safe fallback for discovery without prompting from this developer CLI.
+    if Path::new(SNAP_SYSTEM_CONFIG).exists() {
+        Some(SnapGatewayMode::System)
+    } else if home.join("snap/openshell/common").exists() {
+        Some(SnapGatewayMode::User)
+    } else {
+        None
+    }
+}
+
+fn linux_gateway_candidates(
+    xdg: PathBuf,
+    home: &Path,
+    snap_mode: Option<SnapGatewayMode>,
+) -> Vec<(PathBuf, &'static str)> {
+    match snap_mode {
+        Some(SnapGatewayMode::User) => vec![(snap_user_config(home), SNAP_USER_RESTART)],
+        Some(SnapGatewayMode::System) => {
+            vec![(PathBuf::from(SNAP_SYSTEM_CONFIG), SNAP_SYSTEM_RESTART)]
+        }
+        None => vec![(xdg, USER_SERVICE_RESTART)],
+    }
+}
+
 impl GatewayConfig {
     pub fn locate() -> Result<Self> {
+        let home = home()?;
         let config_home = match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
             Some(dir) => PathBuf::from(dir),
-            None => home()?.join(".config"),
+            None => home.join(".config"),
         };
         let xdg = config_home.join("openshell/gateway.toml");
         let candidates = if cfg!(target_os = "macos") {
@@ -588,10 +640,7 @@ impl GatewayConfig {
                 (prefix.join("var/openshell/gateway.toml"), BREW_RESTART),
             ]
         } else {
-            vec![
-                (xdg, USER_SERVICE_RESTART),
-                (PathBuf::from(SNAP_CONFIG), SNAP_RESTART),
-            ]
+            linux_gateway_candidates(xdg, &home, snap_gateway_mode(&home))
         };
         Ok(Self::first_of(candidates))
     }
@@ -622,7 +671,7 @@ impl GatewayConfig {
 
     /// Whether this is the OpenShell snap's gateway.
     pub fn is_snap(&self) -> bool {
-        self.path == Path::new(SNAP_CONFIG)
+        self.restart == SNAP_USER_RESTART || self.restart == SNAP_SYSTEM_RESTART
     }
 
     /// The `grpc_endpoint` of the `tenuo/authorization` registration, if any.
@@ -990,23 +1039,35 @@ mod tests {
         assert!(stale.contains("registers tenuo/authorization at http://127.0.0.1:18651"));
         assert!(stale.contains("grpc_endpoint = \"http://127.0.0.1:19000\""));
 
-        // The snap's gateway.toml is root's: add the block with sudo, and
-        // restart the snap service.
-        let snap = GatewayConfig {
-            path: PathBuf::from(SNAP_CONFIG),
+        // A system-mode snap's gateway.toml is root-owned.
+        let system_snap = GatewayConfig {
+            path: PathBuf::from(SNAP_SYSTEM_CONFIG),
             contents: None,
             unreadable: true,
-            restart: SNAP_RESTART,
+            restart: SNAP_SYSTEM_RESTART,
         };
-        let root_only = next_steps(&state, &config(), &snap).unwrap();
+        let root_only = next_steps(&state, &config(), &system_snap).unwrap();
         assert!(root_only.contains("Add this block"));
         assert!(root_only.contains("/var/snap/openshell/common/gateway.toml, with sudo"));
         assert!(root_only.contains("cannot read that file"));
         assert!(root_only.contains("grpc_endpoint = \"http://127.0.0.1:18651\""));
-        assert!(root_only.contains("systemctl --user restart snap.openshell.user-gateway.service"));
+        assert!(root_only.contains(SNAP_SYSTEM_RESTART));
         assert!(!root_only.contains("version = 2"));
+
+        // A user-mode snap's config is readable and uses its user service.
+        let user_snap = GatewayConfig {
+            path: directory.path().join(SNAP_USER_CONFIG),
+            contents: None,
+            unreadable: false,
+            restart: SNAP_USER_RESTART,
+        };
+        let user_steps = next_steps(&state, &config(), &user_snap).unwrap();
+        assert!(user_steps.contains("Create"));
+        assert!(user_steps.contains(SNAP_USER_RESTART));
+        assert!(!user_steps.contains("with sudo"));
         // Its CLI cannot read ~/.local; the policy copy is in its own directory.
         assert!(root_only.contains("snap/openshell/common/tenuo-openshell/demo-policy.yaml \\"));
+        assert!(user_steps.contains("snap/openshell/common/tenuo-openshell/demo-policy.yaml \\"));
         assert!(!root_only.contains(&state.sandbox_policy().display().to_string()));
         assert!(missing.contains(&format!("--policy {} \\", state.sandbox_policy().display())));
     }
@@ -1019,7 +1080,7 @@ mod tests {
         let candidates = || {
             vec![
                 (xdg.clone(), USER_SERVICE_RESTART),
-                (snap.clone(), SNAP_RESTART),
+                (snap.clone(), SNAP_SYSTEM_RESTART),
             ]
         };
 
@@ -1034,7 +1095,7 @@ mod tests {
         fs::write(&snap, "[openshell]\nversion = 2\n").unwrap();
         let found = GatewayConfig::first_of(candidates());
         assert_eq!(found.path, snap);
-        assert_eq!(found.restart, SNAP_RESTART);
+        assert_eq!(found.restart, SNAP_SYSTEM_RESTART);
         assert_eq!(
             found.contents.as_deref(),
             Some("[openshell]\nversion = 2\n")
@@ -1055,9 +1116,34 @@ mod tests {
                 let locked = GatewayConfig::first_of(candidates());
                 assert_eq!(locked.path, snap);
                 assert!(locked.unreadable && locked.contents.is_none());
-                assert_eq!(locked.restart, SNAP_RESTART);
+                assert_eq!(locked.restart, SNAP_SYSTEM_RESTART);
             }
         }
+    }
+
+    #[test]
+    fn snap_gateway_mode_selects_matching_config_and_service() {
+        let directory = tempfile::tempdir().unwrap();
+        let xdg = directory.path().join("xdg/openshell/gateway.toml");
+
+        let user =
+            linux_gateway_candidates(xdg.clone(), directory.path(), Some(SnapGatewayMode::User));
+        assert_eq!(
+            user,
+            vec![(snap_user_config(directory.path()), SNAP_USER_RESTART)]
+        );
+
+        let system =
+            linux_gateway_candidates(xdg.clone(), directory.path(), Some(SnapGatewayMode::System));
+        assert_eq!(
+            system,
+            vec![(PathBuf::from(SNAP_SYSTEM_CONFIG), SNAP_SYSTEM_RESTART)]
+        );
+
+        assert_eq!(
+            linux_gateway_candidates(xdg.clone(), directory.path(), None),
+            vec![(xdg, USER_SERVICE_RESTART)]
+        );
     }
 
     #[test]
