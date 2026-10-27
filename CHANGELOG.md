@@ -36,7 +36,8 @@ All notable changes will be documented here. The format follows
   `jsonwebtoken`'s AWS-LC backend, removing unused RSA and elliptic-curve
   dependency paths while retaining the EdDSA-only contract.
 - The real-model NAT example now uses
-  `nvidia/nemotron-3.5-lightning-30b-a3b`.
+  `nvidia/nemotron-3.5-lightning-30b-a3b` and gives the reasoning model enough
+  output tokens to emit its ReAct tool action.
 
 ### Fixed
 

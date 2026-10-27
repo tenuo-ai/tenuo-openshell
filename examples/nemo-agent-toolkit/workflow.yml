@@ -18,6 +18,8 @@ llms:
     _type: nim
     model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     temperature: 0.0
+    # Leave enough room for the reasoning model to emit its ReAct action.
+    max_tokens: 4096
 
 workflow:
   _type: react_agent
