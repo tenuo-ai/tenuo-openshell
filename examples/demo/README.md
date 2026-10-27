@@ -142,8 +142,8 @@ The demo needs:
 The launcher checks the container runtime version before it builds anything.
 The first run takes 10–20 minutes.
 
-The launcher pins NVIDIA OpenShell v0.1.2 at commit
-`6648bd0c290efbc41ba131ee9831ee45cd431f94`. It:
+The launcher pins NVIDIA OpenShell v0.1.5 at commit
+`bdb956f2cd65a635f1294fccf1d138d263bf650f`. It:
 
 - builds the gateway and CLI from that commit;
 - pulls NVIDIA's multi-architecture supervisor and sandbox-runtime images by

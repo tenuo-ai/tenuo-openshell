@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 75
     env:
       OPENSHELL_INSTALL_METHOD: deb
-      OPENSHELL_VERSION: v0.1.2
+      OPENSHELL_VERSION: v0.1.5
       BUILD: ${{ github.event_name != 'workflow_dispatch' || inputs.artifacts == 'build' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,8 +88,8 @@ jobs:
 
       - name: Install OpenShell with its install script
         run: |
-          # The audited OpenShell v0.1.2 commit, as in linux-install.yml.
-          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/6648bd0c290efbc41ba131ee9831ee45cd431f94/install.sh | sh
+          # The audited OpenShell v0.1.5 commit, as in linux-install.yml.
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/bdb956f2cd65a635f1294fccf1d138d263bf650f/install.sh | sh
 
       - name: A plain OpenShell sandbox runs
         run: |

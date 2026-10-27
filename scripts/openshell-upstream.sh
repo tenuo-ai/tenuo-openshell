@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Track NVIDIA OpenShell past the pin. The pinned v0.1.2 run stays the release
+# Track NVIDIA OpenShell past the pin. The pinned v0.1.5 run stays the release
 # gate; this script only feeds the scheduled upstream drift job.
 #
 #   openshell-upstream.sh resolve [REF]      newest commit on REF (default main)

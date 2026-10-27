@@ -374,7 +374,7 @@ mod tests {
             "withheld_upstream",
             r#"{"error":"middleware_denied","reason_code":"tenuo_result_too_large"}"#,
         ),
-        // The quickstart's second identical call, as OpenShell v0.1.2 sent it.
+        // The quickstart's second identical call, as OpenShell v0.1.5 sends it.
         (
             "replayed_upstream",
             r#"{"binary":"/usr/bin/curl","detail":"Request rejected by configured middleware","error":"middleware_denied","host":"host.openshell.internal","layer":"l7","method":"POST","middleware":"tenuo-task-authority","path":"/mcp","policy":"demo-mcp","port":1,"reason_code":"tenuo_pop_replayed"}"#,

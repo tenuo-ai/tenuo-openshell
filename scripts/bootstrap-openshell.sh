@@ -9,8 +9,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAG="v0.1.2"
-COMMIT="6648bd0c290efbc41ba131ee9831ee45cd431f94"
+TAG="v0.1.5"
+COMMIT="bdb956f2cd65a635f1294fccf1d138d263bf650f"
 REF="${OPENSHELL_REF:-}"
 
 if [[ -z "$REF" ]]; then

@@ -96,7 +96,7 @@ started with `--insecure-dev`, `register --insecure-dev` takes an `http://`
 endpoint and prints `allow_insecure_transport = true` with no CA. OpenShell
 then sends no caller credential, so use it only for local development.
 
-The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
+The supported authorization point is OpenShell v0.1.5 MCP Streamable HTTP
 `HTTP_REQUEST / PRE_CREDENTIALS`. See the
 [upstream verification](upstream-verification.md) for the exact contract.
 

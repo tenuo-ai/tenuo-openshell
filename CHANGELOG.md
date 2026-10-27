@@ -28,6 +28,27 @@ All notable changes will be documented here. The format follows
 - `ci/nat-compat.sh` takes an exact Agent Toolkit version, pre-releases
   included, and installs it past the plugin's declared range.
 
+### Changed
+
+- The verified OpenShell pin, vendored supervisor protocol, release images,
+  install checks, and documentation now target OpenShell v0.1.5.
+- Rust and Python locks now use Tenuo 0.3.3. JWT verification uses
+  `jsonwebtoken`'s AWS-LC backend, removing unused RSA and elliptic-curve
+  dependency paths while retaining the EdDSA-only contract.
+- The real-model NAT example now uses the callable
+  `nvidia/nemotron-3.5-lightning-30b-a3b` endpoint with thinking disabled so
+  Agent Toolkit's textual ReAct parser receives normal response content.
+
+### Fixed
+
+- Updated `rustls`, `rustls-webpki`, and `tokio` to patched releases so the
+  supply-chain advisory check passes. The unmaintained `unsafe-libyaml`
+  advisory has a narrow documented exception until both the CLI and Tenuo can
+  migrate from `serde_yaml`; vulnerability advisories remain fatal.
+- Snap install checks and operator instructions now select the matching config,
+  ownership, restart, and logs for OpenShell's `user-gateway` or
+  `system-gateway` service instead of the removed `openshell.gateway` service.
+
 ## [0.1.6] - 2026-10-05
 
 ### Added

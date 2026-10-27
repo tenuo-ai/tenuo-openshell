@@ -156,7 +156,7 @@ See [Provider integration](providers.md) for the adapter contract.
 
 ## Protocol coverage
 
-The supported authorization point is OpenShell v0.1.2 MCP Streamable HTTP
+The supported authorization point is OpenShell v0.1.5 MCP Streamable HTTP
 `HTTP_REQUEST / PRE_CREDENTIALS`. The optional `HTTP_RESPONSE / PRE_RETURN`
 binding records and limits results; see [Tool results](#tool-results).
 `tls: skip`, raw TCP, binary WebSocket frames,

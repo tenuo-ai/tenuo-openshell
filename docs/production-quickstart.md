@@ -11,7 +11,7 @@ walkthrough sets up what production needs instead:
 - keys you create and keep.
 
 It goes from nothing to one allowed and two denied MCP tool calls in about 10
-minutes. It uses only released artifacts: the OpenShell v0.1.2 binaries, the
+minutes. It uses only released artifacts: the OpenShell v0.1.5 binaries, the
 Tenuo v0.1.6 images, and the `tenuo-openshell` v0.1.6 CLI. Nothing is built
 from source. For Redis replay protection and Kubernetes, continue with
 [Deployment](deployment.md) and the
@@ -25,7 +25,7 @@ in this guide, checks every expected outcome, and cleans up.
 
 | You end with | Where |
 | --- | --- |
-| An OpenShell v0.1.2 gateway with Tenuo registered over TLS and JWT | Host process |
+| An OpenShell v0.1.5 gateway with Tenuo registered over TLS and JWT | Host process |
 | The Tenuo middleware | Docker container `tenuo-quickstart-middleware` |
 | An MCP server with `read_logs` and `restart_service` | Host process |
 | A sandbox whose task may read `payments` logs in `staging` or `dev` | Sandbox `tenuo-quickstart` |
@@ -78,9 +78,9 @@ case "$(uname -s)/$(uname -m)" in
   *) echo "unsupported platform" >&2; false ;;
 esac
 mkdir -p bin
-curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell-$cli.tar.gz" \
+curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.5/openshell-$cli.tar.gz" \
   | tar -xz -C bin
-curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell-gateway-$gateway.tar.gz" \
+curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.5/openshell-gateway-$gateway.tar.gz" \
   | tar -xz -C bin
 curl -fsSL "https://github.com/tenuo-ai/tenuo-openshell/releases/download/v0.1.6/tenuo-openshell-v0.1.6-$cli.tar.gz" \
   | tar -xz -C bin tenuo-openshell

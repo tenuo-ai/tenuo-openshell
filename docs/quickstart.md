@@ -88,7 +88,8 @@ before the block. The snap's file belongs to root, so edit it with `sudo`.
 | --- | --- |
 | macOS (Homebrew) | `brew services restart openshell` |
 | Linux (deb or rpm) | `systemctl --user restart openshell-gateway` |
-| Linux (snap) | `sudo snap restart openshell.gateway` |
+| Linux (snap, default user gateway) | `systemctl --user restart snap.openshell.user-gateway.service` |
+| Linux (snap, system gateway mode) | `sudo snap restart openshell.system-gateway` |
 
 <!-- check: register-gateway -->
 
