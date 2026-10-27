@@ -16,10 +16,13 @@ function_groups:
 llms:
   nim:
     _type: nim
-    model_name: nvidia/llama-3.1-nemotron-70b-instruct
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     temperature: 0.0
-    # Leave enough room for the complete ReAct action and final answer.
     max_tokens: 1024
+    # NAT's textual ReAct parser needs the action in normal response content.
+    model_kwargs:
+      chat_template_kwargs:
+        enable_thinking: false
 
 workflow:
   _type: react_agent

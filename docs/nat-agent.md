@@ -376,8 +376,9 @@ The MCP server is still reachable only through the Tenuo agent.
 <!-- check: nim-outcomes -->
 
 Run the agent on `/etc/tenuo-nat/nim.yml`. It is `scripted.yml` with NAT's
-`nim` model, `nvidia/llama-3.1-nemotron-70b-instruct`, which reads
-`NVIDIA_API_KEY`:
+`nim` model, `nvidia/nemotron-3.5-lightning-30b-a3b`, which reads
+`NVIDIA_API_KEY`. Its configuration disables thinking mode so NAT's textual
+ReAct parser receives actions in the normal response content:
 
 ```bash
 tenuo-openshell demo agent --workflow nim "Payments is failing in staging. Investigate and fix it."
