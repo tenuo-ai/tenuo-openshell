@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
       - run: cargo fmt --all -- --check
@@ -61,7 +61,7 @@ jobs:
             nat: "1.8"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
@@ -83,8 +83,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: sudo apt-get update && sudo apt-get install -y jq netcat-openbsd
       - name: ReAct agent through the signing proxy with a human approval
         run: examples/nemo-agent-toolkit/run.sh
@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y jq
       - run: bash -n scripts/bootstrap-openshell.sh scripts/openshell-e2e.sh scripts/openshell-upstream.sh scripts/quickstart-check.sh ci/check.sh ci/nat-compat.sh ci/release-binary.sh ci/release-notes.sh scripts/production-quickstart-check.sh scripts/build-demo-image.sh scripts/build-nat-demo-image.sh deploy/nat-demo-image/tenuo-nat-run
       - run: python3 -m py_compile examples/nemo-agent-toolkit/scripted_llm.py scripts/upstream-versions.py examples/demo/mcp_client.py examples/demo/mcp_server.py examples/demo/audit_receipts.py examples/demo/test_destination.py examples/demo/local_denial.py examples/demo/outcome_matrix.py examples/interoperability/a2a_handoff.py examples/issuance/issuer_service.py examples/issuance/test_issuer_service.py
@@ -107,7 +107,7 @@ jobs:
       - run: test "$(wc -c </tmp/tenuo-fixtures/signers/task-a/key | tr -d ' ')" = 32
       - run: test "$(wc -c </tmp/tenuo-fixtures/signers/task-b/key | tr -d ' ')" = 32
       - run: "! cmp -s /tmp/tenuo-fixtures/signers/task-a/key /tmp/tenuo-fixtures/signers/task-b/key"
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python3 -m pip install 'tenuo==0.3.5'
