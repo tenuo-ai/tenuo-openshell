@@ -9,8 +9,8 @@ returns JSON-RPC ``-32001`` or ``-32002`` and does not run the tool.
 from __future__ import annotations
 
 import argparse
-import importlib.metadata
 import contextvars
+import importlib.metadata
 import json
 import os
 import sys
