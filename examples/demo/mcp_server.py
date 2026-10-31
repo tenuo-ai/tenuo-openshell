@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP effect server that verifies `_meta.tenuo` before running a tool.
 
-``MCPVerifier`` (tenuo 0.3.2 or later) decodes ``_meta.tenuo`` in either base64
+``MCPVerifier`` (tenuo 0.3.5 or later) decodes ``_meta.tenuo`` in either base64
 alphabet, so the envelope is passed through as received. A failed check
 returns JSON-RPC ``-32001`` or ``-32002`` and does not run the tool.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextvars
+import importlib.metadata
 import json
 import os
 import sys
@@ -28,10 +29,13 @@ def require_tenuo() -> None:
         import tenuo
     except ImportError as exc:
         raise SystemExit("the destination verifier requires the tenuo package") from exc
-    parts = tuple(int(piece) for piece in tenuo.__version__.split(".")[:3])
-    if parts < (0, 3, 2):
+    # Use distribution metadata rather than ``tenuo.__version__``: the 0.3.5
+    # wheel retains the core extension's 0.3.4 build version.
+    installed_version = importlib.metadata.version("tenuo")
+    parts = tuple(int(piece) for piece in installed_version.split(".")[:3])
+    if parts < (0, 3, 5):
         raise SystemExit(
-            f"the destination verifier requires tenuo>=0.3.2, found {tenuo.__version__}"
+            f"the destination verifier requires tenuo>=0.3.5, found {installed_version}"
         )
 
 

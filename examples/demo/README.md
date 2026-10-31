@@ -150,7 +150,7 @@ The launcher pins NVIDIA OpenShell v0.1.5 at commit
   immutable digest;
 - builds a non-root workload from NVIDIA's Ubuntu base, also pinned by digest;
 - generates temporary TLS and gateway JWT material;
-- installs Python `tenuo` 0.3.2 into a temporary environment for the MCP
+- installs Python `tenuo` 0.3.5 into a temporary environment for the MCP
   server; and
 - removes the sandboxes and processes afterwards.
 
