@@ -70,7 +70,7 @@ uv venv --quiet --python 3.12 "$WORK/py"
 # Since 1.9, nvidia-nat-langchain installs model providers as extras:
 # openai for the scripted model, nvidia for the hosted NIM in workflow.yml.
 uv pip install --quiet --python "$WORK/py/bin/python" \
-  'nvidia-nat-core==1.9.0' 'nvidia-nat-mcp==1.9.0' 'nvidia-nat-langchain[openai,nvidia]==1.9.0' 'tenuo==0.3.2'
+  'nvidia-nat-core==1.9.0' 'nvidia-nat-mcp==1.9.0' 'nvidia-nat-langchain[openai,nvidia]==1.9.0' 'tenuo==0.3.5'
 NAT="$WORK/py/bin/nat"
 
 # Issuer, orchestrator (task A), and approver keys, plus the trust policy.

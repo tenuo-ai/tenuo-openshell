@@ -31,7 +31,7 @@ dependencies = [
     # nvidia-nat-core 1.8 and 1.9 import packaging (nat info, the registry handlers)
     # without declaring it, so a fresh environment cannot list plugins.
     "packaging>=23",
-    "tenuo>=0.3.2,<0.4",
+    "tenuo>=0.3.5,<0.4",
 ]
 
 [project.optional-dependencies]
