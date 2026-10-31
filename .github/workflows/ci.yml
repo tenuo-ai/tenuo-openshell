@@ -110,7 +110,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: python3 -m pip install 'tenuo==0.3.2'
+      - run: python3 -m pip install 'tenuo==0.3.5'
       - run: python3 examples/demo/test_destination.py --fixture /tmp/tenuo-fixtures
       - run: cargo build --locked --bin tenuo-openshell-agent
       - run: python3 examples/issuance/test_issuer_service.py --agent target/debug/tenuo-openshell-agent

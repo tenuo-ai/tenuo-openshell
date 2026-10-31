@@ -84,7 +84,7 @@ holder="$("$AGENT" keygen)"
 "$CLI" warrant issue --holder "$holder" \
   --parent-key "$WORK/fixture/signers/task-a/key" \
   --parent-warrant "$WORK/fixture/warrants/task-a.cbor" \
-  --ttl 600 \
+  --ttl 240 \
   --capabilities '{
     "read_logs": {"service": "payments", "environment": "staging"},
     "restart_service": {"service": "payments", "environment": "staging",
