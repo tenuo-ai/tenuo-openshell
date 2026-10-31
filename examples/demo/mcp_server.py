@@ -9,6 +9,7 @@ returns JSON-RPC ``-32001`` or ``-32002`` and does not run the tool.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import contextvars
 import json
 import os
@@ -28,10 +29,13 @@ def require_tenuo() -> None:
         import tenuo
     except ImportError as exc:
         raise SystemExit("the destination verifier requires the tenuo package") from exc
-    parts = tuple(int(piece) for piece in tenuo.__version__.split(".")[:3])
+    # Use distribution metadata rather than ``tenuo.__version__``: the 0.3.5
+    # wheel retains the core extension's 0.3.4 build version.
+    installed_version = importlib.metadata.version("tenuo")
+    parts = tuple(int(piece) for piece in installed_version.split(".")[:3])
     if parts < (0, 3, 5):
         raise SystemExit(
-            f"the destination verifier requires tenuo>=0.3.5, found {tenuo.__version__}"
+            f"the destination verifier requires tenuo>=0.3.5, found {installed_version}"
         )
 
 
