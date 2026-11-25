@@ -24,6 +24,11 @@ no-default-features = false
 # the condition for removing the ignore.
 yanked = "deny"
 ignore = [
+    # These maintenance advisories have no fixed release. SDK 0.3.8 still
+    # depends on both crates; replacing them here cannot remove that graph.
+    # Scope exceptions to maintenance notices only, not future vulnerabilities.
+    { id = "RUSTSEC-2026-0543", reason = "chrono maintenance notice; remove after tenuo and this middleware migrate timestamp APIs to a maintained crate" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime maintenance notice in tenuo; remove when the SDK replaces its duration parser" },
     # serde_yaml is deprecated and carries unmaintained unsafe-libyaml. It is
     # still part of Tenuo's public policy format and this CLI's OpenShell YAML
     # handling, so removing it requires a coordinated parser migration. Keep
