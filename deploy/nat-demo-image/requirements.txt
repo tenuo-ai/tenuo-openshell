@@ -2605,12 +2605,12 @@ tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \
     --hash=sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a
     # via langchain-core
-tenuo==0.3.8 \
-    --hash=sha256:0941d164b5d5a6a83264598803fb0ded968fe6c9bc26a705d6d07e7b66ad8a65 \
-    --hash=sha256:35ee0ca683024a2aa882e0de15b8318441938e01f4927e7a4979612690849f8c \
-    --hash=sha256:5fb557db0d6bea92b0ff13c4675eaead019b2a2d29a9c4f2f42e741fa3a6a96f \
-    --hash=sha256:91619fecc990f9dfb6a563f5b0d5a952dad0ee044b4000f51413f84826789ab5 \
-    --hash=sha256:e693a779e193e47703115a49baca49d5c36b380b0c7ddf0d8ff12835f9092d50
+tenuo==0.3.9 \
+    --hash=sha256:0256ce0f519c0492184fea4380a97d14eaf0769b02e2da388e0840c9adf548b4 \
+    --hash=sha256:55d526e9b0f228060f91bf71ca4332e60807d391cd77b06654757a9b60b30c6b \
+    --hash=sha256:91fdf722622bae99a6f6484d3201b6d4d06379cd0f4548bee4f5d3bfb2726e56 \
+    --hash=sha256:c0667ab61998763020360c53822be54fae8004bcce1330804d2ee058e4893eff \
+    --hash=sha256:d2305d7b8df7a31d6208d82a7ed4289904dc8c974d84d778eb5401ec72c835cd
     # via -r requirements.in
 tiktoken==0.14.0 \
     --hash=sha256:087538c080e5ff421abd3a0785ed63c5111d06af98e6cd0d374dbe5969147ca3 \
@@ -2688,9 +2688,12 @@ typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
     # via
+    #   aiohttp
+    #   aiosignal
     #   anyio
     #   fastapi
     #   grpcio
+    #   httpx2
     #   langchain-core
     #   langchain-protocol
     #   langsmith
@@ -2703,7 +2706,10 @@ typing-extensions==4.16.0 \
     #   opentelemetry-semantic-conventions
     #   pydantic
     #   pydantic-core
+    #   pyopenssl
+    #   referencing
     #   sqlalchemy
+    #   starlette
     #   typing-inspection
 typing-inspection==0.4.4 \
     --hash=sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47 \

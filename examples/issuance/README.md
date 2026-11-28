@@ -21,7 +21,7 @@ the design. This example is a reference, not a product:
 ## Run the test
 
 ```bash
-python3 -m pip install 'tenuo==0.3.2'
+python3 -m pip install 'tenuo==0.3.9'
 cargo build --locked --bin tenuo-openshell-agent
 python3 examples/issuance/test_issuer_service.py --agent target/debug/tenuo-openshell-agent
 ```
